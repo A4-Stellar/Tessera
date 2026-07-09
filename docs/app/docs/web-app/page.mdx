@@ -1,0 +1,99 @@
+export const metadata = {
+  title: "Web App Guide",
+  description: "Connect Freighter, tokenize an asset, manage compliance, and distribute dividends.",
+};
+
+# Web App Guide
+
+The web app is the front-end for issuers and investors. It signs and submits every
+transaction through the user's **Freighter** wallet — it never holds keys. This
+guide walks through the main flows.
+
+## Connecting Freighter
+
+1. Install the [Freighter](https://freighter.app) browser extension and create or
+   import an account.
+2. Switch Freighter to **Testnet** and fund the account via the
+   [friendbot](https://friendbot.stellar.org).
+3. In the app, click **Connect Wallet** and approve the connection.
+
+The app follows Freighter's selected network while connected, so reads and writes
+always target the same network. Your address appears in the header with a menu to
+copy it, view it on Stellar Expert, or disconnect.
+
+<CalloutBox variant="note">
+While disconnected you can still browse assets read-only and switch networks with
+the network selector. Once connected, the app locks to your wallet's network.
+</CalloutBox>
+
+## Tokenizing an asset (issuer)
+
+Open **Tokenize an Asset** and complete the multi-step form:
+
+1. **Asset info** — name, type (real estate / invoice / commodity), description,
+   and USD valuation.
+2. **Token config** — symbol, total supply, and decimals.
+3. **Compliance** — the initial set of KYC-approved addresses and their
+   jurisdictions. **Your own issuer address must be included**, because the token
+   mints the initial supply to you and that mint is compliance-gated.
+4. **Review & deploy** — the app deploys the compliance contract and asset-token
+   contract, then registers the asset in the registry.
+
+On success you get the deployed contract addresses with Stellar Expert links.
+
+<CalloutBox variant="warning">
+Deployment is several transactions — a compliance contract, a token contract, and
+a registry registration. Approve each in Freighter as prompted. If you approve
+yourself last, the initial mint will fail; approve the issuer address in the
+compliance step first.
+</CalloutBox>
+
+## Managing the compliance allowlist (issuer)
+
+From the **Issuer → Compliance** page, select one of your assets:
+
+- **Add an address** — enter the account, choose a jurisdiction, and set an
+  optional expiry. This calls `add_to_allowlist` and sets the status to `Approved`.
+- **Suspend / remove** — temporarily hold or permanently delete an approval.
+- **Block a jurisdiction** — freeze every holder in a country at once.
+
+The allowlist table shows each record's status, jurisdiction, and expiry. See the
+[Compliance Guide](/docs/compliance-guide) for the model behind these actions.
+
+## Creating dividend distributions (issuer)
+
+From **Issuer → Dividends**, select an asset and open **Create Distribution**:
+
+1. Choose the **payment token** (e.g. USDC on Stellar).
+2. Enter the **total amount** to distribute.
+3. Submit — the app calls `create_distribution`, which escrows the funds in the
+   dividend contract.
+
+Holders then claim their proportional share. Each distribution shows a progress bar
+of claimed vs. total.
+
+## Investor: compliance status and holdings
+
+As an investor you can:
+
+- **Check your compliance status** on any asset's detail page and in your
+  **Portfolio**. The app reads `is_allowed` and your `KycRecord`, and shows
+  `Approved` / `Pending` / `Suspended` / `Rejected` / `Not Registered`.
+- **Hold and transfer** an asset — but only if you are approved. The transfer form
+  is **disabled** with an explanatory message whenever you are not KYC-approved, the
+  asset is paused, or your balance is zero.
+- **Claim dividends** — the app shows your claimable amount per distribution and a
+  one-click **Claim** button that calls `claim`.
+
+<CalloutBox variant="compliance">
+If your transfer is blocked, the app tells you why — pending approval, suspension,
+a blocked jurisdiction, an expired approval, or simply not being on the allowlist.
+Ask the asset's issuer to approve your address. This is the compliance gate, not a
+bug.
+</CalloutBox>
+
+## Transaction feedback
+
+Every on-chain action shows live progress — *preparing → awaiting signature →
+submitting → confirming* — and, on success, a link to the transaction on Stellar
+Expert. Contract errors are translated into plain-language messages.
