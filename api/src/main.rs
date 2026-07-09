@@ -1,0 +1,64 @@
+//! Stellar RWA API — a read-only REST index of tokenized real-world asset
+//! activity on Stellar.
+//!
+//! The server starts the background indexer (which polls Soroban RPC every 10s)
+//! and serves the current in-memory snapshot over HTTP. It holds no secrets,
+//! signs nothing, and never mutates on-chain state.
+
+mod indexer;
+mod models;
+mod routes;
+
+use std::net::SocketAddr;
+
+use indexer::{AppState, Config, Indexer};
+
+#[tokio::main]
+async fn main() {
+    init_tracing();
+
+    let config = Config::from_env();
+    tracing::info!(
+        rpc = %config.rpc_url,
+        registry = %config.registry_id,
+        "starting stellar-rwa-api"
+    );
+
+    let state = AppState::new(config);
+
+    // Spawn the indexer; it owns its own clone of the shared state.
+    let indexer = Indexer::new(state.clone());
+    tokio::spawn(async move { indexer.run().await });
+
+    let app = routes::router(state);
+
+    let port: u16 = std::env::var("PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(8080);
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+
+    let listener = match tokio::net::TcpListener::bind(addr).await {
+        Ok(l) => l,
+        Err(e) => {
+            tracing::error!(error = %e, %addr, "failed to bind");
+            std::process::exit(1);
+        }
+    };
+    tracing::info!(%addr, "listening");
+
+    if let Err(e) = axum::serve(listener, app).await {
+        tracing::error!(error = %e, "server error");
+        std::process::exit(1);
+    }
+}
+
+fn init_tracing() {
+    use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("stellar_rwa_api=info,tower_http=warn"));
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(fmt::layer())
+        .init();
+}
