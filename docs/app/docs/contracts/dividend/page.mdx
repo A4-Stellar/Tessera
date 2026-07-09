@@ -1,0 +1,135 @@
+export const metadata = {
+  title: "Dividend Contract",
+  description: "Proportional yield/dividend distribution to asset-token holders.",
+};
+
+# Dividend Contract
+
+Distributes yield/dividends to asset-token holders in proportion to their
+holdings. An issuer funds a distribution with a payment token; each holder then
+claims `total_amount * balance / total_supply`, paid from the escrow this contract
+holds. Each holder can claim a given distribution once.
+
+Balances are read **at claim time** from the asset token. `snapshot_ledger` records
+the ledger at which the distribution was created, for reference.
+
+**Testnet:** `CAR4XY3CEBQWFOL27JEWFW34KXSIZA7RFKDQMEIV7ZU723RWY37I2SYX`
+
+## Data types
+
+`Distribution`:
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `id` | `u64` | Assigned sequentially |
+| `asset_token` | `Address` | The asset being paid out on |
+| `payment_token` | `Address` | The token used to pay (e.g. USDC) |
+| `total_amount` | `i128` | Pool size in payment-token base units |
+| `distributed` | `i128` | Claimed so far |
+| `snapshot_ledger` | `u32` | Ledger at creation |
+| `created_at` | `u32` | Ledger at creation |
+| `completed` | `bool` | `true` once fully claimed |
+
+## Function reference
+
+### `initialize`
+
+```rust
+fn initialize(env: Env, admin: Address)
+```
+
+Sets the admin. Callable once. **Auth:** `admin`. Errors: `AlreadyInitialized (1)`.
+
+### `create_distribution`
+
+```rust
+fn create_distribution(
+    env: Env, admin: Address, asset_token: Address,
+    payment_token: Address, total_amount: i128,
+) -> u64
+```
+
+Creates and funds a distribution, pulling `total_amount` of `payment_token` from
+the admin into the contract's escrow. Returns the distribution id.
+
+- **Auth:** `admin` (must equal the stored admin; the transfer also requires the admin's authorization)
+- **Errors:** `Unauthorized (3)`, `InvalidAmount (5)` if `total_amount <= 0`.
+
+<CalloutBox variant="warning">
+The admin must hold at least `total_amount` of the payment token and the transfer
+must succeed, or `create_distribution` reverts. Funds are escrowed in the dividend
+contract until claimed.
+</CalloutBox>
+
+### `claimable`
+
+```rust
+fn claimable(env: Env, distribution_id: u64, holder: Address) -> i128
+```
+
+Returns the amount a holder can still claim: `0` if already claimed, if they hold
+nothing, or if the distribution is empty. Otherwise
+`total_amount * balance / total_supply` (floored by integer division).
+
+### `claim`
+
+```rust
+fn claim(env: Env, distribution_id: u64, holder: Address)
+```
+
+Pays the holder's proportional share from escrow and marks it claimed.
+
+- **Auth:** `holder`
+- **Errors:** `DistributionNotFound (4)`, `AlreadyClaimed (7)`, `NothingToClaim (6)`.
+
+### `get_distribution` / `get_distributions_for_asset` / `has_claimed`
+
+```rust
+fn get_distribution(env: Env, distribution_id: u64) -> Distribution
+fn get_distributions_for_asset(env: Env, asset_token: Address) -> Vec<Distribution>
+fn has_claimed(env: Env, distribution_id: u64, holder: Address) -> bool
+```
+
+View helpers. `get_distributions_for_asset` backs the API's `/assets/:id/dividends`
+endpoint.
+
+## Code example
+
+```ts
+const dividend = new Contract("CAR4XY3C…2SYX");
+// issuer funds a 10,000-unit distribution in the payment token
+const create = dividend.call(
+  "create_distribution",
+  new Address(admin).toScVal(),
+  new Address(assetToken).toScVal(),
+  new Address(paymentToken).toScVal(),
+  nativeToScVal(10_000_0000000n, { type: "i128" }), // 10,000 @ 7 decimals
+);
+
+// a holder later claims their share
+const claim = dividend.call(
+  "claim",
+  nativeToScVal(1n, { type: "u64" }),
+  new Address(holder).toScVal(),
+);
+```
+
+## Events
+
+| Topic | Data | Emitted by |
+|-------|------|------------|
+| `("created", admin)` | `(id, total_amount)` | `create_distribution` |
+| `("claim", holder)` | `(distribution_id, amount)` | `claim` |
+
+## Security considerations
+
+- **Balances are read at claim time**, not at snapshot. A holder who acquires more
+  tokens after a distribution is created — but before claiming — claims on the
+  larger balance. Issuers should be aware of this when timing distributions, or
+  pause the token around distribution windows.
+- **Integer division floors** each share, so a tiny residual may remain in escrow
+  after everyone claims; `completed` flips once `distributed >= total_amount`.
+- **Escrow custody:** funds live in the dividend contract between creation and
+  claim. The contract only pays out via `claim`; there is no admin withdrawal path.
+- **Payment-token decimals differ** from the asset token. Amounts here are in the
+  payment token's base units (7 for classic Stellar assets / SACs).

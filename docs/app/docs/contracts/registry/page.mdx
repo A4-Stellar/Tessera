@@ -1,0 +1,123 @@
+export const metadata = {
+  title: "Registry Contract",
+  description: "Canonical on-chain index of every tokenized asset, plus total value locked.",
+};
+
+# Registry Contract
+
+A canonical, on-chain index of every tokenized asset on the platform. Each issuer
+registers their asset-token contract here; the registry assigns a monotonically
+increasing id and tracks issuer, type, valuation and active status. It also reports
+total value locked (TVL) across active assets.
+
+**Testnet:** `CBX5SMLTXX6JP4HA5GQIO2V6QM7WCUGL2GZ6D4U773HMRI6RXISKPUR3`
+
+## Data types
+
+`AssetEntry`:
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `id` | `u64` | Assigned sequentially from 1 |
+| `token_contract` | `Address` | The asset-token contract |
+| `issuer` | `Address` | Who registered it |
+| `name` | `String` | |
+| `asset_type` | `String` | `real_estate` \| `invoice` \| `commodity` |
+| `valuation` | `i128` | USD cents |
+| `created_at` | `u32` | Ledger at registration |
+| `active` | `bool` | Excluded from TVL when `false` |
+
+## Function reference
+
+### `initialize`
+
+```rust
+fn initialize(env: Env, admin: Address)
+```
+
+Sets the admin and resets the counter. Callable once. **Auth:** `admin`. Errors: `AlreadyInitialized (1)`.
+
+### `register_asset`
+
+```rust
+fn register_asset(
+    env: Env, issuer: Address, token_contract: Address,
+    name: String, asset_type: String, valuation: i128,
+) -> u64
+```
+
+Registers a new asset and returns its assigned id.
+
+- **Auth:** `issuer`
+- **Errors:** `NotInitialized (2)`, `InvalidValuation (5)` if `valuation < 0`.
+
+### `get_asset`
+
+```rust
+fn get_asset(env: Env, asset_id: u64) -> AssetEntry
+```
+
+Fetches a single asset. **Errors:** `AssetNotFound (4)`.
+
+### `get_assets_by_issuer` / `get_assets_by_type` / `get_all_assets`
+
+```rust
+fn get_assets_by_issuer(env: Env, issuer: Address) -> Vec<AssetEntry>
+fn get_assets_by_type(env: Env, asset_type: String) -> Vec<AssetEntry>
+fn get_all_assets(env: Env) -> Vec<AssetEntry>
+```
+
+Query helpers returning filtered or complete lists. These back the API's
+`/assets` endpoint and the web app's explore page.
+
+### `deactivate_asset`
+
+```rust
+fn deactivate_asset(env: Env, admin: Address, asset_id: u64)
+```
+
+Marks an asset inactive; it is then excluded from TVL. **Auth:** `admin`. Errors:
+`Unauthorized (3)`, `AssetNotFound (4)`.
+
+### `total_value_locked` / `asset_count`
+
+```rust
+fn total_value_locked(env: Env) -> i128
+fn asset_count(env: Env) -> u64
+```
+
+`total_value_locked` sums `valuation` across **active** assets, in USD cents.
+`asset_count` returns the total registered (active or not).
+
+## Code example
+
+```ts
+const registry = new Contract("CBX5SMLT…PUR3");
+// register a freshly deployed asset token
+const op = registry.call(
+  "register_asset",
+  new Address(issuer).toScVal(),
+  new Address(tokenContract).toScVal(),
+  nativeToScVal("Manhattan Loft", { type: "string" }),
+  nativeToScVal("real_estate", { type: "string" }),
+  nativeToScVal(500_000_000n, { type: "i128" }), // $5,000,000 in cents
+);
+```
+
+## Events
+
+| Topic | Data | Emitted by |
+|-------|------|------------|
+| `("register", issuer)` | `id` | `register_asset` |
+| `("deactvate",)` | `asset_id` | `deactivate_asset` |
+
+## Security considerations
+
+- **The registry is an index, not a source of truth for balances.** Supply and
+  balances live in the asset-token contract; the registry's `valuation` is the
+  issuer-declared figure at registration (updatable on the token via
+  `update_valuation`, not mirrored here automatically).
+- **Anyone can register** an asset (auth is the issuer, not the admin). Consumers
+  should treat listing in the registry as *self-attestation*, and rely on the
+  compliance contract for the actual holding restrictions.
+- **Deactivation is admin-only** and only affects TVL and listing, not the token.

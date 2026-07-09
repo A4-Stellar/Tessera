@@ -1,0 +1,147 @@
+export const metadata = {
+  title: "Compliance Contract",
+  description: "KYC allowlist and jurisdiction rules — the on-chain transfer gate.",
+};
+
+# Compliance Contract
+
+Maintains the KYC allowlist and jurisdiction rules that gate who may hold or
+transfer a tokenized asset. The asset-token contract calls
+[`is_allowed`](#is-allowed) on every transfer (for both sender and recipient) and
+on every mint (for the recipient).
+
+Time is expressed in **ledger sequence numbers** (`u32`), not wall-clock dates. An
+`expires_at` of `0` means the approval never expires.
+
+**Testnet:** `CBUERYDM7DXTZLLKDBRJKUBPFJ7M4OSUN4T7XKUARU345RLXNAIQD2IU`
+
+## Data types
+
+`ComplianceStatus` — `Approved` | `Pending` | `Rejected` | `Suspended`.
+
+`KycRecord`:
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `address` | `Address` | The KYC'd account |
+| `status` | `ComplianceStatus` | Only `Approved` passes the gate |
+| `jurisdiction` | `String` | ISO country code, e.g. `US`, `KE`, `DE` |
+| `verified_at` | `u32` | Ledger at verification |
+| `expires_at` | `u32` | Ledger of expiry; `0` = never |
+
+## Function reference
+
+### `initialize`
+
+```rust
+fn initialize(env: Env, admin: Address)
+```
+
+Sets the admin. Callable once. **Auth:** `admin`. Errors: `AlreadyInitialized (1)`.
+
+### `add_to_allowlist`
+
+```rust
+fn add_to_allowlist(
+    env: Env, admin: Address, address: Address,
+    jurisdiction: String, expires_at: u32,
+)
+```
+
+Adds (or re-approves) an address, setting its status to `Approved`. If
+`expires_at` is non-zero it must be a future ledger.
+
+- **Auth:** `admin`
+- **Errors:** `Unauthorized (5)`, `InvalidExpiry (4)` if `expires_at != 0 && expires_at <= now`.
+
+### `suspend`
+
+```rust
+fn suspend(env: Env, admin: Address, address: Address)
+```
+
+Sets an address's status to `Suspended`. The record is retained but `is_allowed`
+returns `false` until it is re-approved. **Auth:** `admin`. Errors: `RecordNotFound (3)`.
+
+### `remove`
+
+```rust
+fn remove(env: Env, admin: Address, address: Address)
+```
+
+Deletes the record entirely and drops the address from the allowlist. **Auth:**
+`admin`. Errors: `RecordNotFound (3)`.
+
+### `is_allowed`
+
+```rust
+fn is_allowed(env: Env, address: Address) -> bool
+```
+
+The core gate. Returns `true` **only if** the address is `Approved`, **and** not
+expired (`expires_at == 0 || now < expires_at`), **and** its jurisdiction is not
+blocked. Returns `false` for unknown addresses.
+
+<CalloutBox variant="compliance" title="This is the gate">
+Every check the RWA token performs funnels through `is_allowed`. Understanding its
+three conditions — status, expiry, jurisdiction — is understanding the whole
+compliance model. See the [Compliance Guide](/docs/compliance-guide).
+</CalloutBox>
+
+### `get_record` / `get_allowlist`
+
+```rust
+fn get_record(env: Env, address: Address) -> Option<KycRecord>
+fn get_allowlist(env: Env) -> Vec<Address>
+```
+
+`get_record` returns `None` for an unknown address. `get_allowlist` returns every
+address currently on the allowlist (any status except removed).
+
+### `block_jurisdiction` / `unblock_jurisdiction` / `is_jurisdiction_blocked`
+
+```rust
+fn block_jurisdiction(env: Env, admin: Address, jurisdiction: String)
+fn unblock_jurisdiction(env: Env, admin: Address, jurisdiction: String)
+fn is_jurisdiction_blocked(env: Env, jurisdiction: String) -> bool
+```
+
+Blocking a jurisdiction makes **every** approved address in that jurisdiction fail
+`is_allowed`, without touching individual records. **Auth:** admin for the mutating
+calls.
+
+## Code example
+
+Approve an investor in the US with a one-year expiry (~6.3M ledgers at 5s each):
+
+```ts
+const compliance = new Contract("CBUERYDM…D2IU");
+const op = compliance.call(
+  "add_to_allowlist",
+  new Address(admin).toScVal(),
+  new Address(investor).toScVal(),
+  nativeToScVal("US", { type: "string" }),
+  nativeToScVal(currentLedger + 6_300_000, { type: "u32" }),
+);
+```
+
+## Events
+
+| Topic | Data | Emitted by |
+|-------|------|------------|
+| `("approved", address)` | `(jurisdiction, expires_at)` | `add_to_allowlist` |
+| `("suspend", address)` | `()` | `suspend` |
+| `("removed", address)` | `()` | `remove` |
+| `("blockjur",)` | `jurisdiction` | `block_jurisdiction` |
+| `("unblkjur",)` | `jurisdiction` | `unblock_jurisdiction` |
+
+## Security considerations
+
+- **Admin is the compliance authority.** Whoever holds the admin key decides who
+  can hold the asset. Protect it with multisig and clear operational controls.
+- **Expiry is enforced at read time** against the current ledger — an expired
+  approval fails the gate immediately, with no cron job required.
+- **Jurisdiction blocks are retroactive and immediate:** blocking `US` instantly
+  freezes every `US` holder's ability to transfer. Use deliberately.
+- **`remove` vs `suspend`:** `suspend` is reversible and keeps the audit record;
+  `remove` erases it. Prefer `suspend` for temporary actions.

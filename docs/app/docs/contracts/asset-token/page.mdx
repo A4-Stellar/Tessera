@@ -1,0 +1,176 @@
+export const metadata = {
+  title: "Asset Token Contract",
+  description: "Compliant RWA token — every transfer is gated by the compliance contract.",
+};
+
+# Asset Token Contract
+
+A compliant token representing a tokenized real-world asset. Every transfer is
+gated by an external compliance contract: **both** the sender and the recipient
+must pass `is_allowed` before any balance moves. Minting is gated on the
+recipient, so only KYC-approved addresses can ever hold the asset.
+
+Valuation is stored in USD cents (`i128`). Amounts are integer token units in the
+token's own `decimals` base.
+
+**Testnet:** `CBMCWLSQSWUTLUJFCNBHNBSXMUM3XU7NAQ5TSNERW4HA4ZZBYHLG4ECZ`
+
+## Data types
+
+`AssetMetadata` is the single instance record describing the token:
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `name` | `String` | Human-readable asset name |
+| `symbol` | `String` | Ticker, e.g. `MLOFT` |
+| `asset_type` | `String` | `real_estate` \| `invoice` \| `commodity` |
+| `total_supply` | `i128` | Base units |
+| `decimals` | `u32` | |
+| `admin` | `Address` | Issuer; the only account that can mint/pause |
+| `compliance_contract` | `Address` | The gate consulted on transfer/mint |
+| `asset_description` | `String` | |
+| `valuation` | `i128` | USD cents |
+| `paused` | `bool` | |
+
+## Function reference
+
+### `initialize`
+
+```rust
+fn initialize(
+    env: Env, admin: Address, name: String, symbol: String,
+    asset_type: String, total_supply: i128, decimals: u32,
+    compliance_contract: Address, asset_description: String, valuation: i128,
+)
+```
+
+Initializes the token and mints the full `total_supply` to `admin`. The admin
+**must already be compliance-approved** to hold the initial supply.
+
+- **Auth:** `admin`
+- **Errors:** `AlreadyInitialized (1)`, `InvalidAmount (5)` if `total_supply < 0` or `valuation < 0`, `RecipientNotCompliant (8)` if the admin is not approved.
+
+### `transfer`
+
+```rust
+fn transfer(env: Env, from: Address, to: Address, amount: i128)
+```
+
+Moves `amount` from `from` to `to`. Both parties must be compliance-approved and
+the token must not be paused.
+
+- **Auth:** `from`
+- **Errors:** `InvalidAmount (5)` if `amount <= 0`, `Paused (6)`, `SenderNotCompliant (7)`, `RecipientNotCompliant (8)`, `InsufficientBalance (4)`.
+
+<CalloutBox variant="compliance">
+`transfer` performs **two** cross-contract calls into the compliance contract —
+`is_allowed(from)` and `is_allowed(to)` — before touching balances. This is the
+on-chain transfer gate. See [How transfer gating works](/docs/compliance-guide#how-transfer-gating-works).
+</CalloutBox>
+
+### `mint`
+
+```rust
+fn mint(env: Env, admin: Address, to: Address, amount: i128)
+```
+
+Mints new tokens to a compliance-approved recipient, increasing `total_supply`.
+
+- **Auth:** `admin` (must equal the stored admin)
+- **Errors:** `Unauthorized (3)`, `InvalidAmount (5)`, `Paused (6)`, `RecipientNotCompliant (8)`, `Overflow (9)`.
+
+### `burn`
+
+```rust
+fn burn(env: Env, from: Address, amount: i128)
+```
+
+Burns `amount` of the caller's own tokens, decreasing `total_supply`.
+
+- **Auth:** `from`
+- **Errors:** `InvalidAmount (5)`, `InsufficientBalance (4)`.
+
+### `balance` / `total_supply`
+
+```rust
+fn balance(env: Env, id: Address) -> i128
+fn total_supply(env: Env) -> i128
+```
+
+View functions. `balance` returns `0` for an unknown address.
+
+### `pause` / `unpause`
+
+```rust
+fn pause(env: Env, admin: Address)
+fn unpause(env: Env, admin: Address)
+```
+
+Halts or resumes all transfers and mints. **Auth:** `admin`. Errors: `Unauthorized (3)`.
+
+### `update_valuation`
+
+```rust
+fn update_valuation(env: Env, admin: Address, new_valuation: i128)
+```
+
+Updates the recorded USD-cents valuation. **Auth:** `admin`. Errors: `Unauthorized (3)`, `InvalidAmount (5)` if negative.
+
+### `set_compliance`
+
+```rust
+fn set_compliance(env: Env, admin: Address, compliance: Address)
+```
+
+Points the token at a different compliance contract. Because the token knows only
+the compliance *interface* (`is_allowed`), the concrete contract can be swapped.
+**Auth:** `admin`.
+
+### `get_metadata`
+
+```rust
+fn get_metadata(env: Env) -> AssetMetadata
+```
+
+Returns the full metadata record.
+
+## Code example
+
+Transfer with the JS SDK, going through the compliance gate:
+
+```ts
+import { Contract, TransactionBuilder, nativeToScVal, Address } from "@stellar/stellar-sdk";
+
+const token = new Contract("CBMCWLSQ…4ECZ");
+const op = token.call(
+  "transfer",
+  new Address(from).toScVal(),
+  new Address(to).toScVal(),
+  nativeToScVal(10000n, { type: "i128" }), // 100.00 @ 2 decimals
+);
+// build → simulate → sign with Freighter → submit
+```
+
+## Events
+
+| Topic | Data | Emitted by |
+|-------|------|------------|
+| `("mint", admin)` | `total_supply` | `initialize` (initial mint) |
+| `("mint", to)` | `amount` | `mint` |
+| `("transfer", from, to)` | `amount` | `transfer` |
+| `("burn", from)` | `amount` | `burn` |
+| `("pause",)` / `("unpause",)` | `admin` | `pause` / `unpause` |
+| `("valuation",)` | `new_valuation` | `update_valuation` |
+| `("setcomp",)` | `compliance` | `set_compliance` |
+
+## Security considerations
+
+- **Admin is fully trusted** for minting, pausing, valuation and swapping the
+  compliance contract. Use a secure key or multisig for the admin account.
+- **Gate coupling:** transfers depend on the compliance contract being live and
+  correct. `set_compliance` is powerful — pointing at a permissive contract would
+  disable the gate. Restrict admin access accordingly.
+- **Integer amounts:** all amounts are integers in the token's `decimals` base;
+  there is no floating point. Reject `amount <= 0` (the contract does).
+- **Pause is a kill-switch:** while paused, no value can move. This is intentional
+  for incident response and regulatory holds.
