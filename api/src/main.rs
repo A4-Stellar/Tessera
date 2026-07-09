@@ -30,7 +30,7 @@ async fn main() {
     let indexer = Indexer::new(state.clone());
     tokio::spawn(async move { indexer.run().await });
 
-    let app = routes::router(state);
+    let app = routes::router(state).layer(tower_http::trace::TraceLayer::new_for_http());
 
     let port: u16 = std::env::var("PORT")
         .ok()
@@ -47,10 +47,22 @@ async fn main() {
     };
     tracing::info!(%addr, "listening");
 
-    if let Err(e) = axum::serve(listener, app).await {
+    if let Err(e) = axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+    {
         tracing::error!(error = %e, "server error");
         std::process::exit(1);
     }
+    tracing::info!("shut down cleanly");
+}
+
+/// Resolve when the process receives Ctrl-C, for graceful shutdown.
+async fn shutdown_signal() {
+    if let Err(e) = tokio::signal::ctrl_c().await {
+        tracing::error!(error = %e, "failed to install Ctrl-C handler");
+    }
+    tracing::info!("shutdown signal received");
 }
 
 fn init_tracing() {
