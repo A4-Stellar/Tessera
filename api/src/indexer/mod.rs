@@ -680,3 +680,68 @@ impl Indexer {
             .collect())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use stellar_xdr::curr as xdr;
+
+    #[test]
+    fn parses_i128_and_percentages() {
+        assert_eq!(parse_i128("500000000"), 500_000_000);
+        assert_eq!(parse_i128("not-a-number"), 0);
+        assert_eq!(cents_to_usd(500_000_000), 5_000_000.0);
+        assert_eq!(ratio_percent(25, 100), 25.0);
+        assert_eq!(ratio_percent(1, 3), 33.33);
+        assert_eq!(ratio_percent(5, 0), 0.0);
+        // clamps above 100
+        assert_eq!(ratio_percent(150, 100), 100.0);
+    }
+
+    #[test]
+    fn normalizes_unit_enum_status() {
+        // Soroban encodes a unit-variant enum as a vec of one symbol.
+        assert_eq!(normalize_status(&json!(["Approved"])), "Approved");
+        assert_eq!(normalize_status(&json!("Suspended")), "Suspended");
+        assert_eq!(normalize_status(&json!(42)), "Unknown");
+    }
+
+    #[test]
+    fn scval_scalars_to_json() {
+        assert_eq!(scval_to_json(&xdr::ScVal::Bool(true)).unwrap(), json!(true));
+        assert_eq!(scval_to_json(&xdr::ScVal::Void).unwrap(), json!(null));
+        assert_eq!(scval_to_json(&xdr::ScVal::U32(7)).unwrap(), json!(7));
+        assert_eq!(scval_to_json(&xdr::ScVal::U64(9)).unwrap(), json!(9));
+    }
+
+    #[test]
+    fn scval_i128_becomes_string() {
+        let v = xdr::ScVal::I128(xdr::Int128Parts { hi: 0, lo: 100 });
+        assert_eq!(scval_to_json(&v).unwrap(), json!("100"));
+    }
+
+    #[test]
+    fn scval_symbol_and_string() {
+        let sym = xdr::ScVal::Symbol(xdr::ScSymbol("Approved".try_into().unwrap()));
+        assert_eq!(scval_to_json(&sym).unwrap(), json!("Approved"));
+        let s = xdr::ScVal::String(xdr::ScString("hello".try_into().unwrap()));
+        assert_eq!(scval_to_json(&s).unwrap(), json!("hello"));
+    }
+
+    #[test]
+    fn scval_map_becomes_object() {
+        let entries = vec![
+            xdr::ScMapEntry {
+                key: xdr::ScVal::Symbol(xdr::ScSymbol("active".try_into().unwrap())),
+                val: xdr::ScVal::Bool(true),
+            },
+            xdr::ScMapEntry {
+                key: xdr::ScVal::Symbol(xdr::ScSymbol("id".try_into().unwrap())),
+                val: xdr::ScVal::U64(1),
+            },
+        ];
+        let map = xdr::ScVal::Map(Some(xdr::ScMap(entries.try_into().unwrap())));
+        assert_eq!(scval_to_json(&map).unwrap(), json!({ "active": true, "id": 1 }));
+    }
+}
