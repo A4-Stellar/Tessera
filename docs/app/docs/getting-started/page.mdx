@@ -1,0 +1,118 @@
+export const metadata = {
+  title: "Getting Started",
+  description: "What the Stellar RWA Toolkit is, how asset tokenization works, and how to run it.",
+};
+
+# Getting Started
+
+The **Stellar RWA Toolkit** is an end-to-end system for tokenizing real-world
+assets (RWAs) — real estate, invoices, commodities — on Stellar using Soroban
+smart contracts, with **compliance enforced on-chain**.
+
+It has three parts, each in its own repository:
+
+- **Contracts** — four Soroban contracts: `asset-token`, `compliance`, `registry`, `dividend`.
+- **API** — a Rust/Axum service that indexes all tokenized-asset activity and serves it over REST.
+- **Web app** — a Next.js front-end for issuers and investors.
+
+## What "tokenizing a real-world asset" means
+
+A real-world asset — say a $5,000,000 Manhattan loft — is represented on-chain as
+a fungible token. Each token is a fractional claim on the underlying asset. Unlike
+an ordinary token, an RWA token is **compliance-gated**: only addresses that have
+passed KYC and sit on an allowlist may hold or receive it.
+
+The gate is not a policy sitting in a database — it is enforced by the contract
+itself. On every transfer, the asset-token contract makes a cross-contract call
+into the compliance contract to check both the sender and the recipient. If either
+fails, the transfer reverts.
+
+<CalloutBox variant="compliance" title="Why this matters">
+Securities laws in most jurisdictions restrict who may hold a regulated asset.
+Enforcing that restriction **in the contract** — rather than in an app that can be
+bypassed — is what makes a token suitable to represent a regulated real-world
+asset. See the [Compliance Guide](/docs/compliance-guide).
+</CalloutBox>
+
+## How the pieces fit together
+
+```
+                         ┌───────────────┐
+   issuer / investor ──▶ │  Web app      │ ──▶ Freighter ──▶ Soroban contracts
+                         └───────────────┘                       │
+                                                                 │ events + state
+                         ┌───────────────┐   polls Soroban RPC   │
+   analysts / bots  ──▶  │  REST API     │ ◀─────────────────────┘
+                         └───────────────┘
+```
+
+- The **web app** signs and submits transactions through the user's wallet.
+- The **API** only reads: it indexes on-chain state every 10 seconds and never
+  holds a key or signs anything.
+
+## Prerequisites
+
+- [Freighter](https://freighter.app) browser extension (for the web app)
+- Node.js 18+ (web app and docs)
+- Rust 1.75+ (API and contracts)
+- The [Stellar CLI](https://developers.stellar.org/docs/tools/cli) (to deploy contracts)
+
+## Quickstart
+
+Run the API against the deployed Testnet contracts:
+
+```bash
+git clone https://github.com/your-org/stellar-rwa-api-docs
+cd stellar-rwa-api-docs/api
+cp .env.example .env      # Testnet defaults are pre-filled
+cargo run
+# → listening on 0.0.0.0:8080
+```
+
+Then query it:
+
+```bash
+curl http://localhost:8080/stats
+curl http://localhost:8080/assets
+```
+
+Run the docs site:
+
+```bash
+cd ../docs
+npm install
+npm run dev               # http://localhost:3000
+```
+
+## Network guide
+
+Everything is deployed on **Testnet**. The network passphrase is:
+
+```
+Test SDF Network ; September 2015
+```
+
+Point Freighter at Testnet and fund your account with the
+[friendbot](https://friendbot.stellar.org) before interacting.
+
+<CalloutBox variant="warning">
+These contracts are deployed on Testnet for demonstration. Do not use them to
+custody real value. A mainnet deployment requires a full securities-compliance
+and legal review.
+</CalloutBox>
+
+## Deployed contract addresses (Testnet)
+
+| Contract    | Contract ID |
+|-------------|-------------|
+| compliance  | `CBUERYDM7DXTZLLKDBRJKUBPFJ7M4OSUN4T7XKUARU345RLXNAIQD2IU` |
+| asset-token | `CBMCWLSQSWUTLUJFCNBHNBSXMUM3XU7NAQ5TSNERW4HA4ZZBYHLG4ECZ` |
+| registry    | `CBX5SMLTXX6JP4HA5GQIO2V6QM7WCUGL2GZ6D4U773HMRI6RXISKPUR3` |
+| dividend    | `CAR4XY3CEBQWFOL27JEWFW34KXSIZA7RFKDQMEIV7ZU723RWY37I2SYX` |
+
+The admin / issuer account for the sample deployment is
+`GAIQGTOBTTLLDJ4SWGGESM7UWJ2DI4K3ZNHUSHPDKJL2IE5FKY3BSRAA`, and the sample asset
+is **Manhattan Loft** (`MLOFT`), a `real_estate` asset valued at $5,000,000.
+
+Continue to the [Compliance Guide](/docs/compliance-guide) — the concept that
+makes this an RWA platform rather than a plain token factory.

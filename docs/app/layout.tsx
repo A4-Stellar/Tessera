@@ -1,0 +1,23 @@
+import type { Metadata } from "next";
+import "./globals.css";
+import { DocHeader } from "@/components/DocHeader";
+
+export const metadata: Metadata = {
+  title: {
+    default: "Stellar RWA Docs",
+    template: "%s · Stellar RWA Docs",
+  },
+  description:
+    "Documentation for the Stellar RWA platform: Soroban contracts, the indexing REST API, and the web app for tokenizing real-world assets with on-chain compliance.",
+};
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="en" className="dark">
+      <body className="min-h-screen">
+        <DocHeader />
+        {children}
+      </body>
+    </html>
+  );
+}
