@@ -9,7 +9,18 @@ export const metadata = {
 
 <ApiEndpoint method="GET" path="/assets" description="All tokenized assets with valuation, supply and holder counts." />
 
-No parameters. Returns an array of asset objects.
+Returns an array of asset objects.
+
+**Query parameters** (all optional)
+
+| Name | Type | Notes |
+|------|------|-------|
+| `asset_type` | string | Filter by class: `real_estate`, `invoice`, `commodity` |
+| `active` | boolean | Filter by active status |
+
+```bash
+curl "http://localhost:8080/assets?asset_type=real_estate&active=true"
+```
 
 **Response schema** (per asset):
 
