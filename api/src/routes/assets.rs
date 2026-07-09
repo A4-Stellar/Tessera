@@ -6,9 +6,9 @@ use axum::{
 };
 use serde::Deserialize;
 
+use super::ApiError;
 use crate::indexer::AppState;
 use crate::models::Asset;
-use super::ApiError;
 
 /// Optional filters for the asset list.
 #[derive(Debug, Deserialize)]
@@ -30,8 +30,13 @@ pub async fn list(
     let assets = snap
         .assets
         .into_iter()
-        .filter(|a| query.asset_type.as_deref().map_or(true, |t| a.asset_type == t))
-        .filter(|a| query.active.map_or(true, |active| a.active == active))
+        .filter(|a| {
+            query
+                .asset_type
+                .as_deref()
+                .is_none_or(|t| a.asset_type == t)
+        })
+        .filter(|a| query.active.is_none_or(|active| a.active == active))
         .collect();
     Json(assets)
 }

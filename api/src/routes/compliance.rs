@@ -1,10 +1,13 @@
 //! `GET /assets/:id/compliance`.
 
-use axum::{extract::{Path, State}, Json};
+use axum::{
+    extract::{Path, State},
+    Json,
+};
 
+use super::ApiError;
 use crate::indexer::AppState;
 use crate::models::ComplianceSummary;
-use super::ApiError;
 
 /// Aggregate compliance summary for an asset (counts only — no addresses/PII).
 pub async fn summary(

@@ -1,10 +1,13 @@
 //! `GET /assets/:id/holders`.
 
-use axum::{extract::{Path, State}, Json};
+use axum::{
+    extract::{Path, State},
+    Json,
+};
 
+use super::ApiError;
 use crate::indexer::AppState;
 use crate::models::Holder;
-use super::ApiError;
 
 /// Holder list for an asset, sorted by balance descending.
 pub async fn list(

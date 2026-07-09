@@ -19,9 +19,7 @@ use stellar_xdr::curr as xdr;
 use stellar_xdr::curr::{Limits, ReadXdr, WriteXdr};
 use tokio::sync::RwLock;
 
-use crate::models::{
-    Asset, ComplianceSummary, Distribution, Holder, JurisdictionCount, Stats,
-};
+use crate::models::{Asset, ComplianceSummary, Distribution, Holder, JurisdictionCount, Stats};
 
 /// How often the indexer refreshes its snapshot.
 pub const POLL_INTERVAL: Duration = Duration::from_secs(10);
@@ -40,10 +38,7 @@ impl Config {
     /// Testnet defaults, overridable via environment variables.
     pub fn from_env() -> Self {
         Config {
-            rpc_url: env_or(
-                "RWA_RPC_URL",
-                "https://soroban-testnet.stellar.org",
-            ),
+            rpc_url: env_or("RWA_RPC_URL", "https://soroban-testnet.stellar.org"),
             registry_id: env_or(
                 "RWA_REGISTRY_ID",
                 "CBX5SMLTXX6JP4HA5GQIO2V6QM7WCUGL2GZ6D4U773HMRI6RXISKPUR3",
@@ -241,13 +236,15 @@ fn account_muxed(strkey: &str) -> Result<xdr::MuxedAccount, IndexError> {
 /// An `ScVal::Address` from a G… or C… strkey.
 fn address_scval(strkey: &str) -> Result<xdr::ScVal, IndexError> {
     if strkey.starts_with('C') {
-        Ok(xdr::ScVal::Address(xdr::ScAddress::Contract(contract_id(strkey)?)))
+        Ok(xdr::ScVal::Address(xdr::ScAddress::Contract(contract_id(
+            strkey,
+        )?)))
     } else {
         let pk = stellar_strkey::ed25519::PublicKey::from_string(strkey)
             .map_err(|e| IndexError::Strkey(e.to_string()))?;
-        Ok(xdr::ScVal::Address(xdr::ScAddress::Account(xdr::AccountId(
-            xdr::PublicKey::PublicKeyTypeEd25519(xdr::Uint256(pk.0)),
-        ))))
+        Ok(xdr::ScVal::Address(xdr::ScAddress::Account(
+            xdr::AccountId(xdr::PublicKey::PublicKeyTypeEd25519(xdr::Uint256(pk.0))),
+        )))
     }
 }
 
@@ -363,7 +360,9 @@ fn address_to_string(a: &xdr::ScAddress) -> Result<String, IndexError> {
         xdr::ScAddress::Contract(xdr::ContractId(xdr::Hash(bytes))) => {
             Ok(stellar_strkey::Contract(*bytes).to_string())
         }
-        other => Err(IndexError::Decode(format!("unsupported address: {other:?}"))),
+        other => Err(IndexError::Decode(format!(
+            "unsupported address: {other:?}"
+        ))),
     }
 }
 
@@ -504,7 +503,11 @@ impl Indexer {
 
             // Holders: every allowlisted address with a positive balance.
             let (holders, summary, approved_here) = self
-                .index_compliance_and_holders(&meta.compliance_contract, &raw.token_contract, total_supply)
+                .index_compliance_and_holders(
+                    &meta.compliance_contract,
+                    &raw.token_contract,
+                    total_supply,
+                )
                 .await?;
             for a in approved_here {
                 approved_addresses.insert(a);
@@ -597,7 +600,11 @@ impl Indexer {
             // Record status → summary counts.
             if let Ok(rec) = self
                 .rpc
-                .read(compliance_contract, "get_record", vec![address_scval(address)?])
+                .read(
+                    compliance_contract,
+                    "get_record",
+                    vec![address_scval(address)?],
+                )
                 .await
             {
                 if !rec.value.is_null() {
@@ -639,10 +646,13 @@ impl Indexer {
             }
         }
 
-        holders.sort_by(|a, b| parse_i128(&b.balance).cmp(&parse_i128(&a.balance)));
+        holders.sort_by_key(|h| std::cmp::Reverse(parse_i128(&h.balance)));
         summary.jurisdictions = jurisdictions
             .into_iter()
-            .map(|(jurisdiction, count)| JurisdictionCount { jurisdiction, count })
+            .map(|(jurisdiction, count)| JurisdictionCount {
+                jurisdiction,
+                count,
+            })
             .collect();
 
         Ok((holders, summary, approved_addresses))
@@ -658,8 +668,8 @@ impl Indexer {
                 vec![address_scval(token_contract)?],
             )
             .await?;
-        let raw: Vec<RawDistribution> = serde_json::from_value(read.value)
-            .map_err(|e| IndexError::Decode(e.to_string()))?;
+        let raw: Vec<RawDistribution> =
+            serde_json::from_value(read.value).map_err(|e| IndexError::Decode(e.to_string()))?;
         Ok(raw
             .into_iter()
             .map(|d| {
@@ -742,6 +752,9 @@ mod tests {
             },
         ];
         let map = xdr::ScVal::Map(Some(xdr::ScMap(entries.try_into().unwrap())));
-        assert_eq!(scval_to_json(&map).unwrap(), json!({ "active": true, "id": 1 }));
+        assert_eq!(
+            scval_to_json(&map).unwrap(),
+            json!({ "active": true, "id": 1 })
+        );
     }
 }
