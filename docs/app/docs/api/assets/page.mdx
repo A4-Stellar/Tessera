@@ -1,0 +1,95 @@
+export const metadata = {
+  title: "API · Assets",
+  description: "List all tokenized assets, or fetch one by id.",
+};
+
+# Assets
+
+## List assets
+
+<ApiEndpoint method="GET" path="/assets" description="All tokenized assets with valuation, supply and holder counts." />
+
+No parameters. Returns an array of asset objects.
+
+**Response schema** (per asset):
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `id` | number | Registry id |
+| `token_contract` | string | Asset-token contract |
+| `issuer` | string | Issuer account |
+| `name` | string | |
+| `symbol` | string | |
+| `asset_type` | string | `real_estate` \| `invoice` \| `commodity` |
+| `description` | string | |
+| `valuation_cents` | string | USD cents (`i128`) |
+| `valuation_usd` | number | Dollars, convenience |
+| `decimals` | number | |
+| `total_supply` | string | Base units (`i128`) |
+| `holders` | number | Addresses with a positive balance |
+| `active` | boolean | |
+| `paused` | boolean | |
+| `compliance_contract` | string | Gate for this asset |
+| `created_at_ledger` | number | |
+
+**Example**
+
+```bash
+curl http://localhost:8080/assets
+```
+
+```json
+[
+  {
+    "id": 1,
+    "token_contract": "CBMCWLSQSWUTLUJFCNBHNBSXMUM3XU7NAQ5TSNERW4HA4ZZBYHLG4ECZ",
+    "issuer": "GAIQGTOBTTLLDJ4SWGGESM7UWJ2DI4K3ZNHUSHPDKJL2IE5FKY3BSRAA",
+    "name": "Manhattan Loft",
+    "symbol": "MLOFT",
+    "asset_type": "real_estate",
+    "description": "A tokenized loft in Manhattan",
+    "valuation_cents": "500000000",
+    "valuation_usd": 5000000.0,
+    "decimals": 2,
+    "total_supply": "1000000",
+    "holders": 1,
+    "active": true,
+    "paused": false,
+    "compliance_contract": "CBUERYDM7DXTZLLKDBRJKUBPFJ7M4OSUN4T7XKUARU345RLXNAIQD2IU",
+    "created_at_ledger": 3502885
+  }
+]
+```
+
+## Get an asset
+
+<ApiEndpoint method="GET" path="/assets/:id" description="Full detail for a single asset by registry id." />
+
+**Path parameters**
+
+| Name | Type | Notes |
+|------|------|-------|
+| `id` | number | Registry id (e.g. `1`) |
+
+**Example**
+
+```bash
+curl http://localhost:8080/assets/1
+```
+
+Returns a single asset object with the schema above.
+
+**Errors**
+
+```json
+{ "error": "not_found", "message": "no asset with id 999" }
+```
+
+Returned with status `404` when no asset has the given id. A non-numeric id
+(`/assets/abc`) is rejected with `400` by the router.
+
+<CalloutBox variant="tip">
+`total_supply` and `valuation_cents` are strings. In JavaScript, parse them with
+`BigInt(asset.total_supply)` and compute a display value as
+`Number(BigInt(asset.total_supply)) / 10 ** asset.decimals`.
+</CalloutBox>

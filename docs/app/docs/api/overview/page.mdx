@@ -1,0 +1,83 @@
+export const metadata = {
+  title: "API Overview",
+  description: "How the read-only Stellar RWA indexing API works, and its conventions.",
+};
+
+# API Overview
+
+The Stellar RWA API is a **read-only** REST service that indexes all tokenized
+asset activity on Stellar and serves it as JSON. It is written in Rust (Axum +
+tokio) and holds no keys — it never signs or submits transactions.
+
+Base URL (local): `http://localhost:8080`
+
+## How indexing works
+
+A background task polls **Soroban RPC** every 10 seconds. On each tick it reads the
+current state of the four contracts by *simulating* view calls — `get_all_assets`
+on the registry, then per-asset `get_metadata`, `get_allowlist`, `balance` and
+`get_distributions_for_asset` — and rebuilds an in-memory snapshot.
+
+<CalloutBox variant="note">
+State is kept **in memory** (no database in v1). If the RPC is briefly
+unreachable, the indexer logs the error, keeps serving the last good snapshot, and
+retries on the next tick. The API never panics on a transient failure.
+</CalloutBox>
+
+## Conventions
+
+- **Large integers are strings.** Token amounts and valuations are `i128`
+  on-chain. To avoid precision loss in JavaScript, they are serialized as decimal
+  **strings** (`total_supply`, `valuation_cents`, `balance`, `total_amount`).
+- **Convenience floats.** Valuations also include a `valuation_usd` (float
+  dollars) and percentages (`share_percent`, `claimed_percent`) for display.
+- **Amounts are raw base units.** Divide by `10 ** decimals` to get a display
+  value. The asset's `decimals` is included on each asset.
+- **Cents.** `valuation_cents` is USD cents; `valuation_usd = valuation_cents / 100`.
+
+## Endpoints
+
+<ApiEndpoint method="GET" path="/stats" description="Platform-wide statistics." />
+<ApiEndpoint method="GET" path="/assets" description="All tokenized assets." />
+<ApiEndpoint method="GET" path="/assets/:id" description="A single asset by registry id." />
+<ApiEndpoint method="GET" path="/assets/:id/holders" description="Holder list with balances." />
+<ApiEndpoint method="GET" path="/assets/:id/compliance" description="Non-PII compliance summary." />
+<ApiEndpoint method="GET" path="/assets/:id/dividends" description="Distribution history." />
+
+Plus `GET /` (self-describing index) and `GET /health` (liveness).
+
+## Errors
+
+Errors return an appropriate HTTP status and a JSON body:
+
+```json
+{ "error": "not_found", "message": "no asset with id 999" }
+```
+
+| Status | `error` | When |
+|--------|---------|------|
+| `404` | `not_found` | Unknown asset id |
+| `400` | — | Non-numeric `:id` path (rejected by the router) |
+
+## CORS
+
+All origins, methods and headers are allowed, so the docs site and the web app
+can call the API directly from the browser.
+
+## `/stats` response
+
+```json
+{
+  "total_assets": 1,
+  "active_assets": 1,
+  "tvl_cents": "500000000",
+  "tvl_usd": 5000000.0,
+  "total_holders": 1,
+  "total_distributions": 0,
+  "last_indexed_ledger": 3514152,
+  "last_updated": "2026-07-09T08:43:12.101772791+00:00"
+}
+```
+
+`total_holders` is the count of **distinct approved addresses** across all assets;
+`last_indexed_ledger` is the ledger the most recent successful refresh read from.

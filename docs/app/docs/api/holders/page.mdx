@@ -1,0 +1,54 @@
+export const metadata = {
+  title: "API · Holders",
+  description: "Holder list with balances for a tokenized asset.",
+};
+
+# Holders
+
+<ApiEndpoint method="GET" path="/assets/:id/holders" description="Holder list with balances, sorted by balance descending." />
+
+Returns every address that is on the asset's compliance allowlist **and** holds a
+positive balance. The asset-token contract does not enumerate holders directly, so
+the indexer derives this from the allowlist intersected with balances.
+
+**Path parameters**
+
+| Name | Type | Notes |
+|------|------|-------|
+| `id` | number | Registry id |
+
+**Response schema** (per holder):
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `address` | string | Holder account |
+| `balance` | string | Base units (`i128`) |
+| `share_percent` | number | Percent of total supply, 0–100 (2 dp) |
+
+**Example**
+
+```bash
+curl http://localhost:8080/assets/1/holders
+```
+
+```json
+[
+  {
+    "address": "GAIQGTOBTTLLDJ4SWGGESM7UWJ2DI4K3ZNHUSHPDKJL2IE5FKY3BSRAA",
+    "balance": "1000000",
+    "share_percent": 100.0
+  }
+]
+```
+
+**Errors**
+
+Returns `404` with `{ "error": "not_found", … }` when the asset id is unknown. An
+asset with holders but none currently holding a positive balance returns an empty
+array `[]`.
+
+<CalloutBox variant="note">
+Holders are sorted by balance, largest first. `share_percent` is computed from
+`balance / total_supply` at index time, so it reflects the most recent 10-second
+refresh.
+</CalloutBox>

@@ -1,0 +1,65 @@
+export const metadata = {
+  title: "API · Dividends",
+  description: "Distribution history for a tokenized asset.",
+};
+
+# Dividends
+
+<ApiEndpoint method="GET" path="/assets/:id/dividends" description="Distribution history for an asset, newest ledger first." />
+
+Returns every dividend distribution created for the asset's token, ordered by
+creation ledger (newest first).
+
+**Path parameters**
+
+| Name | Type | Notes |
+|------|------|-------|
+| `id` | number | Registry id |
+
+**Response schema** (per distribution):
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `id` | number | Distribution id |
+| `asset_token` | string | The asset paid out on |
+| `payment_token` | string | Token used to pay |
+| `total_amount` | string | Pool size, base units (`i128`) |
+| `distributed` | string | Claimed so far, base units (`i128`) |
+| `claimed_percent` | number | 0–100 (2 dp) |
+| `completed` | boolean | `true` once fully claimed |
+| `snapshot_ledger` | number | Ledger at creation |
+| `created_at_ledger` | number | |
+
+**Example**
+
+```bash
+curl http://localhost:8080/assets/1/dividends
+```
+
+```json
+[
+  {
+    "id": 1,
+    "asset_token": "CBMCWLSQSWUTLUJFCNBHNBSXMUM3XU7NAQ5TSNERW4HA4ZZBYHLG4ECZ",
+    "payment_token": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+    "total_amount": "100000000000",
+    "distributed": "25000000000",
+    "claimed_percent": 25.0,
+    "completed": false,
+    "snapshot_ledger": 3510000,
+    "created_at_ledger": 3510000
+  }
+]
+```
+
+An asset with no distributions returns an empty array `[]`.
+
+**Errors**
+
+Returns `404` with `{ "error": "not_found", … }` when the asset id is unknown.
+
+<CalloutBox variant="note">
+`total_amount` and `distributed` are in the **payment token's** base units, not the
+asset token's. Classic Stellar assets (SACs) use 7 decimals, so `100000000000`
+above is `10,000.0` units of the payment token.
+</CalloutBox>
