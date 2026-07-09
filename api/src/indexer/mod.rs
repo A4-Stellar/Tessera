@@ -1,0 +1,682 @@
+//! In-memory indexer for tokenized RWA activity on Stellar.
+//!
+//! Every 10 seconds the indexer reads the current on-chain state of the four
+//! RWA contracts through the Soroban RPC `simulateTransaction` endpoint and
+//! rebuilds an in-memory snapshot (no database in v1). Reads are pure view
+//! calls: they simulate an invocation and decode the returned `ScVal` — no
+//! transaction is ever submitted and no key is required.
+//!
+//! All fallible work returns `Result`; the polling loop logs and retries on
+//! error rather than panicking, so a transient RPC failure never takes the API
+//! down — it simply serves the last good snapshot.
+
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::Arc;
+use std::time::Duration;
+
+use serde::Deserialize;
+use stellar_xdr::curr as xdr;
+use stellar_xdr::curr::{Limits, ReadXdr, WriteXdr};
+use tokio::sync::RwLock;
+
+use crate::models::{
+    Asset, ComplianceSummary, Distribution, Holder, JurisdictionCount, Stats,
+};
+
+/// How often the indexer refreshes its snapshot.
+pub const POLL_INTERVAL: Duration = Duration::from_secs(10);
+
+/// Static configuration for a network's contracts and RPC endpoint.
+#[derive(Debug, Clone)]
+pub struct Config {
+    pub rpc_url: String,
+    pub registry_id: String,
+    pub dividend_id: String,
+    /// A funded account used only as the (unsigned) source for simulations.
+    pub read_source: String,
+}
+
+impl Config {
+    /// Testnet defaults, overridable via environment variables.
+    pub fn from_env() -> Self {
+        Config {
+            rpc_url: env_or(
+                "RWA_RPC_URL",
+                "https://soroban-testnet.stellar.org",
+            ),
+            registry_id: env_or(
+                "RWA_REGISTRY_ID",
+                "CBX5SMLTXX6JP4HA5GQIO2V6QM7WCUGL2GZ6D4U773HMRI6RXISKPUR3",
+            ),
+            dividend_id: env_or(
+                "RWA_DIVIDEND_ID",
+                "CAR4XY3CEBQWFOL27JEWFW34KXSIZA7RFKDQMEIV7ZU723RWY37I2SYX",
+            ),
+            read_source: env_or(
+                "RWA_READ_SOURCE",
+                "GAIQGTOBTTLLDJ4SWGGESM7UWJ2DI4K3ZNHUSHPDKJL2IE5FKY3BSRAA",
+            ),
+        }
+    }
+}
+
+fn env_or(key: &str, default: &str) -> String {
+    std::env::var(key).unwrap_or_else(|_| default.to_string())
+}
+
+/// The immutable, shareable snapshot the API serves.
+#[derive(Debug, Clone, Default)]
+pub struct Snapshot {
+    pub assets: Vec<Asset>,
+    pub holders: HashMap<u64, Vec<Holder>>,
+    pub compliance: HashMap<u64, ComplianceSummary>,
+    pub dividends: HashMap<u64, Vec<Distribution>>,
+    pub stats: Stats,
+}
+
+impl Snapshot {
+    pub fn asset(&self, id: u64) -> Option<&Asset> {
+        self.assets.iter().find(|a| a.id == id)
+    }
+}
+
+/// Shared, hot-swappable state handed to the Axum routes.
+#[derive(Clone)]
+pub struct AppState {
+    inner: Arc<RwLock<Snapshot>>,
+    pub config: Arc<Config>,
+}
+
+impl AppState {
+    pub fn new(config: Config) -> Self {
+        AppState {
+            inner: Arc::new(RwLock::new(Snapshot::default())),
+            config: Arc::new(config),
+        }
+    }
+
+    /// Clone the current snapshot for read-only serving.
+    pub async fn snapshot(&self) -> Snapshot {
+        self.inner.read().await.clone()
+    }
+
+    async fn replace(&self, next: Snapshot) {
+        *self.inner.write().await = next;
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum IndexError {
+    #[error("rpc request failed: {0}")]
+    Http(#[from] reqwest::Error),
+    #[error("rpc returned an error: {0}")]
+    Rpc(String),
+    #[error("xdr error: {0}")]
+    Xdr(String),
+    #[error("strkey error: {0}")]
+    Strkey(String),
+    #[error("decode error: {0}")]
+    Decode(String),
+}
+
+impl From<xdr::Error> for IndexError {
+    fn from(e: xdr::Error) -> Self {
+        IndexError::Xdr(e.to_string())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RPC client
+// ---------------------------------------------------------------------------
+
+struct Rpc {
+    http: reqwest::Client,
+    url: String,
+    source: String,
+}
+
+#[derive(Deserialize)]
+struct RpcEnvelope {
+    result: Option<SimulateResult>,
+    error: Option<RpcError>,
+}
+
+#[derive(Deserialize)]
+struct RpcError {
+    message: String,
+}
+
+#[derive(Deserialize)]
+struct SimulateResult {
+    #[serde(default)]
+    results: Vec<SimResultEntry>,
+    #[serde(default)]
+    error: Option<String>,
+    #[serde(rename = "latestLedger", default)]
+    latest_ledger: u32,
+}
+
+#[derive(Deserialize)]
+struct SimResultEntry {
+    xdr: String,
+}
+
+/// Outcome of a single simulated read.
+struct ReadOutcome {
+    value: serde_json::Value,
+    latest_ledger: u32,
+}
+
+impl Rpc {
+    fn new(url: String, source: String) -> Self {
+        Rpc {
+            http: reqwest::Client::new(),
+            url,
+            source,
+        }
+    }
+
+    /// Simulate `contract.method(args)` and decode the return value to JSON.
+    async fn read(
+        &self,
+        contract: &str,
+        method: &str,
+        args: Vec<xdr::ScVal>,
+    ) -> Result<ReadOutcome, IndexError> {
+        let envelope_b64 = build_invoke_envelope(&self.source, contract, method, args)?;
+        let body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "simulateTransaction",
+            "params": { "transaction": envelope_b64 },
+        });
+
+        let resp: RpcEnvelope = self
+            .http
+            .post(&self.url)
+            .json(&body)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+
+        if let Some(err) = resp.error {
+            return Err(IndexError::Rpc(err.message));
+        }
+        let result = resp
+            .result
+            .ok_or_else(|| IndexError::Rpc("empty rpc result".into()))?;
+        if let Some(sim_err) = result.error {
+            return Err(IndexError::Rpc(sim_err));
+        }
+        let entry = result
+            .results
+            .first()
+            .ok_or_else(|| IndexError::Rpc("no simulation result".into()))?;
+        let scval = xdr::ScVal::from_xdr_base64(&entry.xdr, Limits::none())?;
+        Ok(ReadOutcome {
+            value: scval_to_json(&scval)?,
+            latest_ledger: result.latest_ledger,
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// XDR helpers
+// ---------------------------------------------------------------------------
+
+fn contract_id(strkey: &str) -> Result<xdr::ContractId, IndexError> {
+    let c = stellar_strkey::Contract::from_string(strkey)
+        .map_err(|e| IndexError::Strkey(e.to_string()))?;
+    Ok(xdr::ContractId(xdr::Hash(c.0)))
+}
+
+fn account_muxed(strkey: &str) -> Result<xdr::MuxedAccount, IndexError> {
+    let pk = stellar_strkey::ed25519::PublicKey::from_string(strkey)
+        .map_err(|e| IndexError::Strkey(e.to_string()))?;
+    Ok(xdr::MuxedAccount::Ed25519(xdr::Uint256(pk.0)))
+}
+
+/// An `ScVal::Address` from a G… or C… strkey.
+fn address_scval(strkey: &str) -> Result<xdr::ScVal, IndexError> {
+    if strkey.starts_with('C') {
+        Ok(xdr::ScVal::Address(xdr::ScAddress::Contract(contract_id(strkey)?)))
+    } else {
+        let pk = stellar_strkey::ed25519::PublicKey::from_string(strkey)
+            .map_err(|e| IndexError::Strkey(e.to_string()))?;
+        Ok(xdr::ScVal::Address(xdr::ScAddress::Account(xdr::AccountId(
+            xdr::PublicKey::PublicKeyTypeEd25519(xdr::Uint256(pk.0)),
+        ))))
+    }
+}
+
+/// Build a base64 `TransactionEnvelope` invoking a contract method. The
+/// transaction is never signed or submitted — it exists only to be simulated.
+fn build_invoke_envelope(
+    source: &str,
+    contract: &str,
+    method: &str,
+    args: Vec<xdr::ScVal>,
+) -> Result<String, IndexError> {
+    let function_name = xdr::ScSymbol(
+        method
+            .try_into()
+            .map_err(|_| IndexError::Xdr(format!("invalid symbol: {method}")))?,
+    );
+    let invoke = xdr::InvokeContractArgs {
+        contract_address: xdr::ScAddress::Contract(contract_id(contract)?),
+        function_name,
+        args: args
+            .try_into()
+            .map_err(|_| IndexError::Xdr("too many args".into()))?,
+    };
+    let op = xdr::Operation {
+        source_account: None,
+        body: xdr::OperationBody::InvokeHostFunction(xdr::InvokeHostFunctionOp {
+            host_function: xdr::HostFunction::InvokeContract(invoke),
+            auth: Default::default(),
+        }),
+    };
+    let tx = xdr::Transaction {
+        source_account: account_muxed(source)?,
+        fee: 100,
+        seq_num: xdr::SequenceNumber(0),
+        cond: xdr::Preconditions::None,
+        memo: xdr::Memo::None,
+        operations: vec![op]
+            .try_into()
+            .map_err(|_| IndexError::Xdr("operation build failed".into()))?,
+        ext: xdr::TransactionExt::V0,
+    };
+    let envelope = xdr::TransactionEnvelope::Tx(xdr::TransactionV1Envelope {
+        tx,
+        signatures: Default::default(),
+    });
+    Ok(envelope.to_xdr_base64(Limits::none())?)
+}
+
+/// Convert a decoded `ScVal` into `serde_json::Value`.
+///
+/// Scalars map to their JSON counterparts; 128-bit integers become decimal
+/// strings (to survive JavaScript); contract structs (`ScMap`) become objects
+/// keyed by their symbol field names; unit enums (`ScVec` of one symbol) and
+/// plain vectors become arrays.
+fn scval_to_json(v: &xdr::ScVal) -> Result<serde_json::Value, IndexError> {
+    use serde_json::Value;
+    Ok(match v {
+        xdr::ScVal::Bool(b) => Value::Bool(*b),
+        xdr::ScVal::Void => Value::Null,
+        xdr::ScVal::U32(n) => Value::from(*n),
+        xdr::ScVal::I32(n) => Value::from(*n),
+        xdr::ScVal::U64(n) => Value::from(*n),
+        xdr::ScVal::I64(n) => Value::from(*n),
+        xdr::ScVal::U128(p) => {
+            let val = ((p.hi as u128) << 64) | (p.lo as u128);
+            Value::String(val.to_string())
+        }
+        xdr::ScVal::I128(p) => {
+            let val = ((p.hi as i128) << 64) | (p.lo as i128);
+            Value::String(val.to_string())
+        }
+        xdr::ScVal::Symbol(s) => Value::String(s.to_string()),
+        xdr::ScVal::String(s) => Value::String(s.to_string()),
+        xdr::ScVal::Address(a) => Value::String(address_to_string(a)?),
+        xdr::ScVal::Vec(Some(items)) => {
+            let mut arr = Vec::with_capacity(items.len());
+            for item in items.iter() {
+                arr.push(scval_to_json(item)?);
+            }
+            Value::Array(arr)
+        }
+        xdr::ScVal::Vec(None) => Value::Array(vec![]),
+        xdr::ScVal::Map(Some(entries)) => {
+            let mut obj = serde_json::Map::new();
+            for e in entries.iter() {
+                let key = match &e.key {
+                    xdr::ScVal::Symbol(s) => s.to_string(),
+                    xdr::ScVal::String(s) => s.to_string(),
+                    other => json_key_fallback(other)?,
+                };
+                obj.insert(key, scval_to_json(&e.val)?);
+            }
+            Value::Object(obj)
+        }
+        xdr::ScVal::Map(None) => Value::Object(serde_json::Map::new()),
+        // Remaining variants aren't produced by these contracts' return values.
+        _ => Value::Null,
+    })
+}
+
+fn json_key_fallback(v: &xdr::ScVal) -> Result<String, IndexError> {
+    match scval_to_json(v)? {
+        serde_json::Value::String(s) => Ok(s),
+        other => Ok(other.to_string()),
+    }
+}
+
+fn address_to_string(a: &xdr::ScAddress) -> Result<String, IndexError> {
+    match a {
+        xdr::ScAddress::Account(xdr::AccountId(xdr::PublicKey::PublicKeyTypeEd25519(
+            xdr::Uint256(bytes),
+        ))) => Ok(stellar_strkey::ed25519::PublicKey(*bytes).to_string()),
+        xdr::ScAddress::Contract(xdr::ContractId(xdr::Hash(bytes))) => {
+            Ok(stellar_strkey::Contract(*bytes).to_string())
+        }
+        other => Err(IndexError::Decode(format!("unsupported address: {other:?}"))),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Raw decode structs (match the contract field names)
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct RawAssetEntry {
+    id: u64,
+    token_contract: String,
+    issuer: String,
+    name: String,
+    asset_type: String,
+    valuation: String,
+    created_at: u32,
+    active: bool,
+}
+
+#[derive(Deserialize)]
+struct RawMetadata {
+    symbol: String,
+    total_supply: String,
+    decimals: u32,
+    compliance_contract: String,
+    asset_description: String,
+    paused: bool,
+}
+
+#[derive(Deserialize)]
+struct RawKyc {
+    status: serde_json::Value,
+    jurisdiction: String,
+    expires_at: u32,
+}
+
+#[derive(Deserialize)]
+struct RawDistribution {
+    id: u64,
+    asset_token: String,
+    payment_token: String,
+    total_amount: String,
+    distributed: String,
+    snapshot_ledger: u32,
+    created_at: u32,
+    completed: bool,
+}
+
+fn parse_i128(s: &str) -> i128 {
+    s.parse::<i128>().unwrap_or(0)
+}
+
+fn cents_to_usd(cents: i128) -> f64 {
+    cents as f64 / 100.0
+}
+
+fn ratio_percent(part: i128, whole: i128) -> f64 {
+    if whole <= 0 {
+        return 0.0;
+    }
+    let pct = (part as f64 / whole as f64) * 100.0;
+    (pct.clamp(0.0, 100.0) * 100.0).round() / 100.0
+}
+
+/// Normalise a compliance status that may decode as `"Approved"` or
+/// `["Approved"]` (unit-variant enum) into a plain string.
+fn normalize_status(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Array(a) => a
+            .first()
+            .and_then(|x| x.as_str())
+            .unwrap_or("Unknown")
+            .to_string(),
+        _ => "Unknown".to_string(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Indexer
+// ---------------------------------------------------------------------------
+
+pub struct Indexer {
+    rpc: Rpc,
+    state: AppState,
+}
+
+impl Indexer {
+    pub fn new(state: AppState) -> Self {
+        let cfg = &state.config;
+        Indexer {
+            rpc: Rpc::new(cfg.rpc_url.clone(), cfg.read_source.clone()),
+            state,
+        }
+    }
+
+    /// Poll forever, refreshing the snapshot every [`POLL_INTERVAL`].
+    pub async fn run(self) {
+        loop {
+            match self.refresh().await {
+                Ok(count) => tracing::info!(assets = count, "index refreshed"),
+                Err(e) => tracing::warn!(error = %e, "index refresh failed; keeping last snapshot"),
+            }
+            tokio::time::sleep(POLL_INTERVAL).await;
+        }
+    }
+
+    /// Read the full current state of all contracts and rebuild the snapshot.
+    async fn refresh(&self) -> Result<usize, IndexError> {
+        let cfg = &self.state.config;
+
+        let entries_read = self
+            .rpc
+            .read(&cfg.registry_id, "get_all_assets", vec![])
+            .await?;
+        let latest_ledger = entries_read.latest_ledger;
+        let raw_entries: Vec<RawAssetEntry> = serde_json::from_value(entries_read.value)
+            .map_err(|e| IndexError::Decode(e.to_string()))?;
+
+        let mut assets = Vec::new();
+        let mut holders_map: HashMap<u64, Vec<Holder>> = HashMap::new();
+        let mut compliance_map: HashMap<u64, ComplianceSummary> = HashMap::new();
+        let mut dividends_map: HashMap<u64, Vec<Distribution>> = HashMap::new();
+        let mut approved_addresses: HashSet<String> = HashSet::new();
+        let mut total_distributions = 0usize;
+        let mut tvl: i128 = 0;
+
+        for raw in &raw_entries {
+            let meta = self
+                .rpc
+                .read(&raw.token_contract, "get_metadata", vec![])
+                .await?;
+            let meta: RawMetadata = serde_json::from_value(meta.value)
+                .map_err(|e| IndexError::Decode(e.to_string()))?;
+
+            let total_supply = parse_i128(&meta.total_supply);
+            let valuation = parse_i128(&raw.valuation);
+
+            // Holders: every allowlisted address with a positive balance.
+            let (holders, summary, approved_here) = self
+                .index_compliance_and_holders(&meta.compliance_contract, &raw.token_contract, total_supply)
+                .await?;
+            for a in approved_here {
+                approved_addresses.insert(a);
+            }
+
+            // Dividends for this asset token.
+            let dists = self
+                .index_dividends(&raw.token_contract)
+                .await
+                .unwrap_or_default();
+            total_distributions += dists.len();
+
+            if raw.active {
+                tvl += valuation;
+            }
+
+            let asset = Asset {
+                id: raw.id,
+                token_contract: raw.token_contract.clone(),
+                issuer: raw.issuer.clone(),
+                name: raw.name.clone(),
+                symbol: meta.symbol,
+                asset_type: raw.asset_type.clone(),
+                description: meta.asset_description,
+                valuation_cents: valuation.to_string(),
+                valuation_usd: cents_to_usd(valuation),
+                decimals: meta.decimals,
+                total_supply: total_supply.to_string(),
+                holders: holders.len(),
+                active: raw.active,
+                paused: meta.paused,
+                compliance_contract: meta.compliance_contract,
+                created_at_ledger: raw.created_at,
+            };
+
+            holders_map.insert(raw.id, holders);
+            compliance_map.insert(raw.id, summary);
+            dividends_map.insert(raw.id, dists);
+            assets.push(asset);
+        }
+
+        let active_assets = assets.iter().filter(|a| a.active).count();
+        let stats = Stats {
+            total_assets: assets.len(),
+            active_assets,
+            tvl_cents: tvl.to_string(),
+            tvl_usd: cents_to_usd(tvl),
+            total_holders: approved_addresses.len(),
+            total_distributions,
+            last_indexed_ledger: latest_ledger,
+            last_updated: Some(chrono::Utc::now().to_rfc3339()),
+        };
+
+        let count = assets.len();
+        self.state
+            .replace(Snapshot {
+                assets,
+                holders: holders_map,
+                compliance: compliance_map,
+                dividends: dividends_map,
+                stats,
+            })
+            .await;
+        Ok(count)
+    }
+
+    /// Read the compliance allowlist for an asset and derive both the holder
+    /// list (allowlisted ∩ positive balance) and the non-PII summary.
+    async fn index_compliance_and_holders(
+        &self,
+        compliance_contract: &str,
+        token_contract: &str,
+        total_supply: i128,
+    ) -> Result<(Vec<Holder>, ComplianceSummary, Vec<String>), IndexError> {
+        let allowlist = self
+            .rpc
+            .read(compliance_contract, "get_allowlist", vec![])
+            .await?;
+        let addresses: Vec<String> = serde_json::from_value(allowlist.value)
+            .map_err(|e| IndexError::Decode(e.to_string()))?;
+
+        let mut holders = Vec::new();
+        let mut summary = ComplianceSummary::default();
+        let mut jurisdictions: BTreeMap<String, usize> = BTreeMap::new();
+        let mut approved_addresses = Vec::new();
+
+        for address in &addresses {
+            summary.total_records += 1;
+
+            // Record status → summary counts.
+            if let Ok(rec) = self
+                .rpc
+                .read(compliance_contract, "get_record", vec![address_scval(address)?])
+                .await
+            {
+                if !rec.value.is_null() {
+                    if let Ok(kyc) = serde_json::from_value::<RawKyc>(rec.value) {
+                        match normalize_status(&kyc.status).as_str() {
+                            "Approved" => {
+                                summary.approved += 1;
+                                approved_addresses.push(address.clone());
+                            }
+                            "Suspended" => summary.suspended += 1,
+                            "Rejected" => summary.rejected += 1,
+                            "Pending" => summary.pending += 1,
+                            _ => {}
+                        }
+                        if kyc.expires_at != 0 {
+                            summary.with_expiry += 1;
+                        }
+                        *jurisdictions.entry(kyc.jurisdiction).or_insert(0) += 1;
+                    }
+                }
+            }
+
+            // Balance → holder list.
+            let bal = self
+                .rpc
+                .read(token_contract, "balance", vec![address_scval(address)?])
+                .await?;
+            let balance = match bal.value {
+                serde_json::Value::String(s) => parse_i128(&s),
+                serde_json::Value::Number(n) => n.as_i64().unwrap_or(0) as i128,
+                _ => 0,
+            };
+            if balance > 0 {
+                holders.push(Holder {
+                    address: address.clone(),
+                    balance: balance.to_string(),
+                    share_percent: ratio_percent(balance, total_supply),
+                });
+            }
+        }
+
+        holders.sort_by(|a, b| parse_i128(&b.balance).cmp(&parse_i128(&a.balance)));
+        summary.jurisdictions = jurisdictions
+            .into_iter()
+            .map(|(jurisdiction, count)| JurisdictionCount { jurisdiction, count })
+            .collect();
+
+        Ok((holders, summary, approved_addresses))
+    }
+
+    /// Read all distributions for an asset token from the dividend contract.
+    async fn index_dividends(&self, token_contract: &str) -> Result<Vec<Distribution>, IndexError> {
+        let read = self
+            .rpc
+            .read(
+                &self.state.config.dividend_id,
+                "get_distributions_for_asset",
+                vec![address_scval(token_contract)?],
+            )
+            .await?;
+        let raw: Vec<RawDistribution> = serde_json::from_value(read.value)
+            .map_err(|e| IndexError::Decode(e.to_string()))?;
+        Ok(raw
+            .into_iter()
+            .map(|d| {
+                let total = parse_i128(&d.total_amount);
+                let distributed = parse_i128(&d.distributed);
+                Distribution {
+                    id: d.id,
+                    asset_token: d.asset_token,
+                    payment_token: d.payment_token,
+                    total_amount: total.to_string(),
+                    distributed: distributed.to_string(),
+                    claimed_percent: ratio_percent(distributed, total),
+                    completed: d.completed,
+                    snapshot_ledger: d.snapshot_ledger,
+                    created_at_ledger: d.created_at,
+                }
+            })
+            .collect())
+    }
+}
