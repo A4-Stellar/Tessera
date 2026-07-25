@@ -32,28 +32,53 @@ pub struct Config {
     pub rpc_url: String,
     pub registry_id: String,
     pub dividend_id: String,
-    /// A funded account used only as the (unsigned) source for simulations.
     pub read_source: String,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum ConfigError {
+    #[error("invalid RPC URL: {0}")]
+    RpcUrl(String),
+    #[error("invalid registry contract ID: {0}")]
+    RegistryId(String),
+    #[error("invalid dividend contract ID: {0}")]
+    DividendId(String),
+    #[error("invalid read source account: {0}")]
+    ReadSource(String),
+}
+
 impl Config {
-    /// Testnet defaults, overridable via environment variables.
-    pub fn from_env() -> Self {
-        Config {
-            rpc_url: env_or("RWA_RPC_URL", "https://soroban-testnet.stellar.org"),
-            registry_id: env_or(
-                "RWA_REGISTRY_ID",
-                "CBX5SMLTXX6JP4HA5GQIO2V6QM7WCUGL2GZ6D4U773HMRI6RXISKPUR3",
-            ),
-            dividend_id: env_or(
-                "RWA_DIVIDEND_ID",
-                "CAR4XY3CEBQWFOL27JEWFW34KXSIZA7RFKDQMEIV7ZU723RWY37I2SYX",
-            ),
-            read_source: env_or(
-                "RWA_READ_SOURCE",
-                "GAIQGTOBTTLLDJ4SWGGESM7UWJ2DI4K3ZNHUSHPDKJL2IE5FKY3BSRAA",
-            ),
-        }
+    pub fn from_env() -> Result<Self, ConfigError> {
+        let rpc_url = env_or("RWA_RPC_URL", "https://soroban-testnet.stellar.org");
+        url::Url::parse(&rpc_url).map_err(|e| ConfigError::RpcUrl(format!("{e}: {rpc_url}")))?;
+
+        let registry_id = env_or(
+            "RWA_REGISTRY_ID",
+            "CBX5SMLTXX6JP4HA5GQIO2V6QM7WCUGL2GZ6D4U773HMRI6RXISKPUR3",
+        );
+        stellar_strkey::Contract::from_string(&registry_id)
+            .map_err(|e| ConfigError::RegistryId(e.to_string()))?;
+
+        let dividend_id = env_or(
+            "RWA_DIVIDEND_ID",
+            "CAR4XY3CEBQWFOL27JEWFW34KXSIZA7RFKDQMEIV7ZU723RWY37I2SYX",
+        );
+        stellar_strkey::Contract::from_string(&dividend_id)
+            .map_err(|e| ConfigError::DividendId(e.to_string()))?;
+
+        let read_source = env_or(
+            "RWA_READ_SOURCE",
+            "GAIQGTOBTTLLDJ4SWGGESM7UWJ2DI4K3ZNHUSHPDKJL2IE5FKY3BSRAA",
+        );
+        stellar_strkey::ed25519::PublicKey::from_string(&read_source)
+            .map_err(|e| ConfigError::ReadSource(e.to_string()))?;
+
+        Ok(Config {
+            rpc_url,
+            registry_id,
+            dividend_id,
+            read_source,
+        })
     }
 }
 
