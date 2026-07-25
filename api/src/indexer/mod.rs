@@ -526,7 +526,6 @@ impl Indexer {
         let mut holders_map: HashMap<u64, Vec<Holder>> = HashMap::new();
         let mut compliance_map: HashMap<u64, ComplianceSummary> = HashMap::new();
         let mut dividends_map: HashMap<u64, Vec<Distribution>> = HashMap::new();
-        let mut approved_addresses: HashSet<String> = HashSet::new();
         let mut total_distributions = 0usize;
         let mut tvl: i128 = 0;
 
@@ -542,16 +541,13 @@ impl Indexer {
             let valuation = parse_i128(&raw.valuation);
 
             // Holders: every allowlisted address with a positive balance.
-            let (holders, summary, approved_here) = self
+            let (holders, summary, _) = self
                 .index_compliance_and_holders(
                     &meta.compliance_contract,
                     &raw.token_contract,
                     total_supply,
                 )
                 .await?;
-            for a in approved_here {
-                approved_addresses.insert(a);
-            }
 
             // Dividends for this asset token.
             let dists = self
@@ -590,12 +586,18 @@ impl Indexer {
         }
 
         let active_assets = assets.iter().filter(|a| a.active).count();
+        let mut distinct_holders = HashSet::new();
+        for holders in holders_map.values() {
+            for h in holders {
+                distinct_holders.insert(h.address.clone());
+            }
+        }
         let stats = Stats {
             total_assets: assets.len(),
             active_assets,
             tvl_cents: tvl.to_string(),
             tvl_usd: cents_to_usd(tvl),
-            total_holders: approved_addresses.len(),
+            total_holders: distinct_holders.len(),
             total_distributions,
             last_indexed_ledger: latest_ledger,
             last_updated: Some(chrono::Utc::now().to_rfc3339()),
