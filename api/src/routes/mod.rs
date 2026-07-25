@@ -6,6 +6,8 @@ pub mod dividends;
 pub mod holders;
 pub mod stats;
 
+use std::sync::Arc;
+
 use axum::{
     body::Body,
     extract::{Request, State},
@@ -16,10 +18,15 @@ use axum::{
     Json, Router,
 };
 use serde_json::json;
+use tower_governor::{governor::GovernorConfigBuilder, GovernorLayer};
 use tower_http::cors::{Any, CorsLayer};
 
 use crate::indexer::{AppState, POLL_INTERVAL};
 use crate::models::ApiErrorBody;
+
+/// Sustained requests-per-second allowed per client IP, with bursting.
+const RATE_LIMIT_PER_SECOND: u64 = 5;
+const RATE_LIMIT_BURST: u32 = 20;
 
 /// Errors surfaced to API clients as a JSON body with an appropriate status.
 #[derive(Debug)]
@@ -50,6 +57,17 @@ pub fn router(state: AppState) -> Router {
         .allow_methods(Any)
         .allow_headers(Any);
 
+    // Each request clones the in-memory snapshot, so cap how fast a single
+    // client can drive that cost. Checked before `cache_headers`, which
+    // itself touches shared state, so a throttled request stays cheap.
+    let governor_conf = Arc::new(
+        GovernorConfigBuilder::default()
+            .per_second(RATE_LIMIT_PER_SECOND)
+            .burst_size(RATE_LIMIT_BURST)
+            .finish()
+            .expect("rate limit config: period and burst size are non-zero"),
+    );
+
     // Snapshot-backed endpoints: cacheable and safe to answer with 304 when
     // the client's ETag still matches the last indexed ledger.
     let data_routes = Router::new()
@@ -59,7 +77,10 @@ pub fn router(state: AppState) -> Router {
         .route("/assets/:id/holders", get(holders::list))
         .route("/assets/:id/compliance", get(compliance::summary))
         .route("/assets/:id/dividends", get(dividends::list))
-        .layer(middleware::from_fn_with_state(state.clone(), cache_headers));
+        .layer(middleware::from_fn_with_state(state.clone(), cache_headers))
+        .layer(GovernorLayer {
+            config: governor_conf,
+        });
 
     Router::new()
         .route("/", get(index))
@@ -76,7 +97,7 @@ pub fn router(state: AppState) -> Router {
 /// derived from `last_indexed_ledger`: two requests against the same indexed
 /// ledger are guaranteed to have identical bodies.
 async fn cache_headers(State(state): State<AppState>, req: Request<Body>, next: Next) -> Response {
-    let ledger = state.snapshot().await.stats.last_indexed_ledger;
+    let ledger = state.last_indexed_ledger().await;
     let etag = format!("\"ledger-{ledger}\"");
 
     let fresh = req

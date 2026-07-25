@@ -95,6 +95,11 @@ impl AppState {
         self.inner.read().await.clone()
     }
 
+    /// The last indexed ledger, without cloning the full snapshot.
+    pub async fn last_indexed_ledger(&self) -> u32 {
+        self.inner.read().await.stats.last_indexed_ledger
+    }
+
     async fn replace(&self, next: Snapshot) {
         *self.inner.write().await = next;
     }
