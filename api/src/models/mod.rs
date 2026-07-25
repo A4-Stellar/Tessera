@@ -90,7 +90,7 @@ pub struct Stats {
     /// Total value locked across active assets, in USD cents (string).
     pub tvl_cents: String,
     pub tvl_usd: f64,
-    /// Distinct approved holders across all assets.
+    /// Distinct addresses with a positive token balance across all assets.
     pub total_holders: usize,
     pub total_distributions: usize,
     /// The last ledger the indexer successfully read from.
