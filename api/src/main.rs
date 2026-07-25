@@ -30,7 +30,11 @@ async fn main() {
         "starting stellar-rwa-api"
     );
 
-    let state = AppState::new(config);
+    let metrics_handle = PrometheusBuilder::new()
+        .install_recorder()
+        .expect("failed to install Prometheus recorder");
+
+    let state = AppState::new(config, metrics_handle);
 
     // Spawn the indexer; it owns its own clone of the shared state.
     let indexer = Indexer::new(state.clone());
@@ -53,9 +57,12 @@ async fn main() {
     };
     tracing::info!(%addr, "listening");
 
-    if let Err(e) = axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await
+    if let Err(e) = axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await
     {
         tracing::error!(error = %e, "server error");
         std::process::exit(1);

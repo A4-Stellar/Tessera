@@ -6,9 +6,11 @@
 //! calls: they simulate an invocation and decode the returned `ScVal` — no
 //! transaction is ever submitted and no key is required.
 //!
-//! All fallible work returns `Result`; the polling loop logs and retries on
-//! error rather than panicking, so a transient RPC failure never takes the API
-//! down — it simply serves the last good snapshot.
+//! All fallible work returns `Result`. Individual reads retry transient
+//! failures in place with jittered backoff (see [`Rpc::read`]); if a refresh
+//! cycle still fails, the polling loop logs it and waits for the next
+//! [`POLL_INTERVAL`] rather than panicking, so the API always keeps serving
+//! the last good snapshot.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
@@ -25,6 +27,16 @@ use crate::models::{Asset, ComplianceSummary, Distribution, Holder, Jurisdiction
 
 /// How often the indexer refreshes its snapshot.
 pub const POLL_INTERVAL: Duration = Duration::from_secs(10);
+
+/// Attempts for a single simulated read (the initial try plus retries)
+/// before giving up and failing the read.
+const MAX_READ_ATTEMPTS: u32 = 4;
+/// Base delay before the first retry. Deliberately much shorter than
+/// [`POLL_INTERVAL`]: a transient error should be retried in place rather
+/// than aborting the whole refresh cycle and waiting a full poll interval.
+const RETRY_BASE_DELAY: Duration = Duration::from_millis(150);
+/// Ceiling on backoff growth between retries.
+const RETRY_MAX_DELAY: Duration = Duration::from_secs(2);
 
 /// Static configuration for a network's contracts and RPC endpoint.
 #[derive(Debug, Clone)]
@@ -107,13 +119,15 @@ impl Snapshot {
 pub struct AppState {
     inner: ArcSwap<Snapshot>,
     pub config: Arc<Config>,
+    pub metrics: PrometheusHandle,
 }
 
 impl AppState {
-    pub fn new(config: Config) -> Self {
+    pub fn new(config: Config, metrics: PrometheusHandle) -> Self {
         AppState {
             inner: ArcSwap::from_arc(Arc::new(Snapshot::default())),
             config: Arc::new(config),
+            metrics,
         }
     }
 
@@ -144,6 +158,16 @@ pub enum IndexError {
     HttpStatus { status: u16, body: String },
     #[error("rate limited or unavailable (status {status}); retry after {retry_after:?}")]
     RateLimited { status: u16, retry_after: Option<Duration>, body: String },
+}
+
+impl IndexError {
+    /// Whether this error is worth retrying: network/HTTP-level failures and
+    /// RPC-side errors (e.g. a node returning "busy" or a 502) are typically
+    /// transient. XDR, strkey and decode errors stem from our own request or
+    /// response handling and will fail identically on every attempt.
+    fn is_transient(&self) -> bool {
+        matches!(self, IndexError::Http(_) | IndexError::Rpc(_))
+    }
 }
 
 impl From<xdr::Error> for IndexError {
@@ -204,7 +228,42 @@ impl Rpc {
     }
 
     /// Simulate `contract.method(args)` and decode the return value to JSON.
+    ///
+    /// Transient failures (network errors, non-2xx responses, RPC-level
+    /// errors) are retried in place with jittered backoff — see
+    /// [`MAX_READ_ATTEMPTS`] — rather than bubbling straight up and forcing
+    /// the whole refresh cycle to restart on the next [`POLL_INTERVAL`].
+    /// Decode/XDR/strkey errors are not retried: they're deterministic bugs
+    /// in our own encoding, not something a retry can fix.
     async fn read(
+        &self,
+        contract: &str,
+        method: &str,
+        args: Vec<xdr::ScVal>,
+    ) -> Result<ReadOutcome, IndexError> {
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            match self.read_once(contract, method, args.clone()).await {
+                Ok(outcome) => return Ok(outcome),
+                Err(e) if attempt < MAX_READ_ATTEMPTS && e.is_transient() => {
+                    let delay = retry_delay(attempt);
+                    tracing::warn!(
+                        contract,
+                        method,
+                        attempt,
+                        delay_ms = delay.as_millis() as u64,
+                        error = %e,
+                        "transient read error; retrying"
+                    );
+                    tokio::time::sleep(delay).await;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
+    async fn read_once(
         &self,
         contract: &str,
         method: &str,
@@ -270,6 +329,16 @@ impl Rpc {
             latest_ledger: result.latest_ledger,
         })
     }
+}
+
+/// Jittered exponential backoff for the `attempt`-th failed read (1-indexed).
+/// Full jitter (a random delay in `[0, cap]`) avoids every in-flight read
+/// retrying in lockstep after a shared transient failure (e.g. the RPC node
+/// briefly rejecting all requests).
+fn retry_delay(attempt: u32) -> Duration {
+    let exp = RETRY_BASE_DELAY.saturating_mul(1u32 << (attempt - 1).min(4));
+    let cap = exp.min(RETRY_MAX_DELAY);
+    rand::rng().random_range(Duration::ZERO..=cap)
 }
 
 // ---------------------------------------------------------------------------
@@ -516,6 +585,7 @@ impl Indexer {
 
     /// Poll forever, refreshing the snapshot every [`POLL_INTERVAL`].
     pub async fn run(self) {
+        let mut consecutive_failures: u64 = 0;
         loop {
             let backoff = match self.refresh().await {
                 Ok(count) => {
@@ -558,7 +628,8 @@ impl Indexer {
             let meta = self
                 .rpc
                 .read(&raw.token_contract, "get_metadata", vec![])
-                .await?;
+                .await
+                .inspect_err(|_| record_asset_read_error(raw.id, "get_metadata"))?;
             let meta: RawMetadata = serde_json::from_value(meta.value)
                 .map_err(|e| IndexError::Decode(e.to_string()))?;
 
@@ -574,11 +645,16 @@ impl Indexer {
                 )
                 .await?;
 
-            // Dividends for this asset token.
-            let dists = self
-                .index_dividends(&raw.token_contract)
-                .await
-                .unwrap_or_default();
+            // Dividends for this asset token; treated as empty on failure so one
+            // asset's dividend contract issue doesn't abort the whole refresh.
+            let dists = match self.index_dividends(&raw.token_contract).await {
+                Ok(dists) => dists,
+                Err(e) => {
+                    record_asset_read_error(raw.id, "dividends");
+                    tracing::warn!(asset_id = raw.id, error = %e, "dividends read failed; treating as empty");
+                    Vec::new()
+                }
+            };
             total_distributions += dists.len();
 
             if raw.active {
@@ -757,11 +833,47 @@ impl Indexer {
     }
 }
 
+/// Record a failed per-asset RPC read for the `rwa_indexer_asset_read_errors_total`
+/// metric, broken down by asset and which read failed.
+fn record_asset_read_error(asset_id: u64, read: &'static str) {
+    metrics::counter!(
+        "rwa_indexer_asset_read_errors_total",
+        "asset_id" => asset_id.to_string(),
+        "read" => read,
+    )
+    .increment(1);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
     use stellar_xdr::curr as xdr;
+
+    #[test]
+    fn retry_delay_is_bounded_and_grows() {
+        for attempt in 1..=6 {
+            let delay = retry_delay(attempt);
+            assert!(delay <= RETRY_MAX_DELAY);
+        }
+        // The cap for attempt 1 is the base delay; later attempts have a
+        // strictly larger (or equal, once capped) upper bound.
+        let cap = |attempt: u32| {
+            RETRY_BASE_DELAY
+                .saturating_mul(1u32 << (attempt - 1).min(4))
+                .min(RETRY_MAX_DELAY)
+        };
+        assert!(cap(1) < cap(2));
+        assert_eq!(cap(6), RETRY_MAX_DELAY);
+    }
+
+    #[test]
+    fn only_http_and_rpc_errors_are_transient() {
+        assert!(IndexError::Rpc("busy".into()).is_transient());
+        assert!(!IndexError::Decode("bad json".into()).is_transient());
+        assert!(!IndexError::Xdr("bad xdr".into()).is_transient());
+        assert!(!IndexError::Strkey("bad key".into()).is_transient());
+    }
 
     #[test]
     fn parses_i128_and_percentages() {
