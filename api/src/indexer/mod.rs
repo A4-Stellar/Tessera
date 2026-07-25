@@ -14,6 +14,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
+use reqwest::header::RETRY_AFTER;
+use reqwest::StatusCode;
 use serde::Deserialize;
 use stellar_xdr::curr as xdr;
 use stellar_xdr::curr::{Limits, ReadXdr, WriteXdr};
@@ -112,6 +114,10 @@ pub enum IndexError {
     Strkey(String),
     #[error("decode error: {0}")]
     Decode(String),
+    #[error("http status {status}: {body}")]
+    HttpStatus { status: u16, body: String },
+    #[error("rate limited or unavailable (status {status}); retry after {retry_after:?}")]
+    RateLimited { status: u16, retry_after: Option<Duration>, body: String },
 }
 
 impl From<xdr::Error> for IndexError {
@@ -186,15 +192,38 @@ impl Rpc {
             "params": { "transaction": envelope_b64 },
         });
 
-        let resp: RpcEnvelope = self
+        let resp = self
             .http
             .post(&self.url)
             .json(&body)
             .send()
-            .await?
-            .error_for_status()?
-            .json()
             .await?;
+
+        let status = resp.status();
+        if status == StatusCode::TOO_MANY_REQUESTS || status == StatusCode::SERVICE_UNAVAILABLE {
+            let headers = resp.headers().clone();
+            let body = resp.text().await.unwrap_or_default();
+            let retry_after = headers
+                .get(RETRY_AFTER)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.parse::<u64>().ok())
+                .map(Duration::from_secs);
+            return Err(IndexError::RateLimited {
+                status: status.as_u16(),
+                retry_after,
+                body,
+            });
+        }
+
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(IndexError::HttpStatus {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        let resp: RpcEnvelope = resp.json().await?;
 
         if let Some(err) = resp.error {
             return Err(IndexError::Rpc(err.message));
@@ -462,11 +491,21 @@ impl Indexer {
     /// Poll forever, refreshing the snapshot every [`POLL_INTERVAL`].
     pub async fn run(self) {
         loop {
-            match self.refresh().await {
-                Ok(count) => tracing::info!(assets = count, "index refreshed"),
-                Err(e) => tracing::warn!(error = %e, "index refresh failed; keeping last snapshot"),
-            }
-            tokio::time::sleep(POLL_INTERVAL).await;
+            let backoff = match self.refresh().await {
+                Ok(count) => {
+                    tracing::info!(assets = count, "index refreshed");
+                    POLL_INTERVAL
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "index refresh failed; keeping last snapshot");
+                    if let IndexError::RateLimited { retry_after, .. } = &e {
+                        retry_after.unwrap_or(POLL_INTERVAL)
+                    } else {
+                        POLL_INTERVAL
+                    }
+                }
+            };
+            tokio::time::sleep(backoff).await;
         }
     }
 
