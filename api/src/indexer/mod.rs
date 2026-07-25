@@ -14,12 +14,12 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
+use arc_swap::ArcSwap;
 use reqwest::header::RETRY_AFTER;
 use reqwest::StatusCode;
 use serde::Deserialize;
 use stellar_xdr::curr as xdr;
 use stellar_xdr::curr::{Limits, ReadXdr, WriteXdr};
-use tokio::sync::RwLock;
 
 use crate::models::{Asset, ComplianceSummary, Distribution, Holder, JurisdictionCount, Stats};
 
@@ -80,25 +80,26 @@ impl Snapshot {
 /// Shared, hot-swappable state handed to the Axum routes.
 #[derive(Clone)]
 pub struct AppState {
-    inner: Arc<RwLock<Snapshot>>,
+    inner: ArcSwap<Snapshot>,
     pub config: Arc<Config>,
 }
 
 impl AppState {
     pub fn new(config: Config) -> Self {
         AppState {
-            inner: Arc::new(RwLock::new(Snapshot::default())),
+            inner: ArcSwap::from_arc(Arc::new(Snapshot::default())),
             config: Arc::new(config),
         }
     }
 
     /// Clone the current snapshot for read-only serving.
-    pub async fn snapshot(&self) -> Snapshot {
-        self.inner.read().await.clone()
+    pub fn snapshot(&self) -> Snapshot {
+        let guard = self.inner.load();
+        (*guard).clone()
     }
 
-    async fn replace(&self, next: Snapshot) {
-        *self.inner.write().await = next;
+    fn replace(&self, next: Snapshot) {
+        self.inner.store(Arc::new(next));
     }
 }
 
@@ -608,8 +609,7 @@ impl Indexer {
                 compliance: compliance_map,
                 dividends: dividends_map,
                 stats,
-            })
-            .await;
+            });
         Ok(count)
     }
 
