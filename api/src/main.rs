@@ -11,14 +11,19 @@ mod routes;
 
 use std::net::SocketAddr;
 
-use indexer::{AppState, Config, Indexer};
-use metrics_exporter_prometheus::PrometheusBuilder;
+use indexer::{AppState, Config, ConfigError, Indexer};
 
 #[tokio::main]
 async fn main() {
     init_tracing();
 
-    let config = Config::from_env();
+    let config = match Config::from_env() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!(error = %e, "config validation failed; exiting");
+            std::process::exit(1);
+        }
+    };
     tracing::info!(
         rpc = %config.rpc_url,
         registry = %config.registry_id,

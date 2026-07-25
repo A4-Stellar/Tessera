@@ -26,7 +26,7 @@ pub async fn list(
     State(state): State<AppState>,
     Query(query): Query<AssetQuery>,
 ) -> Json<Vec<Asset>> {
-    let snap = state.snapshot().await;
+    let snap = state.snapshot();
     let assets = snap
         .assets
         .into_iter()
@@ -46,7 +46,7 @@ pub async fn detail(
     State(state): State<AppState>,
     Path(id): Path<u64>,
 ) -> Result<Json<Asset>, ApiError> {
-    let snap = state.snapshot().await;
+    let snap = state.snapshot();
     snap.asset(id)
         .cloned()
         .map(Json)

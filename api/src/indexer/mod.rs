@@ -16,12 +16,12 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use metrics_exporter_prometheus::PrometheusHandle;
-use rand::Rng;
+use arc_swap::ArcSwap;
+use reqwest::header::RETRY_AFTER;
+use reqwest::StatusCode;
 use serde::Deserialize;
 use stellar_xdr::curr as xdr;
 use stellar_xdr::curr::{Limits, ReadXdr, WriteXdr};
-use tokio::sync::RwLock;
 
 use crate::models::{Asset, ComplianceSummary, Distribution, Holder, JurisdictionCount, Stats};
 
@@ -44,28 +44,53 @@ pub struct Config {
     pub rpc_url: String,
     pub registry_id: String,
     pub dividend_id: String,
-    /// A funded account used only as the (unsigned) source for simulations.
     pub read_source: String,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum ConfigError {
+    #[error("invalid RPC URL: {0}")]
+    RpcUrl(String),
+    #[error("invalid registry contract ID: {0}")]
+    RegistryId(String),
+    #[error("invalid dividend contract ID: {0}")]
+    DividendId(String),
+    #[error("invalid read source account: {0}")]
+    ReadSource(String),
+}
+
 impl Config {
-    /// Testnet defaults, overridable via environment variables.
-    pub fn from_env() -> Self {
-        Config {
-            rpc_url: env_or("RWA_RPC_URL", "https://soroban-testnet.stellar.org"),
-            registry_id: env_or(
-                "RWA_REGISTRY_ID",
-                "CBX5SMLTXX6JP4HA5GQIO2V6QM7WCUGL2GZ6D4U773HMRI6RXISKPUR3",
-            ),
-            dividend_id: env_or(
-                "RWA_DIVIDEND_ID",
-                "CAR4XY3CEBQWFOL27JEWFW34KXSIZA7RFKDQMEIV7ZU723RWY37I2SYX",
-            ),
-            read_source: env_or(
-                "RWA_READ_SOURCE",
-                "GAIQGTOBTTLLDJ4SWGGESM7UWJ2DI4K3ZNHUSHPDKJL2IE5FKY3BSRAA",
-            ),
-        }
+    pub fn from_env() -> Result<Self, ConfigError> {
+        let rpc_url = env_or("RWA_RPC_URL", "https://soroban-testnet.stellar.org");
+        url::Url::parse(&rpc_url).map_err(|e| ConfigError::RpcUrl(format!("{e}: {rpc_url}")))?;
+
+        let registry_id = env_or(
+            "RWA_REGISTRY_ID",
+            "CBX5SMLTXX6JP4HA5GQIO2V6QM7WCUGL2GZ6D4U773HMRI6RXISKPUR3",
+        );
+        stellar_strkey::Contract::from_string(&registry_id)
+            .map_err(|e| ConfigError::RegistryId(e.to_string()))?;
+
+        let dividend_id = env_or(
+            "RWA_DIVIDEND_ID",
+            "CAR4XY3CEBQWFOL27JEWFW34KXSIZA7RFKDQMEIV7ZU723RWY37I2SYX",
+        );
+        stellar_strkey::Contract::from_string(&dividend_id)
+            .map_err(|e| ConfigError::DividendId(e.to_string()))?;
+
+        let read_source = env_or(
+            "RWA_READ_SOURCE",
+            "GAIQGTOBTTLLDJ4SWGGESM7UWJ2DI4K3ZNHUSHPDKJL2IE5FKY3BSRAA",
+        );
+        stellar_strkey::ed25519::PublicKey::from_string(&read_source)
+            .map_err(|e| ConfigError::ReadSource(e.to_string()))?;
+
+        Ok(Config {
+            rpc_url,
+            registry_id,
+            dividend_id,
+            read_source,
+        })
     }
 }
 
@@ -92,7 +117,7 @@ impl Snapshot {
 /// Shared, hot-swappable state handed to the Axum routes.
 #[derive(Clone)]
 pub struct AppState {
-    inner: Arc<RwLock<Snapshot>>,
+    inner: ArcSwap<Snapshot>,
     pub config: Arc<Config>,
     pub metrics: PrometheusHandle,
 }
@@ -100,24 +125,20 @@ pub struct AppState {
 impl AppState {
     pub fn new(config: Config, metrics: PrometheusHandle) -> Self {
         AppState {
-            inner: Arc::new(RwLock::new(Snapshot::default())),
+            inner: ArcSwap::from_arc(Arc::new(Snapshot::default())),
             config: Arc::new(config),
             metrics,
         }
     }
 
     /// Clone the current snapshot for read-only serving.
-    pub async fn snapshot(&self) -> Snapshot {
-        self.inner.read().await.clone()
+    pub fn snapshot(&self) -> Snapshot {
+        let guard = self.inner.load();
+        (*guard).clone()
     }
 
-    /// The last indexed ledger, without cloning the full snapshot.
-    pub async fn last_indexed_ledger(&self) -> u32 {
-        self.inner.read().await.stats.last_indexed_ledger
-    }
-
-    async fn replace(&self, next: Snapshot) {
-        *self.inner.write().await = next;
+    fn replace(&self, next: Snapshot) {
+        self.inner.store(Arc::new(next));
     }
 }
 
@@ -133,6 +154,10 @@ pub enum IndexError {
     Strkey(String),
     #[error("decode error: {0}")]
     Decode(String),
+    #[error("http status {status}: {body}")]
+    HttpStatus { status: u16, body: String },
+    #[error("rate limited or unavailable (status {status}); retry after {retry_after:?}")]
+    RateLimited { status: u16, retry_after: Option<Duration>, body: String },
 }
 
 impl IndexError {
@@ -252,15 +277,38 @@ impl Rpc {
             "params": { "transaction": envelope_b64 },
         });
 
-        let resp: RpcEnvelope = self
+        let resp = self
             .http
             .post(&self.url)
             .json(&body)
             .send()
-            .await?
-            .error_for_status()?
-            .json()
             .await?;
+
+        let status = resp.status();
+        if status == StatusCode::TOO_MANY_REQUESTS || status == StatusCode::SERVICE_UNAVAILABLE {
+            let headers = resp.headers().clone();
+            let body = resp.text().await.unwrap_or_default();
+            let retry_after = headers
+                .get(RETRY_AFTER)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.parse::<u64>().ok())
+                .map(Duration::from_secs);
+            return Err(IndexError::RateLimited {
+                status: status.as_u16(),
+                retry_after,
+                body,
+            });
+        }
+
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(IndexError::HttpStatus {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        let resp: RpcEnvelope = resp.json().await?;
 
         if let Some(err) = resp.error {
             return Err(IndexError::Rpc(err.message));
@@ -539,27 +587,21 @@ impl Indexer {
     pub async fn run(self) {
         let mut consecutive_failures: u64 = 0;
         loop {
-            let start = std::time::Instant::now();
-            match self.refresh().await {
+            let backoff = match self.refresh().await {
                 Ok(count) => {
-                    consecutive_failures = 0;
-                    metrics::counter!("rwa_indexer_refresh_total", "result" => "success")
-                        .increment(1);
-                    metrics::gauge!("rwa_indexer_last_success_timestamp_seconds")
-                        .set(chrono::Utc::now().timestamp() as f64);
                     tracing::info!(assets = count, "index refreshed");
+                    POLL_INTERVAL
                 }
                 Err(e) => {
-                    consecutive_failures += 1;
-                    metrics::counter!("rwa_indexer_refresh_total", "result" => "error")
-                        .increment(1);
-                    tracing::warn!(error = %e, consecutive_failures, "index refresh failed; keeping last snapshot");
+                    tracing::warn!(error = %e, "index refresh failed; keeping last snapshot");
+                    if let IndexError::RateLimited { retry_after, .. } = &e {
+                        retry_after.unwrap_or(POLL_INTERVAL)
+                    } else {
+                        POLL_INTERVAL
+                    }
                 }
-            }
-            metrics::gauge!("rwa_indexer_consecutive_failures").set(consecutive_failures as f64);
-            metrics::histogram!("rwa_indexer_refresh_duration_seconds")
-                .record(start.elapsed().as_secs_f64());
-            tokio::time::sleep(POLL_INTERVAL).await;
+            };
+            tokio::time::sleep(backoff).await;
         }
     }
 
@@ -579,7 +621,6 @@ impl Indexer {
         let mut holders_map: HashMap<u64, Vec<Holder>> = HashMap::new();
         let mut compliance_map: HashMap<u64, ComplianceSummary> = HashMap::new();
         let mut dividends_map: HashMap<u64, Vec<Distribution>> = HashMap::new();
-        let mut approved_addresses: HashSet<String> = HashSet::new();
         let mut total_distributions = 0usize;
         let mut tvl: i128 = 0;
 
@@ -596,17 +637,13 @@ impl Indexer {
             let valuation = parse_i128(&raw.valuation);
 
             // Holders: every allowlisted address with a positive balance.
-            let (holders, summary, approved_here) = self
+            let (holders, summary, _) = self
                 .index_compliance_and_holders(
                     &meta.compliance_contract,
                     &raw.token_contract,
                     total_supply,
                 )
-                .await
-                .inspect_err(|_| record_asset_read_error(raw.id, "compliance_and_holders"))?;
-            for a in approved_here {
-                approved_addresses.insert(a);
-            }
+                .await?;
 
             // Dividends for this asset token; treated as empty on failure so one
             // asset's dividend contract issue doesn't abort the whole refresh.
@@ -650,12 +687,18 @@ impl Indexer {
         }
 
         let active_assets = assets.iter().filter(|a| a.active).count();
+        let mut distinct_holders = HashSet::new();
+        for holders in holders_map.values() {
+            for h in holders {
+                distinct_holders.insert(h.address.clone());
+            }
+        }
         let stats = Stats {
             total_assets: assets.len(),
             active_assets,
             tvl_cents: tvl.to_string(),
             tvl_usd: cents_to_usd(tvl),
-            total_holders: approved_addresses.len(),
+            total_holders: distinct_holders.len(),
             total_distributions,
             last_indexed_ledger: latest_ledger,
             last_updated: Some(chrono::Utc::now().to_rfc3339()),
@@ -669,8 +712,7 @@ impl Indexer {
                 compliance: compliance_map,
                 dividends: dividends_map,
                 stats,
-            })
-            .await;
+            });
         Ok(count)
     }
 
