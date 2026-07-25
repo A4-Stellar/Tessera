@@ -12,6 +12,7 @@ mod routes;
 use std::net::SocketAddr;
 
 use indexer::{AppState, Config, Indexer};
+use metrics_exporter_prometheus::PrometheusBuilder;
 
 #[tokio::main]
 async fn main() {
@@ -24,7 +25,11 @@ async fn main() {
         "starting stellar-rwa-api"
     );
 
-    let state = AppState::new(config);
+    let metrics_handle = PrometheusBuilder::new()
+        .install_recorder()
+        .expect("failed to install Prometheus recorder");
+
+    let state = AppState::new(config, metrics_handle);
 
     // Spawn the indexer; it owns its own clone of the shared state.
     let indexer = Indexer::new(state.clone());

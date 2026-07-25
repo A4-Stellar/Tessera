@@ -85,6 +85,7 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/", get(index))
         .route("/health", get(health))
+        .route("/metrics", get(metrics))
         .merge(data_routes)
         .with_state(state)
         .layer(cors)
@@ -143,7 +144,8 @@ async fn index() -> Json<serde_json::Value> {
             "GET /assets/:id/holders",
             "GET /assets/:id/compliance",
             "GET /assets/:id/dividends",
-            "GET /health"
+            "GET /health",
+            "GET /metrics"
         ],
         "docs": "https://github.com/your-org/stellar-rwa-api-docs"
     }))
@@ -152,4 +154,13 @@ async fn index() -> Json<serde_json::Value> {
 /// Liveness probe.
 async fn health() -> Json<serde_json::Value> {
     Json(json!({ "status": "ok" }))
+}
+
+/// Prometheus scrape endpoint: indexer refresh latency, failure counts, last
+/// success timestamp, and per-asset read errors.
+async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/plain; version=0.0.4")],
+        state.metrics.render(),
+    )
 }

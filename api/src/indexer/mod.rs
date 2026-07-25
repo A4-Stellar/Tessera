@@ -14,6 +14,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
+use metrics_exporter_prometheus::PrometheusHandle;
 use serde::Deserialize;
 use stellar_xdr::curr as xdr;
 use stellar_xdr::curr::{Limits, ReadXdr, WriteXdr};
@@ -80,13 +81,15 @@ impl Snapshot {
 pub struct AppState {
     inner: Arc<RwLock<Snapshot>>,
     pub config: Arc<Config>,
+    pub metrics: PrometheusHandle,
 }
 
 impl AppState {
-    pub fn new(config: Config) -> Self {
+    pub fn new(config: Config, metrics: PrometheusHandle) -> Self {
         AppState {
             inner: Arc::new(RwLock::new(Snapshot::default())),
             config: Arc::new(config),
+            metrics,
         }
     }
 
@@ -466,11 +469,28 @@ impl Indexer {
 
     /// Poll forever, refreshing the snapshot every [`POLL_INTERVAL`].
     pub async fn run(self) {
+        let mut consecutive_failures: u64 = 0;
         loop {
+            let start = std::time::Instant::now();
             match self.refresh().await {
-                Ok(count) => tracing::info!(assets = count, "index refreshed"),
-                Err(e) => tracing::warn!(error = %e, "index refresh failed; keeping last snapshot"),
+                Ok(count) => {
+                    consecutive_failures = 0;
+                    metrics::counter!("rwa_indexer_refresh_total", "result" => "success")
+                        .increment(1);
+                    metrics::gauge!("rwa_indexer_last_success_timestamp_seconds")
+                        .set(chrono::Utc::now().timestamp() as f64);
+                    tracing::info!(assets = count, "index refreshed");
+                }
+                Err(e) => {
+                    consecutive_failures += 1;
+                    metrics::counter!("rwa_indexer_refresh_total", "result" => "error")
+                        .increment(1);
+                    tracing::warn!(error = %e, consecutive_failures, "index refresh failed; keeping last snapshot");
+                }
             }
+            metrics::gauge!("rwa_indexer_consecutive_failures").set(consecutive_failures as f64);
+            metrics::histogram!("rwa_indexer_refresh_duration_seconds")
+                .record(start.elapsed().as_secs_f64());
             tokio::time::sleep(POLL_INTERVAL).await;
         }
     }
@@ -499,7 +519,8 @@ impl Indexer {
             let meta = self
                 .rpc
                 .read(&raw.token_contract, "get_metadata", vec![])
-                .await?;
+                .await
+                .inspect_err(|_| record_asset_read_error(raw.id, "get_metadata"))?;
             let meta: RawMetadata = serde_json::from_value(meta.value)
                 .map_err(|e| IndexError::Decode(e.to_string()))?;
 
@@ -513,16 +534,22 @@ impl Indexer {
                     &raw.token_contract,
                     total_supply,
                 )
-                .await?;
+                .await
+                .inspect_err(|_| record_asset_read_error(raw.id, "compliance_and_holders"))?;
             for a in approved_here {
                 approved_addresses.insert(a);
             }
 
-            // Dividends for this asset token.
-            let dists = self
-                .index_dividends(&raw.token_contract)
-                .await
-                .unwrap_or_default();
+            // Dividends for this asset token; treated as empty on failure so one
+            // asset's dividend contract issue doesn't abort the whole refresh.
+            let dists = match self.index_dividends(&raw.token_contract).await {
+                Ok(dists) => dists,
+                Err(e) => {
+                    record_asset_read_error(raw.id, "dividends");
+                    tracing::warn!(asset_id = raw.id, error = %e, "dividends read failed; treating as empty");
+                    Vec::new()
+                }
+            };
             total_distributions += dists.len();
 
             if raw.active {
@@ -694,6 +721,17 @@ impl Indexer {
             })
             .collect())
     }
+}
+
+/// Record a failed per-asset RPC read for the `rwa_indexer_asset_read_errors_total`
+/// metric, broken down by asset and which read failed.
+fn record_asset_read_error(asset_id: u64, read: &'static str) {
+    metrics::counter!(
+        "rwa_indexer_asset_read_errors_total",
+        "asset_id" => asset_id.to_string(),
+        "read" => read,
+    )
+    .increment(1);
 }
 
 #[cfg(test)]
