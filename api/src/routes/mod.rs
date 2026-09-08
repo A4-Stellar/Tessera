@@ -106,7 +106,10 @@ pub fn router(state: AppState) -> Router {
         .route("/assets/:id/dividends", get(dividends::list))
         .route("/assets/:id/distributions/:did", get(dividends::get_one))
         .route("/holders/:address", get(holders::by_address))
-        .route("/holders/:address/compliance", get(holders::by_address_compliance))
+        .route(
+            "/holders/:address/compliance",
+            get(holders::by_address_compliance),
+        )
         .route("/compliance/:address", get(compliance::for_address))
         .layer(middleware::from_fn_with_state(state.clone(), cache_headers));
 
@@ -264,8 +267,11 @@ async fn metrics(headers: HeaderMap, State(state): State<AppState>) -> Response 
 
 #[cfg(test)]
 mod tests {
+    use std::net::SocketAddr;
+
     use axum::{
         body::Body,
+        extract::ConnectInfo,
         http::{header, Request, StatusCode},
         Router,
     };
@@ -276,10 +282,16 @@ mod tests {
     use super::router;
 
     async fn assert_json_content_type(app: Router, uri: &str, status: StatusCode) {
-        let response = app
-            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
-            .await
-            .unwrap();
+        // This is the only test that exercises the full `router()`, rate
+        // limiter included. The governor keys on the peer IP, which `serve`
+        // supplies via into_make_service_with_connect_info; without it here
+        // the extractor fails and every route answers 500.
+        let mut request = Request::builder().uri(uri).body(Body::empty()).unwrap();
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 54321))));
+
+        let response = app.oneshot(request).await.unwrap();
 
         assert_eq!(response.status(), status, "unexpected status for {uri}");
         let content_type = response
