@@ -24,16 +24,26 @@ mod tests {
     use crate::models::Event;
 
     fn app(events: Vec<Event>) -> Router {
-        Router::new().route("/events", get(super::list)).with_state(AppState::for_test(
-            crate::indexer::Config {
-                rpc_url: "https://soroban-testnet.stellar.org".to_string(),
-                registry_id: "CBX5SMLTXX6JP4HA5GQIO2V6QM7WCUGL2GZ6D4U773HMRI6RXISKPUR3".to_string(),
-                dividend_id: "CAR4XY3CEBQWFOL27JEWFW34KXSIZA7RFKDQMEIV7ZU723RWY37I2SYX".to_string(),
-                read_source: "GAIQGTOBTTLLDJ4SWGGESM7UWJ2DI4K3ZNHUSHPDKJL2IE5FKY3BSRAA".to_string(),
-            },
-            metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder().handle(),
-            Snapshot { events, ..Snapshot::default() },
-        ))
+        Router::new()
+            .route("/events", get(super::list))
+            .with_state(AppState::for_test(
+                crate::indexer::Config {
+                    rpc_url: "https://soroban-testnet.stellar.org".to_string(),
+                    registry_id: "CBX5SMLTXX6JP4HA5GQIO2V6QM7WCUGL2GZ6D4U773HMRI6RXISKPUR3"
+                        .to_string(),
+                    dividend_id: "CAR4XY3CEBQWFOL27JEWFW34KXSIZA7RFKDQMEIV7ZU723RWY37I2SYX"
+                        .to_string(),
+                    read_source: "GAIQGTOBTTLLDJ4SWGGESM7UWJ2DI4K3ZNHUSHPDKJL2IE5FKY3BSRAA"
+                        .to_string(),
+                },
+                metrics_exporter_prometheus::PrometheusBuilder::new()
+                    .build_recorder()
+                    .handle(),
+                Snapshot {
+                    events,
+                    ..Snapshot::default()
+                },
+            ))
     }
 
     #[tokio::test]
@@ -48,7 +58,12 @@ mod tests {
         }];
 
         let response = app(events)
-            .oneshot(Request::builder().uri("/events").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/events")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 

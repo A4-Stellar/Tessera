@@ -45,7 +45,9 @@ fn apply_fieldset(value: &serde_json::Value, requested: Option<&str>) -> serde_j
         return value.clone();
     }
 
-    let object = value.as_object().expect("asset payload should be an object");
+    let object = value
+        .as_object()
+        .expect("asset payload should be an object");
     let mut selected = serde_json::Map::new();
     for field in fields {
         if let Some(value) = object.get(&field) {
@@ -84,7 +86,12 @@ pub async fn list(
         serde_json::Value::Array(
             assets
                 .iter()
-                .map(|asset| apply_fieldset(&serde_json::to_value(asset).expect("asset serializes"), query.fields.as_deref()))
+                .map(|asset| {
+                    apply_fieldset(
+                        &serde_json::to_value(asset).expect("asset serializes"),
+                        query.fields.as_deref(),
+                    )
+                })
                 .collect(),
         )
     } else {
@@ -101,10 +108,14 @@ pub async fn detail(
     Query(query): Query<AssetQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let snap = state.snapshot();
-    let asset = snap.asset(id).cloned().ok_or_else(|| {
-        ApiError::NotFound(format!("no asset with id {id}"))
-    })?;
-    let payload = apply_fieldset(&serde_json::to_value(&asset).expect("asset serializes"), query.fields.as_deref());
+    let asset = snap
+        .asset(id)
+        .cloned()
+        .ok_or_else(|| ApiError::NotFound(format!("no asset with id {id}")))?;
+    let payload = apply_fieldset(
+        &serde_json::to_value(&asset).expect("asset serializes"),
+        query.fields.as_deref(),
+    );
     Ok(Json(payload))
 }
 

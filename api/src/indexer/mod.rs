@@ -2089,8 +2089,7 @@ mod tests {
             holders: HashMap::from([(
                 7,
                 vec![Holder {
-                    address: "GAIQGTOBTTLLDJ4SWGGESM7UWJ2DI4K3ZNHUSHPDKJL2IE5FKY3BSRAA"
-                        .to_string(),
+                    address: "GAIQGTOBTTLLDJ4SWGGESM7UWJ2DI4K3ZNHUSHPDKJL2IE5FKY3BSRAA".to_string(),
                     balance: "1000000".to_string(),
                     share_percent: 100.0,
                 }],
