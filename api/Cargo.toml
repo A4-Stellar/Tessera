@@ -1,8 +1,9 @@
 [package]
-name = "stellar-rwa-api"
+name = "tessera-api"
 version = "0.1.0"
 edition = "2021"
-description = "REST API indexing tokenized real-world asset activity on Stellar."
+description = "Tessera REST API indexing tokenized real-world asset activity on Stellar."
+authors = ["Afolabi <afolabiaderonke1995@gmail.com>"]
 license = "Apache-2.0"
 
 [dependencies]
@@ -31,5 +32,6 @@ insta = { version = "1", features = ["json"] }
 serde_json = "1"
 
 [[bin]]
-name = "stellar-rwa-api"
+name = "tessera-api"
 path = "src/main.rs"
+

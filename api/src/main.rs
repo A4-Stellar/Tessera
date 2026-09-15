@@ -113,7 +113,7 @@ async fn shutdown_signal(shutdown_tx: watch::Sender<bool>) {
 fn init_tracing() {
     use tracing_subscriber::{fmt, prelude::*, EnvFilter};
     let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("stellar_rwa_api=info,tower_http=warn"));
+        .unwrap_or_else(|_| EnvFilter::new("tessera_api=info,tower_http=warn"));
     tracing_subscriber::registry()
         .with(filter)
         .with(fmt::layer())

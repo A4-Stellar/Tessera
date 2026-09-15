@@ -38,7 +38,7 @@ export default function DocsHome() {
     <main id="main-content" className="mx-auto max-w-4xl px-4 py-16 sm:px-6 sm:py-24">
       <span className="chip border border-brand-500/25 bg-brand-500/10 text-brand-300">
         <span className="h-1.5 w-1.5 rounded-full bg-brand-400" />
-        Stellar RWA Toolkit
+        Tessera Platform
       </span>
       <h1 className="mt-6 text-4xl font-bold tracking-tight text-base-50 sm:text-5xl">
         Tokenize real-world assets on Stellar

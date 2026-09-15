@@ -1,8 +1,8 @@
 {
-  "name": "stellar-rwa-docs",
+  "name": "tessera-docs",
   "version": "0.1.0",
   "private": true,
-  "description": "Documentation site for the Stellar RWA platform — contracts, API and web app.",
+  "description": "Documentation site for Tessera — contracts, API and web app.",
   "scripts": {
     "dev": "next dev",
     "build": "next build",

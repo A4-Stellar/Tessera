@@ -1,9 +1,10 @@
 # Releasing
 
 This is the maintainer runbook for cutting a new version of the
-`stellar-rwa-api` crate. It addresses issue #87 by replacing ad-hoc versioning
+`tessera-api` crate. It addresses issue #87 by replacing ad-hoc versioning
 with a documented checklist plus a `cliff.toml` configuration that turns the
 existing conventional-commits history into a Keep a Changelog 1.1.0 section.
+
 
 ## When to release
 
@@ -97,7 +98,7 @@ From a clean `main` checkout:
 From the pushed tag, open **Draft a new release** in the GitHub UI. The body
 can be the new `## [v<X>.<Y>.<Z>]` block you wrote in step 3, verbatim. This
 is also where prebuilt release artifacts attach in the future if the crate
-ever starts shipping binaries (e.g. a static `musl` build of `stellar-rwa-api`).
+ever starts shipping binaries (e.g. a static `musl` build of `tessera-api`).
 
 ## Why a manual checklist, not full automation
 

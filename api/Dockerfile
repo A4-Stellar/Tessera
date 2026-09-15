@@ -28,11 +28,11 @@ RUN apt-get update \
     && find / -xdev -perm /6000 -type f -exec chmod a-s {} + 2>/dev/null || true
 
 WORKDIR /app
-COPY --from=builder /app/target/release/stellar-rwa-api /usr/local/bin/stellar-rwa-api
+COPY --from=builder /app/target/release/tessera-api /usr/local/bin/tessera-api
 # Binary stays root-owned and read/execute-only for the app user, so a
 # compromised process cannot overwrite its own executable.
-RUN chown root:root /usr/local/bin/stellar-rwa-api \
-    && chmod 555 /usr/local/bin/stellar-rwa-api \
+RUN chown root:root /usr/local/bin/tessera-api \
+    && chmod 555 /usr/local/bin/tessera-api \
     && chown app:app /app
 
 ENV PORT=8080
@@ -43,4 +43,4 @@ EXPOSE 8080
 USER 1000:1000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD curl --fail --silent --show-error http://localhost:8080/health || exit 1
-CMD ["stellar-rwa-api"]
+CMD ["tessera-api"]

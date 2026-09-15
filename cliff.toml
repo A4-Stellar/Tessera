@@ -1,4 +1,5 @@
-# git-cliff configuration for the stellar-rwa-api monorepo.
+# git-cliff configuration for the tessera-api monorepo.
+
 #
 # This file is consumed by `git-cliff` (https://git-cliff.org/) to convert the
 # conventional-commit history into a Keep a Changelog 1.1.0-compatible section

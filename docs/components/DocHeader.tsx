@@ -4,8 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { Sidebar } from "./Sidebar";
 
-const CONTRACTS_REPO = "https://github.com/your-org/stellar-rwa-contracts";
-const WEB_REPO = "https://github.com/your-org/stellar-rwa-web";
+const REPO_URL = "https://github.com/A4-Stellar/Tessera";
 
 /** Top navigation bar with a mobile-only slide-in sidebar drawer. */
 export function DocHeader() {
@@ -33,8 +32,7 @@ export function DocHeader() {
                 </svg>
               </span>
               <span className="text-sm font-bold tracking-tight text-base-50">
-                Stellar<span className="text-brand-400">RWA</span>
-                <span className="ml-1.5 font-normal text-base-300">Docs</span>
+                Tessera<span className="text-brand-400"> Docs</span>
               </span>
             </Link>
           </div>
@@ -43,11 +41,8 @@ export function DocHeader() {
             <Link href="/docs/getting-started" className="hidden rounded-lg px-3 py-2 text-base-200/70 hover:text-base-100 sm:block">
               Docs
             </Link>
-            <a href={CONTRACTS_REPO} target="_blank" rel="noopener noreferrer" className="hidden rounded-lg px-3 py-2 text-base-200/70 hover:text-base-100 sm:block">
-              Contracts ↗
-            </a>
-            <a href={WEB_REPO} target="_blank" rel="noopener noreferrer" className="rounded-lg px-3 py-2 text-base-200/70 hover:text-base-100">
-              Web App ↗
+            <a href={REPO_URL} target="_blank" rel="noopener noreferrer" className="rounded-lg px-3 py-2 text-base-200/70 hover:text-base-100 sm:block">
+              GitHub ↗
             </a>
           </div>
         </div>
