@@ -1,7 +1,8 @@
-# Contributing
+# Contributing to Tessera
 
-Thanks for your interest in the Stellar RWA docs! Community contributions are
-welcome — **in the `docs/` directory only**.
+Thanks for your interest in Tessera! Community contributions are
+welcome — **in the `docs/` directory only**. Maintainer contact: Afolabi (`afolabiaderonke1995@gmail.com`), Repository: `https://github.com/A4-Stellar/Tessera`.
+
 
 ## Scope: contributors work in `docs/` only
 

@@ -196,7 +196,7 @@ async fn index() -> Json<serde_json::Value> {
             "GET /health",
             "GET /metrics"
         ],
-        "docs": "https://github.com/your-org/stellar-rwa-api-docs"
+        "docs": "https://github.com/A4-Stellar/Tessera"
     }))
 }
 

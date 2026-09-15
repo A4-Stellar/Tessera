@@ -1,4 +1,4 @@
-//! Smoke test: builds and starts the actual `stellar-rwa-api` binary as a
+//! Smoke test: builds and starts the actual `tessera-api` binary as a
 //! subprocess with default configuration, waits for it to come up, and
 //! probes `/health` and `/version` before killing it.
 //!
@@ -16,7 +16,7 @@ use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
 /// Kills the child process on drop so a failed assertion doesn't leave a
-/// zombie `stellar-rwa-api` bound to the port.
+/// zombie `tessera-api` bound to the port.
 struct ChildGuard(Child);
 
 impl Drop for ChildGuard {
@@ -31,7 +31,7 @@ async fn binary_boots_and_serves_health_and_version() {
     let port = 18080u16;
     let base_url = format!("http://127.0.0.1:{port}");
 
-    let bin = env!("CARGO_BIN_EXE_stellar-rwa-api");
+    let bin = env!("CARGO_BIN_EXE_tessera-api");
     let _child = ChildGuard(
         Command::new(bin)
             .env("PORT", port.to_string())
@@ -39,7 +39,7 @@ async fn binary_boots_and_serves_health_and_version() {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
-            .expect("failed to spawn stellar-rwa-api binary"),
+            .expect("failed to spawn tessera-api binary"),
     );
 
     let client = reqwest::Client::new();
@@ -94,7 +94,7 @@ async fn wait_until_ready(client: &reqwest::Client, base_url: &str, timeout: Dur
             return;
         }
         if tokio::time::Instant::now() >= deadline {
-            panic!("stellar-rwa-api did not become ready within {timeout:?}");
+            panic!("tessera-api did not become ready within {timeout:?}");
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }

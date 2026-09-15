@@ -4,19 +4,19 @@ import { DocHeader } from "@/components/DocHeader";
 import { SITE_URL } from "@/lib/site";
 
 const description =
-  "Documentation for the Stellar RWA platform: Soroban contracts, the indexing REST API, and the web app for tokenizing real-world assets with on-chain compliance.";
+  "Documentation for Tessera: Soroban contracts, the indexing REST API, and the web app for tokenizing real-world assets with on-chain compliance.";
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
   title: {
-    default: "Stellar RWA Docs",
-    template: "%s · Stellar RWA Docs",
+    default: "Tessera Docs",
+    template: "%s · Tessera Docs",
   },
   description,
   openGraph: {
     title: {
-      default: "Stellar RWA Docs",
-      template: "%s · Stellar RWA Docs",
+      default: "Tessera Docs",
+      template: "%s · Tessera Docs",
     },
     description,
     type: "website",
@@ -25,8 +25,8 @@ export const metadata: Metadata = {
   twitter: {
     card: "summary_large_image",
     title: {
-      default: "Stellar RWA Docs",
-      template: "%s · Stellar RWA Docs",
+      default: "Tessera Docs",
+      template: "%s · Tessera Docs",
     },
     description,
   },

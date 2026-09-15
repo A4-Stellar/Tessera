@@ -66,8 +66,8 @@ Testnet contracts — no wallet, no signing, no tokens required.
 ### 1. Clone and start the API
 
 ```bash
-git clone https://github.com/RWA-ToolKit/stellar-rwa-api-docs
-cd stellar-rwa-api-docs/api
+git clone https://github.com/A4-Stellar/Tessera
+cd Tessera/api
 cp .env.example .env      # Testnet contract IDs and RPC URL are pre-filled
 cargo run
 # → listening on 0.0.0.0:8080
@@ -220,7 +220,7 @@ The API reads the following environment variables:
 | `RWA_READ_SOURCE` | `GAIQGTOBTTLLDJ4SWGGESM7UWJ2DI4K3ZNHUSHPDKJL2IE5FKY3BSRAA` | Funded account used as source for read simulations (must exist on the RPC) |
 | `RWA_METRICS_TOKEN` | _(none)_ | Bearer token required by `/metrics`; requests are denied when unset |
 | `PORT` | `8080` | HTTP server port |
-| `RUST_LOG` | `stellar_rwa_api=info,tower_http=warn` | Log filter (tracing-subscriber format) |
+| `RUST_LOG` | `tessera_api=info,tower_http=warn` | Log filter (tracing-subscriber format) |
 
 The `.env.example` file includes Testnet defaults. Copy it and adjust as needed for your network.
 
@@ -229,15 +229,15 @@ The `.env.example` file includes Testnet defaults. Copy it and adjust as needed 
 Build and run the API in a container:
 
 ```bash
-cd stellar-rwa-api-docs/api
-docker build -t stellar-rwa-api .
+cd Tessera/api
+docker build -t tessera-api .
 docker run -p 8080:8080 \
   -e RWA_RPC_URL=https://soroban-testnet.stellar.org \
   -e RWA_REGISTRY_ID=CBX5SMLTXX6JP4HA5GQIO2V6QM7WCUGL2GZ6D4U773HMRI6RXISKPUR3 \
   -e RWA_DIVIDEND_ID=CAR4XY3CEBQWFOL27JEWFW34KXSIZA7RFKDQMEIV7ZU723RWY37I2SYX \
   -e RWA_READ_SOURCE=GAIQGTOBTTLLDJ4SWGGESM7UWJ2DI4K3ZNHUSHPDKJL2IE5FKY3BSRAA \
   -e PORT=8080 \
-  stellar-rwa-api
+  tessera-api
 ```
 
 Or use an `.env` file:

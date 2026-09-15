@@ -1,16 +1,17 @@
-# Stellar RWA — API + Docs
+# Tessera — API + Docs
 
-A combined repository with two projects for the **Stellar RWA Toolkit**:
+A combined repository with two projects for **Tessera**:
 
 - **`api/`** — a Rust/Axum REST API that indexes all tokenized real-world asset
   activity on Stellar (maintainer-only).
 - **`docs/`** — a Next.js + MDX documentation site covering the whole platform
   (open to contributions — see [CONTRIBUTING.md](CONTRIBUTING.md)).
 
-## Sister repositories
+## Repository
 
-- **Contracts:** https://github.com/RWA-ToolKit/stellar-rwa-contracts
-- **Web app:** https://github.com/RWA-ToolKit/stellar-rwa-web
+- **Repository:** https://github.com/A4-Stellar/Tessera
+- **Maintainer:** Afolabi (`afolabiaderonke1995@gmail.com`)
+
 
 ## Stellar integration
 
