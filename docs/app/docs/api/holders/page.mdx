@@ -64,3 +64,11 @@ Holders are sorted by balance, largest first. `share_percent` is computed from
 `balance / total_supply` at index time, so it reflects the most recent 10-second
 refresh.
 </CalloutBox>
+
+## Visualize a cap table
+
+The chart below fetches live holder and compliance data for a given asset id
+and renders holder concentration and jurisdiction breakdowns as donut charts,
+with an accessible data table underneath.
+
+<CapTableVisualizer assetId={1} />
