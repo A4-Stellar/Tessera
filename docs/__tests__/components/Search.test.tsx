@@ -1,8 +1,7 @@
-import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 
-const push = vi.fn();
-vi.mock("next/navigation", () => ({
+const push = jest.fn();
+jest.mock("next/navigation", () => ({
   useRouter: () => ({ push }),
 }));
 

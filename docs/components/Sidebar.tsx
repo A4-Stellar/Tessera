@@ -10,11 +10,11 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
 
   return (
-    <nav className="space-y-7 text-sm" aria-label="Documentation">
+    <nav className="space-y-7 text-sm" aria-label="Documentation sidebar">
       <Search />
       {NAV.map((section) => (
         <div key={section.title}>
-          <p className="mb-2 px-3 text-xs font-semibold uppercase tracking-wide text-base-300/70">
+          <p className="mb-2 px-3 text-xs font-semibold uppercase tracking-wide text-base-300">
             {section.title}
           </p>
           <ul className="space-y-0.5">
@@ -26,10 +26,10 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
                     href={item.href}
                     onClick={onNavigate}
                     aria-current={active ? "page" : undefined}
-                    className={`block rounded-lg px-3 py-1.5 transition-colors ${
+                    className={`block rounded-lg px-3 py-1.5 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 ${
                       active
-                        ? "bg-brand-500/10 font-medium text-brand-300"
-                        : "text-base-200/70 hover:bg-white/5 hover:text-base-100"
+                        ? "bg-brand-500/15 font-medium text-brand-300"
+                        : "text-base-200/90 hover:bg-white/5 hover:text-base-100"
                     }`}
                   >
                     {item.title}

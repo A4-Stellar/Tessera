@@ -1,5 +1,3 @@
-import { describe, it, expect } from "vitest";
-
 // Type definitions matching the actual API models
 interface Asset {
   id: number;

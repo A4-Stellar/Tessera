@@ -2,15 +2,17 @@ import type { MDXComponents } from "mdx/types";
 import Link from "next/link";
 import { CalloutBox } from "@/components/CalloutBox";
 import { CodeBlock } from "@/components/CodeBlock";
+import { MultiCodeBlock } from "@/components/MultiCodeBlock";
+import { EventExplorer } from "@/components/EventExplorer";
 import { ApiEndpoint } from "@/components/ApiEndpoint";
 import { ApiPlayground } from "@/components/ApiPlayground";
 import { CapTableVisualizer } from "@/components/CapTableVisualizer";
 
 /**
  * Global MDX component map. Custom components (CalloutBox, ApiEndpoint,
- * CodeBlock, ApiPlayground, CapTableVisualizer) are made available to every
- * `.mdx` page without per-file imports, and internal links use the Next.js
- * router.
+ * CodeBlock, MultiCodeBlock, EventExplorer, ApiPlayground, CapTableVisualizer)
+ * are made available to every `.mdx` page without per-file imports, and
+ * internal links use the Next.js router.
  */
 export function useMDXComponents(components: MDXComponents): MDXComponents {
   return {
@@ -31,6 +33,8 @@ export function useMDXComponents(components: MDXComponents): MDXComponents {
     },
     CalloutBox,
     CodeBlock,
+    MultiCodeBlock,
+    EventExplorer,
     ApiEndpoint,
     ApiPlayground,
     CapTableVisualizer,
