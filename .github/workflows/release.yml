@@ -1,0 +1,182 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  # Job 1: Generate Release Notes via git-cliff
+  generate-changelog:
+    name: Generate Changelog Notes
+    runs-on: ubuntu-latest
+    outputs:
+      release_notes: ${{ steps.git_cliff.outputs.content }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate Changelog with git-cliff
+        uses: orhun/git-cliff-action@v4
+        id: git_cliff
+        with:
+          config: cliff.toml
+          args: --tag ${{ github.ref_name }} --strip all
+        env:
+          OUTPUT: RELEASE_CHANGELOG.md
+
+      - name: Upload Release Notes Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: RELEASE_CHANGELOG.md
+
+  # Job 2: Cross-Compile Binaries
+  build-binaries:
+    name: Build Binary (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            use_cross: false
+            archive_ext: tar.gz
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            use_cross: true
+            archive_ext: tar.gz
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            use_cross: true
+            archive_ext: tar.gz
+          - target: x86_64-apple-darwin
+            os: macos-13
+            use_cross: false
+            archive_ext: tar.gz
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            use_cross: false
+            archive_ext: tar.gz
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            use_cross: false
+            archive_ext: zip
+
+    defaults:
+      run:
+        working-directory: api
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: api
+          key: ${{ matrix.target }}
+
+      - name: Install Cross (for cross-compilation)
+        if: matrix.use_cross
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross
+
+      - name: Build Binary
+        run: |
+          if [ "${{ matrix.use_cross }}" = "true" ]; then
+            cross build --release --locked --target ${{ matrix.target }}
+          else
+            cargo build --release --locked --target ${{ matrix.target }}
+          fi
+        shell: bash
+
+      - name: Package Binary (Unix)
+        if: matrix.archive_ext == 'tar.gz'
+        shell: bash
+        run: |
+          PKG_NAME="tessera-api-${{ github.ref_name }}-${{ matrix.target }}"
+          mkdir -p "pkg/$PKG_NAME"
+          cp target/${{ matrix.target }}/release/tessera-api "pkg/$PKG_NAME/"
+          cp ../README.md ../LICENSE "pkg/$PKG_NAME/"
+          cd pkg
+          tar -czf "../$PKG_NAME.tar.gz" "$PKG_NAME"
+          cd ..
+          shasum -a 256 "$PKG_NAME.tar.gz" > "$PKG_NAME.tar.gz.sha256"
+
+      - name: Package Binary (Windows)
+        if: matrix.archive_ext == 'zip'
+        shell: bash
+        run: |
+          PKG_NAME="tessera-api-${{ github.ref_name }}-${{ matrix.target }}"
+          mkdir -p "pkg/$PKG_NAME"
+          cp target/${{ matrix.target }}/release/tessera-api.exe "pkg/$PKG_NAME/"
+          cp ../README.md ../LICENSE "pkg/$PKG_NAME/"
+          cd pkg
+          7z a "../$PKG_NAME.zip" "$PKG_NAME"
+          cd ..
+          shasum -a 256 "$PKG_NAME.zip" > "$PKG_NAME.zip.sha256"
+
+      - name: Upload Binary Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.target }}
+          path: |
+            api/*.tar.gz
+            api/*.tar.gz.sha256
+            api/*.zip
+            api/*.zip.sha256
+
+  # Job 3: Publish GitHub Release
+  publish-release:
+    name: Create GitHub Release
+    needs: [generate-changelog, build-binaries]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Download Changelog Notes
+        uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+          path: ./
+
+      - name: Download All Binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: binary-*
+          path: ./dist
+          merge-multiple: true
+
+      - name: Generate Consolidated Checksums
+        run: |
+          cd dist
+          cat *.sha256 > SHA256SUMS.txt
+          rm -f *.sha256
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: RELEASE_CHANGELOG.md
+          files: |
+            dist/*
+            dist/SHA256SUMS.txt
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

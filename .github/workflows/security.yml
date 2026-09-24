@@ -1,0 +1,131 @@
+name: Security Analysis & Vulnerability Scan
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - "api/**"
+      - "contracts/**"
+      - "docs/**"
+      - "scripts/**"
+      - ".github/workflows/security.yml"
+      - "deny.toml"
+  pull_request:
+    branches: [ main ]
+  schedule:
+    # Run weekly security scan every Sunday at 00:00 UTC
+    - cron: "0 0 * * 0"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  # Job 1: Rust Supply-Chain & License Analysis (cargo audit + cargo deny)
+  rust-security:
+    name: Rust Security (Audit & Deny)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            api
+            contracts
+
+      # 1. Cargo Audit for API
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: Cargo Audit (API)
+        working-directory: api
+        run: cargo audit
+
+      # 2. Cargo Deny for Workspace
+      - name: Cargo Deny Check
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          manifest-path: api/Cargo.toml
+          arguments: --config ../deny.toml
+
+  # Job 2: Node.js Dependency Security Audit
+  node-security:
+    name: Node.js Dependency Audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Audit Docs Dependencies
+        working-directory: docs
+        run: |
+          npm audit --audit-level=high
+
+      - name: Audit Synthetic Monitor Dependencies
+        working-directory: scripts/synthetic-monitor
+        run: |
+          npm audit --audit-level=high
+
+  # Job 3: Trivy Container Image & Config Vulnerability Scan
+  container-security:
+    name: Container Vulnerability Scan (Trivy)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build API Container Image
+        uses: docker/build-push-action@v5
+        with:
+          context: api
+          file: api/Dockerfile
+          push: false
+          load: true
+          tags: tessera-api:security-scan
+
+      - name: Run Trivy Vulnerability Scanner (Table Output)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: tessera-api:security-scan
+          format: table
+          exit-code: 0
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+
+      - name: Run Trivy Vulnerability Scanner (SARIF Report)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: tessera-api:security-scan
+          format: sarif
+          output: trivy-results.sarif
+          exit-code: 0
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+          limit-severities-for-sarif: true
+
+      - name: Upload Trivy SARIF Report to GitHub Security Tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy-container-scan
