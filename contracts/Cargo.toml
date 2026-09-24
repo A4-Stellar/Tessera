@@ -1,0 +1,28 @@
+[workspace]
+resolver = "2"
+members = [
+    "common",
+    "registry",
+    "compliance",
+    "dividend",
+    "asset-token",
+    "cap-table",
+]
+
+[workspace.dependencies]
+soroban-sdk = "25.0.0"
+
+# Standard Soroban contract release profile: small, deterministic wasm.
+[profile.release]
+opt-level = "z"
+overflow-checks = true
+debug = 0
+debug-assertions = false
+panic = "abort"
+codegen-units = 1
+lto = true
+strip = "symbols"
+
+[profile.release-with-logs]
+inherits = "release"
+debug-assertions = true
