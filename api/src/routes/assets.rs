@@ -101,6 +101,43 @@ pub async fn list(
     Json(payload)
 }
 
+/// Query for `GET /assets/:id/events`.
+#[derive(Debug, Deserialize)]
+pub struct AssetEventsQuery {
+    /// When `true`, include parsed Soroban diagnostic events (issue #8) for
+    /// this asset's most recent index refresh. Defaults to `false` — plain
+    /// contract events (`Asset`'s companion `/v1/events` feed) are the
+    /// default view; diagnostics are debugging-oriented and opt-in.
+    #[serde(default)]
+    pub include_diagnostics: bool,
+}
+
+/// Diagnostic events captured for a single asset by its registry id.
+///
+/// `?include_diagnostics=true` is required to populate `diagnostics`;
+/// otherwise it's returned empty so the endpoint's shape stays stable
+/// regardless of the query flag.
+pub async fn events(
+    State(state): State<AppState>,
+    Path(id): Path<u64>,
+    Query(query): Query<AssetEventsQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let snap = state.snapshot();
+    snap.asset(id)
+        .ok_or_else(|| ApiError::NotFound(format!("no asset with id {id}")))?;
+
+    let diagnostics = if query.include_diagnostics {
+        snap.diagnostics.get(&id).cloned().unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+
+    Ok(Json(serde_json::json!({
+        "asset_id": id,
+        "diagnostics": diagnostics,
+    })))
+}
+
 /// Full detail for a single asset by its registry id.
 pub async fn detail(
     State(state): State<AppState>,
@@ -516,5 +553,87 @@ mod tests {
             0,
             "empty asset list must be an empty array []"
         );
+    }
+
+    // Issue #8 — GET /assets/:id/events?include_diagnostics=true
+    #[tokio::test]
+    async fn events_returns_diagnostics_only_when_requested() {
+        use crate::indexer::Snapshot;
+        use crate::models::DiagnosticEventRecord;
+        use crate::routes::test_support;
+        use std::collections::HashMap;
+
+        let record = DiagnosticEventRecord {
+            contract: Some("CCONTRACT".to_string()),
+            event_type: "lockup".to_string(),
+            topics: vec![serde_json::json!("lockup")],
+            data: serde_json::json!("1000"),
+            in_successful_contract_call: true,
+            error_code: None,
+        };
+        let state = test_support::state_with(Snapshot {
+            assets: vec![stub_asset(1, "real_estate", true)],
+            diagnostics: HashMap::from([(1, vec![record])]),
+            ..Snapshot::default()
+        });
+        let app = Router::new()
+            .route("/assets/:id/events", get(super::events))
+            .with_state(state);
+
+        // Without the flag: diagnostics stays empty.
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/assets/1/events")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["diagnostics"].as_array().unwrap().len(), 0);
+
+        // With the flag: the captured diagnostic event comes back.
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/assets/1/events?include_diagnostics=true")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let diagnostics = value["diagnostics"].as_array().unwrap();
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0]["event_type"], "lockup");
+    }
+
+    #[tokio::test]
+    async fn events_for_unknown_asset_returns_404() {
+        use crate::routes::test_support;
+        let state = test_support::state_with(crate::indexer::Snapshot::default());
+        let app = Router::new()
+            .route("/assets/:id/events", get(super::events))
+            .with_state(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/assets/99999/events")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 }
