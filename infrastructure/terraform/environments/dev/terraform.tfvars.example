@@ -1,0 +1,5 @@
+aws_region     = "us-east-1"
+availability_zones = ["us-east-1a", "us-east-1b"]
+api_image      = "123456789012.dkr.ecr.us-east-1.amazonaws.com/tessera-api:dev"
+docs_image     = "123456789012.dkr.ecr.us-east-1.amazonaws.com/tessera-docs:dev"
+soroban_rpc_url = "https://soroban-testnet.stellar.org"

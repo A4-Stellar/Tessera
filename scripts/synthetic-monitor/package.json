@@ -1,0 +1,26 @@
+{
+  "name": "tessera-synthetic-monitor",
+  "version": "1.0.0",
+  "description": "24/7 End-to-End Synthetic Monitoring & Alerting Bot for Stellar Soroban Testnet and Tessera API",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "monitor:once": "node src/index.js --once",
+    "test": "node --test test/**/*.test.js"
+  },
+  "keywords": [
+    "stellar",
+    "soroban",
+    "synthetic-monitoring",
+    "healthcheck",
+    "alerting",
+    "telegram",
+    "discord"
+  ],
+  "author": "Tessera Team",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

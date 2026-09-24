@@ -1,0 +1,14 @@
+aws_region                = "us-east-1"
+availability_zones        = ["us-east-1a", "us-east-1b", "us-east-1c"]
+alb_certificate_arn       = "arn:aws:acm:us-east-1:123456789012:certificate/abc-123"
+cloudfront_certificate_arn= "arn:aws:acm:us-east-1:123456789012:certificate/xyz-789"
+custom_domain_names       = ["tessera.xyz", "api.tessera.xyz", "docs.tessera.xyz"]
+
+api_image                 = "123456789012.dkr.ecr.us-east-1.amazonaws.com/tessera-api:v1.0.0"
+docs_image                = "123456789012.dkr.ecr.us-east-1.amazonaws.com/tessera-docs:v1.0.0"
+
+soroban_rpc_url           = "https://soroban-testnet.stellar.org"
+registry_id               = "CBX5SMLTXX6JP4HA5GQIO2V6QM7WCUGL2GZ6D4U773HMRI6RXISKPUR3"
+dividend_id               = "CAR4XY3CEBQWFOL27JEWFW34KXSIZA7RFKDQMEIV7ZU723RWY37I2SYX"
+read_source               = "GAIQGTOBTTLLDJ4SWGGESM7UWJ2DI4K3ZNHUSHPDKJL2IE5FKY3BSRAA"
+next_public_api_base_url  = "https://api.tessera.xyz"
