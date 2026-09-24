@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  synthetic-monitor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: tessera-synthetic-monitor
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - SOROBAN_RPC_URL=${SOROBAN_RPC_URL:-https://soroban-testnet.stellar.org}
+      - TESSERA_API_URL=${TESSERA_API_URL:-http://tessera-api:8080}
+      - CHECK_INTERVAL_SECONDS=${CHECK_INTERVAL_SECONDS:-300}
+      - CONSECUTIVE_FAILURE_THRESHOLD=${CONSECUTIVE_FAILURE_THRESHOLD:-2}
+      - PROBE_TIMEOUT_MS=${PROBE_TIMEOUT_MS:-10000}
+      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - RWA_REGISTRY_ID=${RWA_REGISTRY_ID:-CBX5SMLTXX6JP4HA5GQIO2V6QM7WCUGL2GZ6D4U773HMRI6RXISKPUR3}
+      - RWA_DIVIDEND_ID=${RWA_DIVIDEND_ID:-CAR4XY3CEBQWFOL27JEWFW34KXSIZA7RFKDQMEIV7ZU723RWY37I2SYX}
+      - RWA_COMPLIANCE_ID=${RWA_COMPLIANCE_ID:-CBUERYDM7DXTZLLKDBRJKUBPFJ7M4OSUN4T7XKUARU345RLXNAIQD2IU}
+      - RWA_ASSET_TOKEN_ID=${RWA_ASSET_TOKEN_ID:-CBMCWLSQSWUTLUJFCNBHNBSXMUM3XU7NAQ5TSNERW4HA4ZZBYHLG4ECZ}
+    env_file:
+      - .env
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
