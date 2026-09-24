@@ -18,6 +18,36 @@ pub struct Event {
     pub data: serde_json::Value,
 }
 
+/// A structured, typed Soroban diagnostic event (issue #8).
+///
+/// Diagnostic events surface debugging data — including call traces from
+/// sub-contract invocations and contract error codes — that regular
+/// contract events discard, particularly for failed or reverted calls.
+/// Parsed from `xdr::DiagnosticEvent` by
+/// [`crate::indexer::diagnostics::parse_diagnostic_events`]; malformed or
+/// unrecognized events are logged and skipped there, never surfaced here as
+/// a panic.
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+pub struct DiagnosticEventRecord {
+    /// Contract address that emitted the event (strkey), when present.
+    pub contract: Option<String>,
+    /// Best-effort event kind, derived from the first topic when it's a
+    /// symbol matching one of the documented contract event names (e.g.
+    /// `transfer`, `hookreg`, `lockup`); `"unknown"` otherwise.
+    pub event_type: String,
+    /// Full decoded topic vector, in order.
+    pub topics: Vec<serde_json::Value>,
+    /// Decoded event data/body.
+    pub data: serde_json::Value,
+    /// Whether this event was emitted during a call that ultimately
+    /// succeeded. Diagnostic events from failed sub-contract calls (the
+    /// primary debugging use case) carry `false` here.
+    pub in_successful_contract_call: bool,
+    /// Contract error code (e.g. `Error::Locked = 10`), extracted when the
+    /// event's data is a Soroban contract error value.
+    pub error_code: Option<u32>,
+}
+
 /// A tokenized real-world asset, joined from the registry entry and the token
 /// contract metadata.
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]

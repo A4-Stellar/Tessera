@@ -39,6 +39,9 @@ pub enum Error {
     SenderNotCompliant = 7,
     RecipientNotCompliant = 8,
     Overflow = 9,
+    /// Appended for issue #10 (holding-period lockups). Placed after the
+    /// highest pre-existing error code (9) rather than renumbering anything.
+    Locked = 10,
 }
 
 #[derive(Clone)]
@@ -55,6 +58,9 @@ enum DataKey {
     Valuation,
     Paused,
     Balance(Address),
+    /// Issue #10: ledger sequence at/after which `holder` may transfer or
+    /// burn. Absent (or `0`) means no lockup is in effect.
+    Lockup(Address),
 }
 
 #[contract]
@@ -119,6 +125,7 @@ impl AssetTokenContract {
     pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
         from.require_auth();
         Self::require_not_paused(&env);
+        Self::require_not_locked(&env, &from);
         if amount <= 0 {
             panic_with_error!(env, Error::InvalidAmount);
         }
@@ -178,6 +185,7 @@ impl AssetTokenContract {
 
     pub fn burn(env: Env, from: Address, amount: i128) {
         from.require_auth();
+        Self::require_not_locked(&env, &from);
         if amount <= 0 {
             panic_with_error!(env, Error::InvalidAmount);
         }
@@ -246,6 +254,30 @@ impl AssetTokenContract {
             .instance()
             .set(&DataKey::Compliance, &compliance);
         env.events().publish((symbol_short!("setcomp"),), compliance);
+    }
+
+    /// Issue #10 — set (or clear, with `unlock_ledger = 0`) the holding-period
+    /// lockup for `holder`. Admin-authenticated. Used both to impose a
+    /// regulatory-exemption holding period (e.g. a 12-month lockup) and, by
+    /// setting `unlock_ledger` back to `0` or to an earlier ledger, to grant
+    /// a partial/early release under a court order or approved exemption.
+    /// Does not affect `mint` or `initialize`.
+    pub fn set_lockup(env: Env, admin: Address, holder: Address, unlock_ledger: u32) {
+        Self::require_admin(&env, &admin);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Lockup(holder.clone()), &unlock_ledger);
+        env.events()
+            .publish((symbol_short!("lockup"), holder), unlock_ledger);
+    }
+
+    /// The ledger sequence at/after which `holder` may transfer or burn.
+    /// `0` means no lockup is in effect.
+    pub fn get_lockup(env: Env, holder: Address) -> u32 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Lockup(holder))
+            .unwrap_or(0)
     }
 
     pub fn get_metadata(env: Env) -> AssetMetadata {
@@ -335,6 +367,17 @@ impl AssetTokenContract {
             .unwrap_or(false);
         if paused {
             panic_with_error!(env, Error::Paused);
+        }
+    }
+
+    fn require_not_locked(env: &Env, holder: &Address) {
+        let unlock_ledger: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Lockup(holder.clone()))
+            .unwrap_or(0);
+        if unlock_ledger != 0 && env.ledger().sequence() < unlock_ledger {
+            panic_with_error!(env, Error::Locked);
         }
     }
 

@@ -9,7 +9,7 @@
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, Address,
-    BytesN, Env, String, Vec,
+    BytesN, Env, IntoVal, String, Symbol, Val, Vec,
 };
 
 #[contracttype]
@@ -43,6 +43,10 @@ pub enum Error {
     /// code (5) rather than renumbering anything; note this contract's
     /// documented numbering already skips `2`.
     Paused = 6,
+    /// Appended for issue #9 (modular transfer gate hooks). Placed after the
+    /// highest pre-existing error code (6) rather than renumbering anything.
+    HookAlreadyRegistered = 7,
+    HookNotRegistered = 8,
 }
 
 #[derive(Clone)]
@@ -52,6 +56,10 @@ enum DataKey {
     Record(Address),
     AllowList,
     BlockedJurisdictions,
+    /// Issue #9: contract addresses of registered pluggable transfer-gate
+    /// hooks (e.g. per-jurisdiction rule modules), each expected to expose
+    /// `check(env, address: Address) -> bool`.
+    Hooks,
 }
 
 #[contract]
@@ -71,6 +79,9 @@ impl ComplianceContract {
         env.storage()
             .instance()
             .set(&DataKey::BlockedJurisdictions, &Vec::<String>::new(&env));
+        env.storage()
+            .instance()
+            .set(&DataKey::Hooks, &Vec::<Address>::new(&env));
     }
 
     pub fn add_to_allowlist(
@@ -180,6 +191,90 @@ impl ComplianceContract {
             .unwrap_or(Vec::new(&env))
     }
 
+    // ---- issue #9: modular transfer gate hooks for regulatory jurisdictions ----
+    //
+    // Jurisdictions/rules (e.g. SEC Regulation D vs. Regulation S) can be
+    // added or removed without redeploying this contract by registering a
+    // hook contract's address. Each registered hook is expected to expose
+    // `check(env: Env, address: Address) -> bool`, evaluated via
+    // cross-contract invocation. `is_allowed` itself is left untouched for
+    // backward compatibility with existing callers (notably
+    // `asset-token::compliance_allows`); `is_allowed_with_hooks` is the new
+    // entry point that layers hook evaluation on top of it.
+
+    /// Register a rule-module hook contract. Admin-authenticated.
+    pub fn register_hook(env: Env, admin: Address, hook_contract: Address) {
+        Self::require_not_paused(&env);
+        Self::require_admin(&env, &admin);
+
+        let mut hooks: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Hooks)
+            .unwrap_or(Vec::new(&env));
+        if hooks.iter().any(|h| h == hook_contract) {
+            panic_with_error!(env, Error::HookAlreadyRegistered);
+        }
+        hooks.push_back(hook_contract.clone());
+        env.storage().instance().set(&DataKey::Hooks, &hooks);
+
+        env.events()
+            .publish((symbol_short!("hookreg"),), hook_contract);
+    }
+
+    /// Unregister a previously-registered hook contract. Admin-authenticated.
+    pub fn unregister_hook(env: Env, admin: Address, hook_contract: Address) {
+        Self::require_not_paused(&env);
+        Self::require_admin(&env, &admin);
+
+        let mut hooks: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Hooks)
+            .unwrap_or(Vec::new(&env));
+        let idx = hooks
+            .iter()
+            .position(|h| h == hook_contract)
+            .unwrap_or_else(|| panic_with_error!(env, Error::HookNotRegistered));
+        hooks.remove(idx as u32);
+        env.storage().instance().set(&DataKey::Hooks, &hooks);
+
+        env.events()
+            .publish((symbol_short!("hookunreg"),), hook_contract);
+    }
+
+    /// Currently registered transfer-gate hook contracts.
+    pub fn get_hooks(env: Env) -> Vec<Address> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Hooks)
+            .unwrap_or(Vec::new(&env))
+    }
+
+    /// `is_allowed` plus every registered hook's `check(address)`. Returns
+    /// `true` only if the built-in checks pass AND every hook returns
+    /// `true`. Hooks are evaluated in registration order and evaluation
+    /// short-circuits on the first failing hook (or the first failing
+    /// built-in check), so a rejected address never pays for the
+    /// cross-contract calls that follow it.
+    pub fn is_allowed_with_hooks(env: Env, address: Address) -> bool {
+        if !Self::is_allowed(env.clone(), address.clone()) {
+            return false;
+        }
+
+        let hooks: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Hooks)
+            .unwrap_or(Vec::new(&env));
+        for hook in hooks.iter() {
+            if !Self::invoke_hook_check(&env, &hook, &address) {
+                return false;
+            }
+        }
+        true
+    }
+
     pub fn block_jurisdiction(env: Env, admin: Address, jurisdiction: String) {
         Self::require_not_paused(&env);
         Self::require_admin(&env, &admin);
@@ -270,5 +365,11 @@ impl ComplianceContract {
             .persistent()
             .get(&DataKey::Record(address.clone()))
             .unwrap_or_else(|| panic_with_error!(env, Error::RecordNotFound))
+    }
+
+    /// Cross-contract call into a registered hook's `check(address)`.
+    fn invoke_hook_check(env: &Env, hook: &Address, address: &Address) -> bool {
+        let args: Vec<Val> = (address.clone(),).into_val(env);
+        env.invoke_contract(hook, &Symbol::new(env, "check"), args)
     }
 }

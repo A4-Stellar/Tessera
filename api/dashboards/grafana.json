@@ -1,0 +1,152 @@
+{
+  "title": "Tessera API",
+  "uid": "tessera-api",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "timezone": "utc",
+  "time": { "from": "now-6h", "to": "now" },
+  "refresh": "30s",
+  "tags": ["tessera", "stellar", "soroban"],
+  "panels": [
+    {
+      "id": 1,
+      "title": "HTTP request rate by route",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "expr": "sum by (route, method) (rate(rwa_http_requests_total[5m]))",
+          "legendFormat": "{{method}} {{route}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "HTTP request rate by status",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "expr": "sum by (status) (rate(rwa_http_requests_total[5m]))",
+          "legendFormat": "{{status}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "HTTP request latency (p50/p95/p99) by route",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le, route) (rate(rwa_http_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "p50 {{route}}"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, route) (rate(rwa_http_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "p95 {{route}}"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le, route) (rate(rwa_http_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "p99 {{route}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Soroban RPC simulation duration (p95) by method",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, method) (rate(soroban_rpc_simulation_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{method}}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "RPC failures by classification",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "expr": "sum by (classification) (rate(rwa_rpc_failures_total[5m]))",
+          "legendFormat": "{{classification}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Indexer snapshot rebuild duration (p95)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(indexer_snapshot_rebuild_duration_seconds_bucket[5m])))",
+          "legendFormat": "p95 snapshot rebuild"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Indexer refresh outcome rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "expr": "sum by (outcome) (rate(rwa_indexer_refresh_total[5m]))",
+          "legendFormat": "{{outcome}}"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Per-asset read errors",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "expr": "sum by (asset_id, read) (rate(rwa_indexer_asset_read_errors_total[15m]))",
+          "legendFormat": "asset {{asset_id}} / {{read}}"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "Active WebSocket connections",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 32 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "The API currently serves plain HTTP only; this gauge is registered at 0 and becomes live once a WebSocket transport is added (see api/src/main.rs).",
+      "targets": [{ "expr": "active_websocket_connections" }]
+    },
+    {
+      "id": 10,
+      "title": "Last successful indexer refresh",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 6, "x": 6, "y": 32 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [{ "expr": "sum(rate(rwa_indexer_refresh_total{outcome=\"success\"}[15m]))" }]
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "DS_PROMETHEUS",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {}
+      }
+    ]
+  }
+}
