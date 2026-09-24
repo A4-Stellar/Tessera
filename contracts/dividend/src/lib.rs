@@ -144,7 +144,21 @@ impl DividendContract {
         }
 
         // floor(total_amount * balance / total_supply)
-        dist.total_amount.saturating_mul(balance) / total_supply
+        let share = dist.total_amount.saturating_mul(balance) / total_supply;
+
+        // Bound by what remains in escrow. Balances are read live (matching
+        // the deployed contract's documented behavior: a holder who
+        // acquires more tokens before claiming gets a larger share on that
+        // one claim). Without this bound, the SAME underlying tokens could
+        // be moved through multiple not-yet-claimed, compliance-approved
+        // addresses and each hop would compute a full share independently
+        // — draining the escrow far beyond `total_amount` regardless of how
+        // many distinct holders it was ever meant to cover. Capping every
+        // payout to the remaining escrow keeps the single-holder,
+        // live-balance semantics intact while making the aggregate payout
+        // across all claimants bounded by what was actually escrowed.
+        let remaining = dist.total_amount.saturating_sub(dist.distributed);
+        share.min(remaining.max(0))
     }
 
     pub fn claim(env: Env, distribution_id: u64, holder: Address) {
