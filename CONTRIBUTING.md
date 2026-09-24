@@ -1,41 +1,29 @@
 # Contributing to Tessera
 
-Thanks for your interest in Tessera! Community contributions are
-welcome — **in the `docs/` directory only**. Maintainer contact: Afolabi (`afolabiaderonke1995@gmail.com`), Repository: `https://github.com/A4-Stellar/Tessera`.
+Thanks for your interest in Tessera! Community contributions are welcome across **all sections of the repository**. Maintainer contact: Afolabi (`afolabiaderonke1995@gmail.com`), Repository: `https://github.com/A4-Stellar/Tessera`.
 
 
-## Scope: contributors work in `docs/` only
+## Scope & Guidelines
 
-This repository contains two projects:
+This repository contains two main projects:
 
-- **`docs/`** — the Next.js + MDX documentation site. **This is open to
-  contributions.**
-- **`api/`** — the Rust indexing service. **This is maintainer-only.**
+- **`docs/`** — the Next.js + MDX documentation site.
+- **`api/`** — the Rust indexing service.
 
-> ⚠️ **PRs that modify anything under `api/` will be closed.**
->
-> The API is maintained by the core team because it is tied to deployment
-> infrastructure and the on-chain indexer. If you spot an API bug or want a new
-> endpoint, please **open an issue** describing it rather than sending a PR.
+Contributions are welcome on **any section of the repository** (including `api/`, `docs/`, configuration, and tooling). All pull requests will be manually reviewed and decided on by the maintainer prior to merging.
 
-Everything else — fixing typos, clarifying a guide, improving a code example,
-adding a new documentation page — is fair game in `docs/`.
+## What makes a good contribution
 
-## What makes a good docs contribution
-
-- **Accuracy first.** Code examples must be real and correct against the deployed
-  contracts and the current API. Don't invent endpoints, fields, or functions.
+- **Accuracy first.** Code examples and API logic must be accurate against the deployed contracts and platform specifications.
 - **No placeholders.** No "TODO", no "coming soon", no lorem ipsum.
-- **Match the voice.** Concise, technical, and honest about limitations.
-- **Use the components.** `CalloutBox`, `ApiEndpoint`, and fenced code blocks keep
-  pages consistent. See existing pages for patterns.
-- **Update navigation.** If you add a page, add it to `docs/components/nav.ts`.
+- **Match the codebase style.** Follow existing coding patterns, Rust idioms in `api/`, and design component patterns in `docs/`.
+- **Pass builds and tests.** Ensure all local build, lint, and test suites pass before opening a PR.
 
 ## Local setup
 
 This monorepo contains two independent projects with separate toolchains:
 
-### Docs (Next.js + MDX) — Open to contributions
+### Docs (Next.js + MDX)
 
 ```bash
 cd docs
@@ -45,10 +33,9 @@ npm run build    # must pass before you open a PR
 npm run lint     # Check for style issues
 ```
 
-### API (Rust) — Maintainer-only
+### API (Rust)
 
-The API uses standard Rust tooling. While PRs modifying `api/` will not be accepted,
-you can set up the environment locally to understand the codebase or verify builds:
+The API uses standard Rust tooling:
 
 ```bash
 cd api
@@ -59,30 +46,25 @@ cargo clippy          # Lint for common mistakes and idioms
 cargo fmt             # Auto-format code (apply changes)
 ```
 
-Our CI runs these checks on every push (see `.github/workflows/`), so understanding
-these commands helps you see what the automated checks look for.
+Our CI runs these checks on every push (see `.github/workflows/`), so ensure these commands pass before submitting your PR.
 
 ## Submitting a PR
 
 1. Fork and branch from `main`.
-2. Make your changes **inside `docs/`**.
-3. Run `npm run build` in `docs/` and make sure it passes.
-4. Open a PR with a clear description and, for content changes, a screenshot.
+2. Make your changes in any section of the repository (`docs/`, `api/`, root configs, etc.).
+3. Run relevant build, lint, and test commands (`npm run build` in `docs/`, `cargo test` in `api/`) to verify your changes.
+4. Open a PR with a clear description of your changes and motivation.
+5. The maintainer will manually review the pull request and decide whether to merge it.
 
-## Reporting API issues
+## Reporting issues
 
-Found a problem with the API? Open an issue with:
+Found a problem or have a feature proposal? Open an issue with:
 
-- the endpoint and request,
-- the response you got and the response you expected,
-- the API version (from `GET /`).
-
-We'll pick it up from there.
+- clear steps to reproduce or context for your proposal,
+- the expected vs. actual behavior (if reporting a bug),
+- any relevant logs or endpoints involved.
 
 ## Releasing (maintainers only)
 
-The api crate is versioned from `api/Cargo.toml`, and the `/` endpoint surfaces
-that same version to consumers. The release process is documented in
-[RELEASING.md](./RELEASING.md): a maintainer runs a small `git-cliff` step,
-bumps the version, and tags. PRs that touch the api crate are still
-maintainer-only per the scope rule above — a release PR is no exception.
+The api crate is versioned from `api/Cargo.toml`, and the `/` endpoint surfaces that same version to consumers. The release process is documented in [RELEASING.md](./RELEASING.md).
+
