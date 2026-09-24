@@ -36,6 +36,13 @@ async fn main() {
         .install_recorder()
         .expect("failed to install Prometheus recorder");
 
+    // Issue #7: `active_websocket_connections` gauge. The API currently only
+    // serves plain HTTP (see the module doc above — it's a read-only REST
+    // index), so this is wired up and registered at `0` rather than left
+    // out entirely; it becomes live the moment a WebSocket handshake
+    // handler is added, without a metric-name/dashboard-panel change.
+    metrics::gauge!("active_websocket_connections").set(0.0);
+
     let state = AppState::new(config, metrics_handle);
 
     // Shared shutdown flag: flipped once by `shutdown_signal` and observed

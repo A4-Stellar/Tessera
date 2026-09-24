@@ -10,11 +10,14 @@ pub mod stats;
 #[cfg(test)]
 mod test_support;
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use axum::{
     body::Body,
-    extract::{Request, State},
+    extract::{MatchedPath, Request, State},
     http::{header, HeaderMap, HeaderValue, Method, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -101,6 +104,7 @@ pub fn router(state: AppState) -> Router {
         .route("/events", get(events::list))
         .route("/assets", get(assets::list))
         .route("/assets/:id", get(assets::detail))
+        .route("/assets/:id/events", get(assets::events))
         .route("/assets/:id/holders", get(holders::list))
         .route("/assets/:id/compliance", get(compliance::summary))
         .route("/assets/:id/dividends", get(dividends::list))
@@ -119,6 +123,10 @@ pub fn router(state: AppState) -> Router {
         .route("/health", get(health))
         .route("/metrics", get(metrics))
         .nest("/v1", data_routes)
+        // `route_layer` (rather than `layer`) so the middleware runs after
+        // route matching and can read `MatchedPath` from the request
+        // extensions for a low-cardinality route label.
+        .route_layer(middleware::from_fn(track_request_metrics))
         .with_state(state)
         .layer(TimeoutLayer::new(Duration::from_secs(env_value(
             "RWA_REQUEST_TIMEOUT_SECS",
@@ -132,6 +140,43 @@ pub fn router(state: AppState) -> Router {
             config: governor_conf,
         })
         .layer(cors)
+}
+
+/// Issue #7: per-route Prometheus request counts and latencies.
+///
+/// Records `rwa_http_requests_total{method,route,status}` and
+/// `rwa_http_request_duration_seconds{method,route}` for every request. The
+/// route label uses the matched Axum path pattern (e.g. `/v1/assets/:id`)
+/// rather than the raw URI, so it stays low-cardinality even though asset
+/// IDs and addresses vary per request.
+async fn track_request_metrics(req: Request<Body>, next: Next) -> Response {
+    let method = req.method().clone();
+    let route = req
+        .extensions()
+        .get::<MatchedPath>()
+        .map(|p| p.as_str().to_string())
+        .unwrap_or_else(|| req.uri().path().to_string());
+
+    let started = Instant::now();
+    let response = next.run(req).await;
+    let elapsed = started.elapsed();
+    let status = response.status().as_u16().to_string();
+
+    metrics::counter!(
+        "rwa_http_requests_total",
+        "method" => method.to_string(),
+        "route" => route.clone(),
+        "status" => status,
+    )
+    .increment(1);
+    metrics::histogram!(
+        "rwa_http_request_duration_seconds",
+        "method" => method.to_string(),
+        "route" => route,
+    )
+    .record(elapsed.as_secs_f64());
+
+    response
 }
 
 /// Attach `Cache-Control` and `ETag` to snapshot-backed responses, and answer
@@ -186,6 +231,7 @@ async fn index() -> Json<serde_json::Value> {
             "GET /v1/events",
             "GET /v1/assets",
             "GET /v1/assets/:id",
+            "GET /v1/assets/:id/events",
             "GET /v1/assets/:id/holders",
             "GET /v1/assets/:id/compliance",
             "GET /v1/assets/:id/dividends",
