@@ -12,6 +12,7 @@
 //! [`POLL_INTERVAL`] rather than panicking, so the API always keeps serving
 //! the last good snapshot.
 
+pub mod diagnostics;
 pub mod price_feed;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -154,6 +155,10 @@ pub struct Snapshot {
     pub compliance: HashMap<u64, ComplianceSummary>,
     pub dividends: HashMap<u64, Vec<Distribution>>,
     pub events: Vec<Event>,
+    /// Parsed Soroban diagnostic events (issue #8), keyed by asset id and
+    /// gathered from the RPC reads performed for that asset during the most
+    /// recent refresh. Exposed via `GET /v1/assets/:id/events?include_diagnostics=true`.
+    pub diagnostics: HashMap<u64, Vec<crate::models::DiagnosticEventRecord>>,
     pub stats: Stats,
 }
 
@@ -175,6 +180,8 @@ impl Snapshot {
         self.compliance
             .retain(|asset_id, _| current_asset_ids.contains(asset_id));
         self.dividends
+            .retain(|asset_id, _| current_asset_ids.contains(asset_id));
+        self.diagnostics
             .retain(|asset_id, _| current_asset_ids.contains(asset_id));
     }
 }
@@ -330,6 +337,12 @@ struct SimulateResult {
     error: Option<String>,
     #[serde(rename = "latestLedger", default)]
     latest_ledger: u32,
+    /// Base64-encoded `DiagnosticEvent` XDR blobs (issue #8). Present on
+    /// both successful and failed simulations; empty for the vast majority
+    /// of this indexer's reads, since plain view calls rarely emit events,
+    /// but never discarded when the RPC does return them.
+    #[serde(default)]
+    events: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -342,6 +355,8 @@ struct SimResultEntry {
 struct ReadOutcome {
     value: serde_json::Value,
     latest_ledger: u32,
+    /// Parsed diagnostic events from this simulation (issue #8), if any.
+    diagnostics: Vec<crate::models::DiagnosticEventRecord>,
 }
 
 impl Rpc {
@@ -389,7 +404,30 @@ impl Rpc {
         }
     }
 
+    /// Simulate once and record the `soroban_rpc_simulation_duration_seconds`
+    /// histogram plus, on failure, `rwa_rpc_failures_total` broken down by
+    /// error classification (issue #7).
     async fn read_once(
+        &self,
+        contract: &str,
+        method: &str,
+        args: Vec<xdr::ScVal>,
+    ) -> Result<ReadOutcome, IndexError> {
+        let started = Instant::now();
+        let result = self.read_once_inner(contract, method, args).await;
+        metrics::histogram!("soroban_rpc_simulation_duration_seconds", "method" => method.to_string())
+            .record(started.elapsed().as_secs_f64());
+        if let Err(e) = &result {
+            metrics::counter!(
+                "rwa_rpc_failures_total",
+                "classification" => classify_rpc_error(e),
+            )
+            .increment(1);
+        }
+        result
+    }
+
+    async fn read_once_inner(
         &self,
         contract: &str,
         method: &str,
@@ -448,6 +486,7 @@ impl Rpc {
         Ok(ReadOutcome {
             value: scval_to_json(&scval)?,
             latest_ledger: result.latest_ledger,
+            diagnostics: diagnostics::parse_diagnostic_events(&result.events),
         })
     }
 }
@@ -731,6 +770,12 @@ impl Indexer {
             let elapsed = started.elapsed();
             metrics::histogram!("rwa_indexer_refresh_duration_seconds")
                 .record(elapsed.as_secs_f64());
+            // Issue #7: acceptance-criteria metric name for the same
+            // full-snapshot-rebuild duration as `rwa_indexer_refresh_duration_seconds`
+            // above (kept alongside it rather than renamed, so existing
+            // scrapers/dashboards built on the original name keep working).
+            metrics::histogram!("indexer_snapshot_rebuild_duration_seconds")
+                .record(elapsed.as_secs_f64());
 
             let backoff = match result {
                 Ok(count) => {
@@ -793,6 +838,8 @@ impl Indexer {
         let mut holders_map: HashMap<u64, Vec<Holder>> = HashMap::new();
         let mut compliance_map: HashMap<u64, ComplianceSummary> = HashMap::new();
         let mut dividends_map: HashMap<u64, Vec<Distribution>> = HashMap::new();
+        let mut diagnostics_map: HashMap<u64, Vec<crate::models::DiagnosticEventRecord>> =
+            HashMap::new();
         let mut total_distributions = 0usize;
         let mut tvl: i128 = 0;
 
@@ -843,6 +890,8 @@ impl Indexer {
             };
 
             let asset_ledger = meta_read.latest_ledger;
+            // Issue #8: capture before `meta_read` is consumed below.
+            let mut asset_diagnostics = meta_read.diagnostics.clone();
             let meta: RawMetadata = match serde_json::from_value(meta_read.value) {
                 Ok(m) => m,
                 Err(e) => {
@@ -951,6 +1000,12 @@ impl Indexer {
             holders_map.insert(raw.id, holders);
             compliance_map.insert(raw.id, summary);
             dividends_map.insert(raw.id, dists);
+            if !asset_diagnostics.is_empty() {
+                diagnostics_map
+                    .entry(raw.id)
+                    .or_default()
+                    .append(&mut asset_diagnostics);
+            }
             assets.push(asset);
         }
 
@@ -979,6 +1034,7 @@ impl Indexer {
             compliance: compliance_map,
             dividends: dividends_map,
             events: Vec::new(),
+            diagnostics: diagnostics_map,
             stats,
         });
         Ok(count)
@@ -1156,6 +1212,19 @@ impl Indexer {
     }
 }
 
+/// Classify an [`IndexError`] for the `rwa_rpc_failures_total` counter
+/// (issue #7): `network` for transport/HTTP/RPC-side failures, `xdr_decode`
+/// for response decoding failures, `rate_limit` for 429/503 responses, and
+/// `other` for anything else (e.g. an ABI version mismatch).
+fn classify_rpc_error(e: &IndexError) -> &'static str {
+    match e {
+        IndexError::Http(_) | IndexError::HttpStatus { .. } | IndexError::Rpc(_) => "network",
+        IndexError::RateLimited { .. } => "rate_limit",
+        IndexError::Xdr(_) | IndexError::Decode(_) | IndexError::Strkey(_) => "xdr_decode",
+        IndexError::AbiVersion { .. } => "other",
+    }
+}
+
 /// Record a failed per-asset RPC read for the `rwa_indexer_asset_read_errors_total`
 /// metric, broken down by asset and which read failed.
 fn record_asset_read_error(asset_id: u64, read: &'static str) {
@@ -1208,6 +1277,7 @@ mod tests {
             ]),
             dividends: HashMap::from([(1, Vec::new()), (2, Vec::new()), (99, Vec::new())]),
             events: Vec::new(),
+            diagnostics: HashMap::from([(1, Vec::new()), (2, Vec::new()), (99, Vec::new())]),
             stats: Stats::default(),
         };
 
@@ -1225,6 +1295,10 @@ mod tests {
             snapshot.dividends.keys().copied().collect::<HashSet<_>>(),
             HashSet::from([1, 2])
         );
+        assert_eq!(
+            snapshot.diagnostics.keys().copied().collect::<HashSet<_>>(),
+            HashSet::from([1, 2])
+        );
     }
 
     #[test]
@@ -1235,6 +1309,7 @@ mod tests {
             compliance: HashMap::from([(7, ComplianceSummary::default())]),
             dividends: HashMap::from([(7, Vec::new())]),
             events: Vec::new(),
+            diagnostics: HashMap::from([(7, Vec::new())]),
             stats: Stats::default(),
         };
 
@@ -1243,6 +1318,7 @@ mod tests {
         assert!(snapshot.holders.is_empty());
         assert!(snapshot.compliance.is_empty());
         assert!(snapshot.dividends.is_empty());
+        assert!(snapshot.diagnostics.is_empty());
     }
 
     #[test]
@@ -1651,6 +1727,7 @@ mod tests {
                     .collect(),
                 dividends: ids.iter().map(|&id| (id, Vec::new())).collect(),
                 events: Vec::new(),
+                diagnostics: HashMap::new(),
                 stats: Stats {
                     total_assets: ids.len(),
                     last_indexed_ledger: ledger,
@@ -2135,6 +2212,7 @@ mod tests {
                 }],
             )]),
             events: Vec::new(),
+            diagnostics: HashMap::new(),
             stats: Stats::default(),
         };
 
