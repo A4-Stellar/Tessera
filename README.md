@@ -120,9 +120,7 @@ README.md
 
 ## Contributing
 
-Contributions are welcome **in `docs/` only**. The `api/` directory is
-maintainer-only and PRs touching it will be closed — please open an issue instead.
-See [CONTRIBUTING.md](CONTRIBUTING.md).
+Contributions are welcome across all sections of the repository (`api/`, `docs/`, etc.). All pull requests are reviewed and decided on manually by the maintainer. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
