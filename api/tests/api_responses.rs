@@ -270,7 +270,8 @@ fn distribution_key_set_matches_openapi_schema() {
         "claimed_percent": 25.0,
         "overflow_detected": false,
         "completed": false,
-        "created_at_ledger": 3510000
+        "created_at_ledger": 3510000,
+        "fiat_equivalent_usd": serde_json::Value::Null
     });
 
     let mut actual = serialized

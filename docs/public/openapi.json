@@ -973,7 +973,8 @@
           "claimed_percent",
           "overflow_detected",
           "completed",
-          "created_at_ledger"
+          "created_at_ledger",
+          "fiat_equivalent_usd"
         ],
         "properties": {
           "id": {
@@ -1016,6 +1017,12 @@
             "type": "integer",
             "format": "int32",
             "description": "Ledger where distribution was created"
+          },
+          "fiat_equivalent_usd": {
+            "type": "number",
+            "format": "double",
+            "nullable": true,
+            "description": "Fiat-equivalent (USD) value of total_amount, resolved from payment_token's historical price near created_at_ledger. Null when this cannot be computed (no admin-configured asset mapping, Horizon unreachable, or no trade data near the timestamp)."
           }
         }
       },
