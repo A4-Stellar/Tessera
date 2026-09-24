@@ -55,5 +55,6 @@ pub(crate) fn distribution(id: u64, created_at_ledger: u32) -> Distribution {
         overflow_detected: false,
         completed: false,
         created_at_ledger,
+        fiat_equivalent_usd: None,
     }
 }

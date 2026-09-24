@@ -134,6 +134,12 @@ pub struct Distribution {
     pub overflow_detected: bool,
     pub completed: bool,
     pub created_at_ledger: u32,
+    /// Fiat-equivalent (USD) value of `total_amount`, resolved from the
+    /// `payment_token`'s historical price near `created_at_ledger` (issue
+    /// #6: see `indexer::price_feed`). `null` whenever this can't be
+    /// computed — no admin-configured mapping for `payment_token`, Horizon
+    /// unreachable, or no trade data near the timestamp — never a guess.
+    pub fiat_equivalent_usd: Option<f64>,
 }
 
 /// Platform-wide statistics.
