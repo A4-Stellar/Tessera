@@ -19,4 +19,11 @@ const customJestConfig = {
   ],
 };
 
-module.exports = createJestConfig(customJestConfig);
+module.exports = async () => {
+  const config = await createJestConfig(customJestConfig)();
+  config.transformIgnorePatterns = [
+    "/node_modules/(?!(uint8array-extras|@stellar|@exodus|@noble)/)",
+    "^.+\\.module\\.(css|sass|scss)$",
+  ];
+  return config;
+};

@@ -35,13 +35,15 @@ export function CodeBlock({ children, title, code }: CodeBlockProps) {
       <div className="flex items-center justify-between border-b border-white/5 px-4 py-2">
         <span className="font-mono text-xs text-base-300">{title ?? "code"}</span>
         <button
+          type="button"
           onClick={copy}
-          className="text-xs font-medium text-base-300 transition-colors hover:text-brand-400"
+          aria-label={copied ? "Code copied to clipboard" : "Copy code to clipboard"}
+          className="text-xs font-medium text-base-300 transition-colors hover:text-brand-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 rounded px-1.5 py-0.5"
         >
-          {copied ? "Copied" : "Copy"}
+          <span aria-live="polite">{copied ? "Copied" : "Copy"}</span>
         </button>
       </div>
-      <pre className="overflow-x-auto p-4 text-sm leading-relaxed">
+      <pre className="overflow-x-auto p-4 text-sm leading-relaxed bg-[#0a0c11]">
         <code className="font-mono text-base-100">{children}</code>
       </pre>
     </div>
