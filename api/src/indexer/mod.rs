@@ -12,6 +12,8 @@
 //! [`POLL_INTERVAL`] rather than panicking, so the API always keeps serving
 //! the last good snapshot.
 
+pub mod price_feed;
+
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -695,6 +697,11 @@ pub struct Indexer {
     rpc: Rpc,
     state: AppState,
     dividend_cache: Mutex<DividendCache>,
+    /// Issue #6: best-effort historical fiat-equivalent pricing for
+    /// dividend distributions. See [`price_feed`] for why resolution
+    /// depends on an admin-configured mapping rather than a decoded
+    /// on-chain fact.
+    price_feed: price_feed::PriceFeedClient,
 }
 
 impl Indexer {
@@ -704,6 +711,7 @@ impl Indexer {
             rpc: Rpc::new(cfg.rpc_url.clone(), cfg.read_source.clone()),
             state,
             dividend_cache: Mutex::new(HashMap::new()),
+            price_feed: price_feed::PriceFeedClient::new(price_feed::PriceFeedConfig::from_env()),
         }
     }
 
@@ -1093,45 +1101,52 @@ impl Indexer {
             .await?;
         let entries: Vec<serde_json::Value> = serde_json::from_value(read.value)?;
         let mut failures = 0;
-        let result = entries
-            .into_iter()
-            .filter_map(
-                |value| match serde_json::from_value::<RawDistribution>(value) {
-                    Ok(d) => Some(d),
-                    Err(error) => {
-                        failures += 1;
-                        record_asset_read_error(asset_id, "dividend_decode");
-                        tracing::warn!(asset_id, error = %error, "skipping malformed distribution");
-                        None
-                    }
-                },
-            )
-            .map(|d| {
-                let total = parse_i128(&d.total_amount);
-                let distributed = parse_i128(&d.distributed);
-                let overflow_detected = distributed > total;
-                // When distributed exceeds total the normal clamped
-                // ratio_percent would hide the anomaly by returning 100.
-                // Instead compute the raw percentage so callers can see
-                // the true magnitude of the overflow.
-                let claimed_percent = if overflow_detected && total > 0 {
-                    (distributed.saturating_mul(10_000) / total) as f64 / 100.0
-                } else {
-                    ratio_percent(distributed, total)
-                };
-                Distribution {
-                    id: d.id,
-                    asset_token: d.asset_token,
-                    payment_token: d.payment_token,
-                    total_amount: total.to_string(),
-                    distributed: distributed.to_string(),
-                    claimed_percent,
-                    overflow_detected,
-                    completed: d.completed,
-                    created_at_ledger: d.created_at,
+        let mut result = Vec::with_capacity(entries.len());
+        for value in entries {
+            let d: RawDistribution = match serde_json::from_value(value) {
+                Ok(d) => d,
+                Err(error) => {
+                    failures += 1;
+                    record_asset_read_error(asset_id, "dividend_decode");
+                    tracing::warn!(asset_id, error = %error, "skipping malformed distribution");
+                    continue;
                 }
-            })
-            .collect::<Vec<_>>();
+            };
+
+            let total = parse_i128(&d.total_amount);
+            let distributed = parse_i128(&d.distributed);
+            let overflow_detected = distributed > total;
+            // When distributed exceeds total the normal clamped
+            // ratio_percent would hide the anomaly by returning 100.
+            // Instead compute the raw percentage so callers can see
+            // the true magnitude of the overflow.
+            let claimed_percent = if overflow_detected && total > 0 {
+                (distributed.saturating_mul(10_000) / total) as f64 / 100.0
+            } else {
+                ratio_percent(distributed, total)
+            };
+
+            // Issue #6: best-effort historical fiat-equivalent value. Never
+            // aborts the refresh — a missing mapping, unreachable Horizon,
+            // or absent trade data all resolve to `None`.
+            let fiat_equivalent_usd = self
+                .price_feed
+                .fiat_equivalent(&d.payment_token, total, d.created_at)
+                .await;
+
+            result.push(Distribution {
+                id: d.id,
+                asset_token: d.asset_token,
+                payment_token: d.payment_token,
+                total_amount: total.to_string(),
+                distributed: distributed.to_string(),
+                claimed_percent,
+                overflow_detected,
+                completed: d.completed,
+                created_at_ledger: d.created_at,
+                fiat_equivalent_usd,
+            });
+        }
         let error = (failures > 0).then(|| format!("skipped {failures} malformed distribution(s)"));
         self.dividend_cache.lock().unwrap().insert(
             token_contract.to_string(),
@@ -2010,6 +2025,7 @@ mod tests {
                 overflow_detected: false,
                 completed: false,
                 created_at_ledger: 2400,
+                fiat_equivalent_usd: None,
             }],
         );
         snapshot.dividends.insert(
@@ -2024,6 +2040,7 @@ mod tests {
                 overflow_detected: false,
                 completed: false,
                 created_at_ledger: 2500,
+                fiat_equivalent_usd: None,
             }],
         );
         snapshot.dividends.insert(3, vec![]);
@@ -2114,6 +2131,7 @@ mod tests {
                     overflow_detected: false,
                     completed: false,
                     created_at_ledger: 100,
+                    fiat_equivalent_usd: None,
                 }],
             )]),
             events: Vec::new(),
