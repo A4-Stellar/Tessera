@@ -13,6 +13,7 @@
 //! the last good snapshot.
 
 pub mod diagnostics;
+pub mod persistence;
 pub mod price_feed;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
