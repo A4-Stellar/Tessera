@@ -10,6 +10,7 @@ members = [
     "vaults",
     "bridge",
     "debt-token",
+    "cdp",
 ]
 
 [workspace.dependencies]
