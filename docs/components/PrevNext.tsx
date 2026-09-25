@@ -13,9 +13,13 @@ export function PrevNext() {
   const next = idx < FLAT_NAV.length - 1 ? FLAT_NAV[idx + 1] : null;
 
   return (
-    <div className="mt-16 grid grid-cols-1 gap-4 border-t border-white/5 pt-8 sm:grid-cols-2">
+    <nav aria-label="Page pagination" className="mt-16 grid grid-cols-1 gap-4 border-t border-white/5 pt-8 sm:grid-cols-2">
       {prev ? (
-        <Link href={prev.href} className="group rounded-xl border border-white/10 p-4 transition-colors hover:border-brand-500/40">
+        <Link
+          href={prev.href}
+          aria-label={`Previous page: ${prev.title}`}
+          className="group rounded-xl border border-white/10 p-4 transition-colors hover:border-brand-500/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
+        >
           <span className="text-xs text-base-300">← Previous</span>
           <p className="mt-1 font-medium text-base-100 group-hover:text-brand-300">{prev.title}</p>
         </Link>
@@ -23,12 +27,16 @@ export function PrevNext() {
         <span />
       )}
       {next && (
-        <Link href={next.href} className="group rounded-xl border border-white/10 p-4 text-right transition-colors hover:border-brand-500/40">
+        <Link
+          href={next.href}
+          aria-label={`Next page: ${next.title}`}
+          className="group rounded-xl border border-white/10 p-4 text-right transition-colors hover:border-brand-500/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
+        >
           <span className="text-xs text-base-300">Next →</span>
           <p className="mt-1 font-medium text-base-100 group-hover:text-brand-300">{next.title}</p>
         </Link>
       )}
-    </div>
+    </nav>
   );
 }
 

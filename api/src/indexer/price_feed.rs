@@ -150,7 +150,10 @@ impl PriceFeedClient {
         }
     }
 
-    fn resolve_mapping(&self, payment_token_contract: &str) -> Result<&AssetMapping, PriceFeedError> {
+    fn resolve_mapping(
+        &self,
+        payment_token_contract: &str,
+    ) -> Result<&AssetMapping, PriceFeedError> {
         self.config
             .asset_map
             .get(payment_token_contract)
