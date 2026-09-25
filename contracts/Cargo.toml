@@ -7,6 +7,9 @@ members = [
     "dividend",
     "asset-token",
     "cap-table",
+    "vaults",
+    "bridge",
+    "debt-token",
 ]
 
 [workspace.dependencies]
