@@ -5,6 +5,7 @@
 //! and serves the current in-memory snapshot over HTTP. It holds no secrets,
 //! signs nothing, and never mutates on-chain state.
 
+pub mod audit;
 mod healthcheck;
 mod indexer;
 mod models;
