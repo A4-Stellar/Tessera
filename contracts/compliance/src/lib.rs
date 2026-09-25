@@ -60,6 +60,7 @@ enum DataKey {
     /// hooks (e.g. per-jurisdiction rule modules), each expected to expose
     /// `check(env, address: Address) -> bool`.
     Hooks,
+    TaxResidency(Address),
 }
 
 #[contract]
@@ -320,6 +321,18 @@ impl ComplianceContract {
             .get(&DataKey::BlockedJurisdictions)
             .unwrap_or(Vec::new(&env));
         list.iter().any(|j| j == jurisdiction)
+    }
+
+    pub fn set_tax_residency(env: Env, admin: Address, investor: Address, residency_hash: BytesN<32>) {
+        Self::require_not_paused(&env);
+        Self::require_admin(&env, &admin);
+        env.storage()
+            .persistent()
+            .set(&DataKey::TaxResidency(investor), &residency_hash);
+    }
+
+    pub fn get_tax_residency(env: Env, investor: Address) -> Option<BytesN<32>> {
+        env.storage().persistent().get(&DataKey::TaxResidency(investor))
     }
 
     /// Current contract ABI version, polled by the off-chain indexer.
