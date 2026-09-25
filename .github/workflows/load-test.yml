@@ -1,0 +1,103 @@
+name: Load Test
+
+# Peak-load regression benchmark (#29): builds the API, starts it against the
+# Testnet defaults in api/.env.example, and runs tests/load/k6_script.js. The
+# job fails when k6 reports a breached threshold (p95 >= 50 ms, error rate
+# >= 0.01 %, or the target request rate was not delivered).
+#
+# Run it on demand from the Actions tab, and before cutting a release tag
+# (see RELEASING.md). `workflow_call` lets another workflow use it as a gate.
+
+on:
+  workflow_dispatch:
+    inputs:
+      rate:
+        description: "Requests per second"
+        required: false
+        default: "2000"
+      duration:
+        description: "Test duration (k6 format, e.g. 1m, 5m)"
+        required: false
+        default: "1m"
+  workflow_call:
+    inputs:
+      rate:
+        type: string
+        required: false
+        default: "2000"
+      duration:
+        type: string
+        required: false
+        default: "1m"
+
+permissions:
+  contents: read
+
+jobs:
+  k6:
+    name: k6 peak load
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # The API rate-limits per client IP, and every k6 request comes from
+      # 127.0.0.1. PER_SECOND is tower_governor's replenish interval in
+      # seconds; a 10M-request burst quota keeps the limiter out of the way
+      # for the whole run, so 429s never masquerade as server errors.
+      RWA_RATE_LIMIT_PER_SECOND: "1"
+      RWA_RATE_LIMIT_BURST: "10000000"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: api
+
+      - name: Build API (release)
+        working-directory: api
+        run: cargo build --release --locked
+
+      - name: Start API
+        working-directory: api
+        run: |
+          set -a
+          . ./.env.example
+          set +a
+          # .env.example's RUST_LOG names a different crate, which would drop
+          # every API log line; use the filter main.rs defaults to.
+          export RUST_LOG=tessera_api=info,tower_http=warn
+          nohup ./target/release/tessera-api > api.log 2>&1 &
+
+      - name: Wait for a fresh snapshot
+        run: |
+          # /health answers 200 only once the indexer has a fresh snapshot.
+          for _ in $(seq 1 60); do
+            if curl --fail --silent http://localhost:8080/health; then exit 0; fi
+            sleep 2
+          done
+          echo "API never became healthy" >&2
+          cat api/api.log >&2
+          exit 1
+
+      - uses: grafana/setup-k6-action@v1
+        with:
+          k6-version: "2.3.0"
+
+      - name: Run k6
+        run: >
+          k6 run
+          --summary-export load-test-summary.json
+          -e BASE_URL=http://localhost:8080
+          -e RATE=${{ inputs.rate }}
+          -e DURATION=${{ inputs.duration }}
+          tests/load/k6_script.js
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: load-test-results
+          path: |
+            load-test-summary.json
+            api/api.log
