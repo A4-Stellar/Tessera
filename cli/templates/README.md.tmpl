@@ -1,0 +1,27 @@
+# {{package_name}}
+
+{{package_description}}
+
+## Configuration
+
+- Asset type: {{asset_type_label}}
+- Compliance model: {{compliance_model_label}}
+- Dividend strategy: {{dividend_strategy_label}}
+- Soroban SDK: `25.0.0`
+- Rust toolchain: `1.81.0`
+
+## Development
+
+Run the native contract tests with:
+
+```bash
+cargo test
+```
+
+Build a release WebAssembly contract with:
+
+```bash
+cargo build --release --target wasm32-unknown-unknown
+```
+
+The generated crate has no workspace or path dependencies outside this directory. Replace the example compliance and distribution logic with the controls required by the asset before deployment.
