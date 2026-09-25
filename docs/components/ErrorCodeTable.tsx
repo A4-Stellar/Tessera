@@ -15,16 +15,17 @@ export function ErrorCodeTable({ contract, codes }: ErrorCodeTableProps) {
       <CalloutBox variant="warning" title={`${contract} Error Codes`}>
         <p className="text-sm mb-4">
           Error codes are <strong>contract-specific</strong>. The same numeric code means different things across contracts.
-          Always refer to the error table for the specific contract you're calling.
+          Always refer to the error table for the specific contract you&apos;re calling.
         </p>
       </CalloutBox>
       <div className="overflow-x-auto">
-        <table className="w-full text-sm border-collapse">
+        <table className="w-full text-sm border-collapse" aria-label={`${contract} error codes table`}>
+          <caption className="sr-only">{contract} Error Codes</caption>
           <thead>
             <tr className="border-b border-white/10">
-              <th className="text-left px-4 py-2 font-semibold text-base-100">Code</th>
-              <th className="text-left px-4 py-2 font-semibold text-base-100">Error Name</th>
-              <th className="text-left px-4 py-2 font-semibold text-base-100">Description</th>
+              <th scope="col" className="text-left px-4 py-2 font-semibold text-base-100">Code</th>
+              <th scope="col" className="text-left px-4 py-2 font-semibold text-base-100">Error Name</th>
+              <th scope="col" className="text-left px-4 py-2 font-semibold text-base-100">Description</th>
             </tr>
           </thead>
           <tbody>

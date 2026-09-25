@@ -112,14 +112,29 @@ export function CapTableVisualizer({ assetId, apiBaseUrl, topHolderCount = 6 }: 
       ? `Token distribution across ${distributionData.length} holder groups for asset ${assetId}`
       : `Compliance jurisdiction breakdown across ${jurisdictionData.length} jurisdictions for asset ${assetId}`;
 
+  function handleTabKeyDown(e: React.KeyboardEvent<HTMLButtonElement>) {
+    if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+      e.preventDefault();
+      setView((prev) => (prev === "distribution" ? "jurisdictions" : "distribution"));
+    }
+  }
+
   return (
     <div className="my-6 rounded-xl border border-white/10 bg-white/[0.03] p-4">
-      <div className="mb-4 flex gap-2" role="tablist" aria-label="Cap table view">
+      <div
+        className="mb-4 flex gap-2"
+        role="tablist"
+        aria-label="Cap table view options"
+      >
         <button
+          id="tab-token-distribution"
           type="button"
           role="tab"
           aria-selected={view === "distribution"}
+          aria-controls="cap-table-panel"
+          tabIndex={view === "distribution" ? 0 : -1}
           onClick={() => setView("distribution")}
+          onKeyDown={handleTabKeyDown}
           className={`rounded-md border px-3 py-1.5 text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 ${
             view === "distribution"
               ? "border-brand-500/40 bg-brand-500/15 text-brand-300"
@@ -129,10 +144,14 @@ export function CapTableVisualizer({ assetId, apiBaseUrl, topHolderCount = 6 }: 
           Token Distribution
         </button>
         <button
+          id="tab-jurisdictions"
           type="button"
           role="tab"
           aria-selected={view === "jurisdictions"}
+          aria-controls="cap-table-panel"
+          tabIndex={view === "jurisdictions" ? 0 : -1}
           onClick={() => setView("jurisdictions")}
+          onKeyDown={handleTabKeyDown}
           className={`rounded-md border px-3 py-1.5 text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 ${
             view === "jurisdictions"
               ? "border-brand-500/40 bg-brand-500/15 text-brand-300"
@@ -153,12 +172,16 @@ export function CapTableVisualizer({ assetId, apiBaseUrl, topHolderCount = 6 }: 
       </div>
 
       {!loading && !error && activeData.length > 0 && (
-        <>
+        <div
+          id="cap-table-panel"
+          role="tabpanel"
+          aria-labelledby={view === "distribution" ? "tab-token-distribution" : "tab-jurisdictions"}
+          className="focus:outline-none"
+        >
           <div
             role="img"
             aria-label={chartLabel}
-            className="h-72 w-full focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
-            tabIndex={0}
+            className="h-72 w-full focus:outline-none"
           >
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
@@ -208,7 +231,7 @@ export function CapTableVisualizer({ assetId, apiBaseUrl, topHolderCount = 6 }: 
               ))}
             </tbody>
           </table>
-        </>
+        </div>
       )}
 
       {!loading && !error && activeData.length === 0 && (
