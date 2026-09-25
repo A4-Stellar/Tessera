@@ -1,0 +1,19 @@
+[package]
+name = "tessera-cli"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.81"
+license = "Apache-2.0"
+publish = false
+description = "Generate standalone Soroban RWA contracts with deterministic templates."
+
+[lib]
+name = "tessera_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "tessera-cli"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
