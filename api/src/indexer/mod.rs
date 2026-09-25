@@ -14,6 +14,7 @@
 
 pub mod diagnostics;
 pub mod price_feed;
+pub mod rpc_client;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -37,13 +38,13 @@ pub const POLL_INTERVAL: Duration = Duration::from_secs(10);
 
 /// Attempts for a single simulated read (the initial try plus retries)
 /// before giving up and failing the read.
-const MAX_READ_ATTEMPTS: u32 = 4;
+pub(crate) const MAX_READ_ATTEMPTS: u32 = 4;
 /// Base delay before the first retry. Deliberately much shorter than
 /// [`POLL_INTERVAL`]: a transient error should be retried in place rather
 /// than aborting the whole refresh cycle and waiting a full poll interval.
-const RETRY_BASE_DELAY: Duration = Duration::from_millis(150);
+pub(crate) const RETRY_BASE_DELAY: Duration = Duration::from_millis(150);
 /// Ceiling on backoff growth between retries.
-const RETRY_MAX_DELAY: Duration = Duration::from_secs(2);
+pub(crate) const RETRY_MAX_DELAY: Duration = Duration::from_secs(2);
 const EXPECTED_ABI_VERSION: u64 = 1;
 const DIVIDEND_CACHE_TTL: Duration = Duration::from_secs(60);
 const TESTNET_RPC: &str = "https://soroban-testnet.stellar.org";
@@ -81,7 +82,7 @@ const SIM_SEQ_NUM: i64 = 0;
 /// Static configuration for a network's contracts and RPC endpoint.
 #[derive(Debug, Clone)]
 pub struct Config {
-    pub rpc_url: String,
+    pub rpc_urls: Vec<String>,
     pub registry_id: String,
     pub dividend_id: String,
     pub read_source: String,
@@ -103,10 +104,19 @@ pub enum ConfigError {
 
 impl Config {
     pub fn from_env() -> Result<Self, ConfigError> {
-        let rpc_url = env_or("RWA_RPC_URL", TESTNET_RPC);
-        url::Url::parse(&rpc_url).map_err(|e| ConfigError::RpcUrl(format!("{e}: {rpc_url}")))?;
+        let rpc_urls_str = if let Ok(urls) = std::env::var("RWA_RPC_URLS") {
+            urls
+        } else {
+            env_or("RWA_RPC_URL", TESTNET_RPC)
+        };
+        
+        let rpc_urls: Vec<String> = rpc_urls_str.split(',').map(|s| s.trim().to_string()).collect();
+        for rpc_url in &rpc_urls {
+            url::Url::parse(rpc_url).map_err(|e| ConfigError::RpcUrl(format!("{e}: {rpc_url}")))?;
+        }
 
-        if rpc_url != TESTNET_RPC
+        let is_testnet = rpc_urls.len() == 1 && rpc_urls[0] == TESTNET_RPC;
+        if !is_testnet
             && (std::env::var_os("RWA_REGISTRY_ID").is_none()
                 || std::env::var_os("RWA_DIVIDEND_ID").is_none())
         {
@@ -135,7 +145,7 @@ impl Config {
             .map_err(|e| ConfigError::ReadSource(e.to_string()))?;
 
         Ok(Config {
-            rpc_url,
+            rpc_urls,
             registry_id,
             dividend_id,
             read_source,
@@ -245,7 +255,7 @@ impl AppState {
         // that mutates `RWA_*` (see `config_from_env_overrides_with_env_vars`)
         // would race with every route test using this helper.
         let config = Config {
-            rpc_url: "https://soroban-testnet.stellar.org".to_string(),
+            rpc_urls: vec!["https://soroban-testnet.stellar.org".to_string()],
             registry_id: "CBX5SMLTXX6JP4HA5GQIO2V6QM7WCUGL2GZ6D4U773HMRI6RXISKPUR3".to_string(),
             dividend_id: "CAR4XY3CEBQWFOL27JEWFW34KXSIZA7RFKDQMEIV7ZU723RWY37I2SYX".to_string(),
             read_source: "GAIQGTOBTTLLDJ4SWGGESM7UWJ2DI4K3ZNHUSHPDKJL2IE5FKY3BSRAA".to_string(),
@@ -309,197 +319,8 @@ impl IndexError {
 }
 
 // ---------------------------------------------------------------------------
-// RPC client
+// RPC client is in rpc_client.rs
 // ---------------------------------------------------------------------------
-
-struct Rpc {
-    http: reqwest::Client,
-    url: String,
-    source: String,
-}
-
-#[derive(Deserialize)]
-struct RpcEnvelope {
-    result: Option<SimulateResult>,
-    error: Option<RpcError>,
-}
-
-#[derive(Deserialize)]
-struct RpcError {
-    message: String,
-}
-
-#[derive(Deserialize)]
-struct SimulateResult {
-    #[serde(default)]
-    results: Vec<SimResultEntry>,
-    #[serde(default)]
-    error: Option<String>,
-    #[serde(rename = "latestLedger", default)]
-    latest_ledger: u32,
-    /// Base64-encoded `DiagnosticEvent` XDR blobs (issue #8). Present on
-    /// both successful and failed simulations; empty for the vast majority
-    /// of this indexer's reads, since plain view calls rarely emit events,
-    /// but never discarded when the RPC does return them.
-    #[serde(default)]
-    events: Vec<String>,
-}
-
-#[derive(Deserialize)]
-struct SimResultEntry {
-    xdr: String,
-}
-
-/// Outcome of a single simulated read.
-#[derive(Debug)]
-struct ReadOutcome {
-    value: serde_json::Value,
-    latest_ledger: u32,
-    /// Parsed diagnostic events from this simulation (issue #8), if any.
-    diagnostics: Vec<crate::models::DiagnosticEventRecord>,
-}
-
-impl Rpc {
-    fn new(url: String, source: String) -> Self {
-        Rpc {
-            http: reqwest::Client::new(),
-            url,
-            source,
-        }
-    }
-
-    /// Simulate `contract.method(args)` and decode the return value to JSON.
-    ///
-    /// Transient failures (network errors, non-2xx responses, RPC-level
-    /// errors) are retried in place with jittered backoff — see
-    /// [`MAX_READ_ATTEMPTS`] — rather than bubbling straight up and forcing
-    /// the whole refresh cycle to restart on the next [`POLL_INTERVAL`].
-    /// Decode/XDR/strkey errors are not retried: they're deterministic bugs
-    /// in our own encoding, not something a retry can fix.
-    async fn read(
-        &self,
-        contract: &str,
-        method: &str,
-        args: Vec<xdr::ScVal>,
-    ) -> Result<ReadOutcome, IndexError> {
-        let mut attempt = 0;
-        loop {
-            attempt += 1;
-            match self.read_once(contract, method, args.clone()).await {
-                Ok(outcome) => return Ok(outcome),
-                Err(e) if attempt < MAX_READ_ATTEMPTS && e.is_transient() => {
-                    let delay = retry_delay(attempt);
-                    tracing::warn!(
-                        contract,
-                        method,
-                        attempt,
-                        delay_ms = delay.as_millis() as u64,
-                        error = %e,
-                        "transient read error; retrying"
-                    );
-                    tokio::time::sleep(delay).await;
-                }
-                Err(e) => return Err(e),
-            }
-        }
-    }
-
-    /// Simulate once and record the `soroban_rpc_simulation_duration_seconds`
-    /// histogram plus, on failure, `rwa_rpc_failures_total` broken down by
-    /// error classification (issue #7).
-    async fn read_once(
-        &self,
-        contract: &str,
-        method: &str,
-        args: Vec<xdr::ScVal>,
-    ) -> Result<ReadOutcome, IndexError> {
-        let started = Instant::now();
-        let result = self.read_once_inner(contract, method, args).await;
-        metrics::histogram!("soroban_rpc_simulation_duration_seconds", "method" => method.to_string())
-            .record(started.elapsed().as_secs_f64());
-        if let Err(e) = &result {
-            metrics::counter!(
-                "rwa_rpc_failures_total",
-                "classification" => classify_rpc_error(e),
-            )
-            .increment(1);
-        }
-        result
-    }
-
-    async fn read_once_inner(
-        &self,
-        contract: &str,
-        method: &str,
-        args: Vec<xdr::ScVal>,
-    ) -> Result<ReadOutcome, IndexError> {
-        let envelope_b64 = build_invoke_envelope(&self.source, contract, method, args)?;
-        let body = serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "simulateTransaction",
-            "params": { "transaction": envelope_b64 },
-        });
-
-        let resp = self.http.post(&self.url).json(&body).send().await?;
-
-        let status = resp.status();
-        if status == StatusCode::TOO_MANY_REQUESTS || status == StatusCode::SERVICE_UNAVAILABLE {
-            let headers = resp.headers().clone();
-            let body = resp.text().await.unwrap_or_default();
-            let retry_after = headers
-                .get(RETRY_AFTER)
-                .and_then(|v| v.to_str().ok())
-                .and_then(|s| s.parse::<u64>().ok())
-                .map(Duration::from_secs);
-            return Err(IndexError::RateLimited {
-                status: status.as_u16(),
-                retry_after,
-                body,
-            });
-        }
-
-        if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
-            return Err(IndexError::HttpStatus {
-                status: status.as_u16(),
-                body,
-            });
-        }
-
-        let resp: RpcEnvelope = resp.json().await?;
-
-        if let Some(err) = resp.error {
-            return Err(IndexError::Rpc(err.message));
-        }
-        let result = resp
-            .result
-            .ok_or_else(|| IndexError::Rpc("empty rpc result".into()))?;
-        if let Some(sim_err) = result.error {
-            return Err(IndexError::Rpc(sim_err));
-        }
-        let entry = result
-            .results
-            .first()
-            .ok_or_else(|| IndexError::Rpc("no simulation result".into()))?;
-        let scval = xdr::ScVal::from_xdr_base64(&entry.xdr, Limits::none())?;
-        Ok(ReadOutcome {
-            value: scval_to_json(&scval)?,
-            latest_ledger: result.latest_ledger,
-            diagnostics: diagnostics::parse_diagnostic_events(&result.events),
-        })
-    }
-}
-
-/// Jittered exponential backoff for the `attempt`-th failed read (1-indexed).
-/// Full jitter (a random delay in `[0, cap]`) avoids every in-flight read
-/// retrying in lockstep after a shared transient failure (e.g. the RPC node
-/// briefly rejecting all requests).
-fn retry_delay(attempt: u32) -> Duration {
-    let exp = RETRY_BASE_DELAY.saturating_mul(1u32 << (attempt - 1).min(4));
-    let cap = exp.min(RETRY_MAX_DELAY);
-    rand::rng().random_range(Duration::ZERO..=cap)
-}
 
 // ---------------------------------------------------------------------------
 // XDR helpers
@@ -531,7 +352,7 @@ fn address_scval(strkey: &str) -> Result<xdr::ScVal, IndexError> {
 
 /// Build a base64 `TransactionEnvelope` invoking a contract method. The
 /// transaction is never signed or submitted — it exists only to be simulated.
-fn build_invoke_envelope(
+pub(crate) fn build_invoke_envelope(
     source: &str,
     contract: &str,
     method: &str,
@@ -572,7 +393,7 @@ fn build_invoke_envelope(
 /// strings (to survive JavaScript); contract structs (`ScMap`) become objects
 /// keyed by their symbol field names; unit enums (`ScVec` of one symbol) and
 /// plain vectors become arrays.
-fn scval_to_json(v: &xdr::ScVal) -> Result<serde_json::Value, IndexError> {
+pub(crate) fn scval_to_json(v: &xdr::ScVal) -> Result<serde_json::Value, IndexError> {
     use serde_json::Value;
     Ok(match v {
         xdr::ScVal::Bool(b) => Value::Bool(*b),
@@ -733,7 +554,7 @@ fn normalize_status(v: &serde_json::Value) -> String {
 type DividendCache = HashMap<String, (Instant, Vec<Distribution>, Option<String>)>;
 
 pub struct Indexer {
-    rpc: Rpc,
+    rpc: rpc_client::RpcClient,
     state: AppState,
     dividend_cache: Mutex<DividendCache>,
     /// Issue #6: best-effort historical fiat-equivalent pricing for
@@ -747,7 +568,7 @@ impl Indexer {
     pub fn new(state: AppState) -> Self {
         let cfg = &state.config;
         Indexer {
-            rpc: Rpc::new(cfg.rpc_url.clone(), cfg.read_source.clone()),
+            rpc: rpc_client::RpcClient::new(cfg.rpc_urls.clone(), cfg.read_source.clone()),
             state,
             dividend_cache: Mutex::new(HashMap::new()),
             price_feed: price_feed::PriceFeedClient::new(price_feed::PriceFeedConfig::from_env()),
@@ -1216,7 +1037,7 @@ impl Indexer {
 /// (issue #7): `network` for transport/HTTP/RPC-side failures, `xdr_decode`
 /// for response decoding failures, `rate_limit` for 429/503 responses, and
 /// `other` for anything else (e.g. an ABI version mismatch).
-fn classify_rpc_error(e: &IndexError) -> &'static str {
+pub(crate) fn classify_rpc_error(e: &IndexError) -> &'static str {
     match e {
         IndexError::Http(_) | IndexError::HttpStatus { .. } | IndexError::Rpc(_) => "network",
         IndexError::RateLimited { .. } => "rate_limit",
@@ -1916,7 +1737,7 @@ mod tests {
         std::env::remove_var("RWA_READ_SOURCE");
 
         let cfg = Config::from_env().expect("config with defaults should succeed");
-        assert_eq!(cfg.rpc_url, "https://soroban-testnet.stellar.org");
+        assert_eq!(cfg.rpc_urls[0], "https://soroban-testnet.stellar.org");
         assert_eq!(
             cfg.registry_id,
             "CBX5SMLTXX6JP4HA5GQIO2V6QM7WCUGL2GZ6D4U773HMRI6RXISKPUR3"
@@ -1949,7 +1770,7 @@ mod tests {
         std::env::set_var("RWA_READ_SOURCE", custom_source);
 
         let cfg = Config::from_env().expect("config with overrides should succeed");
-        assert_eq!(cfg.rpc_url, custom_rpc);
+        assert_eq!(cfg.rpc_urls[0], custom_rpc);
         assert_eq!(cfg.registry_id, custom_registry);
         assert_eq!(cfg.dividend_id, custom_dividend);
         assert_eq!(cfg.read_source, custom_source);
