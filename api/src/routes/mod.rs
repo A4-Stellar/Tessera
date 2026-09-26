@@ -134,6 +134,7 @@ pub fn router(state: AppState) -> Router {
         .route("/health", get(health))
         .route("/metrics", get(metrics))
         .nest("/v1", data_routes)
+        .route("/v1/ws", get(crate::ws::handler))
         // `route_layer` (rather than `layer`) so the middleware runs after
         // route matching and can read `MatchedPath` from the request
         // extensions for a low-cardinality route label.
