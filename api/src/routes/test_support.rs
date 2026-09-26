@@ -9,7 +9,7 @@ use crate::models::{Asset, Distribution};
 
 pub(crate) fn state_with(snapshot: Snapshot) -> AppState {
     let config = Config {
-        rpc_url: "http://127.0.0.1:0".to_string(),
+        rpc_urls: vec!["http://127.0.0.1:0".to_string()],
         registry_id: "CBX5SMLTXX6JP4HA5GQIO2V6QM7WCUGL2GZ6D4U773HMRI6RXISKPUR3".to_string(),
         dividend_id: "CAR4XY3CEBQWFOL27JEWFW34KXSIZA7RFKDQMEIV7ZU723RWY37I2SYX".to_string(),
         read_source: "GAIQGTOBTTLLDJ4SWGGESM7UWJ2DI4K3ZNHUSHPDKJL2IE5FKY3BSRAA".to_string(),
