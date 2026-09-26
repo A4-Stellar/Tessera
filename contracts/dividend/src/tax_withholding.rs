@@ -1,5 +1,7 @@
 // tax_withholding.rs
-use soroban_sdk::{contract, contractimpl, contracttype, Address, BytesN, Env, IntoVal, Symbol, Val, Vec};
+use soroban_sdk::{
+    contract, contractimpl, contracttype, Address, BytesN, Env, IntoVal, Symbol, Val, Vec,
+};
 
 #[contracttype]
 #[derive(Clone)]
@@ -70,7 +72,7 @@ impl TaxWithholdingContract {
             .instance()
             .get(&DataKey::ComplianceContract)
             .unwrap();
-        
+
         let args: Vec<Val> = (investor.clone(),).into_val(&env);
         let residency_hash: Option<BytesN<32>> = env.invoke_contract(
             &compliance_contract,
@@ -78,12 +80,17 @@ impl TaxWithholdingContract {
             args,
         );
 
-        let rate = match residency_hash {
+        let rate: u32 = match residency_hash {
             Some(hash) => env
                 .storage()
                 .persistent()
                 .get(&DataKey::TaxRate(hash))
-                .unwrap_or_else(|| env.storage().instance().get(&DataKey::DefaultTaxRate).unwrap()),
+                .unwrap_or_else(|| {
+                    env.storage()
+                        .instance()
+                        .get(&DataKey::DefaultTaxRate)
+                        .unwrap()
+                }),
             None => env
                 .storage()
                 .instance()
