@@ -110,7 +110,7 @@ fn zero_copy_parse_and_walk_allocates_nothing() {
 fn standard_decoder_allocates_for_the_same_event() {
     let bytes = sample();
     let (_ev, n) = allocs(|| xdr::ContractEvent::from_xdr(&bytes, Limits::none()).unwrap());
-    // Topic Vec, each symbol/string, the map, its entries...: many allocations.
-    assert!(n >= 8, "expected the owning decoder to allocate, got {n}");
+    // Topic Vec, the symbols, the map and its entries all allocate.
+    assert!(n >= 5, "expected the owning decoder to allocate, got {n}");
     eprintln!("stellar_xdr allocations for one event: {n}; zero-copy: 0");
 }

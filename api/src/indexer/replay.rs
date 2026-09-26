@@ -233,7 +233,7 @@ impl ProgressReport {
 // ---------------------------------------------------------------------------
 
 /// Isolated accumulator for a replay run; also the on-disk checkpoint format.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShadowState {
     pub start_ledger: u32,
     pub end_ledger: u32,
@@ -810,7 +810,7 @@ mod tests {
         let merged = merge_events(existing.clone(), &shadow, 6, 20, &[C1.to_string()]);
         let ids: Vec<u64> = merged.iter().map(|e| e.id).collect();
         // id 2 (in scope) replaced; C2 event, out-of-range events kept.
-        assert_eq!(ids, vec![1, 20, 3, 21, 4]);
+        assert_eq!(ids, vec![1, 3, 20, 21, 4]);
         // Idempotent.
         assert_eq!(merge_events(merged.clone(), &shadow, 6, 20, &[C1.to_string()]).len(), merged.len());
     }

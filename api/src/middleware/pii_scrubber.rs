@@ -320,8 +320,8 @@ mod tests {
 
     #[test]
     fn redacts_private_keys() {
-        let out = scrub(&format!("seed {SECRET_SEED} end"));
-        assert_eq!(out, format!("seed {REDACTED_KEY} end"));
+        let input = format!("seed {SECRET_SEED} end");
+        assert_eq!(scrub(&input), format!("seed {REDACTED_KEY} end"));
         let pem = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkq\n-----END PRIVATE KEY-----";
         assert_eq!(scrub(pem), REDACTED_KEY);
         let hex = "a".repeat(64);

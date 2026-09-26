@@ -1159,7 +1159,7 @@ mod tests {
     #[test]
     fn retry_delay_is_bounded_and_grows() {
         for attempt in 1..=6 {
-            let delay = retry_delay(attempt);
+            let delay = rpc_client::retry_delay(attempt);
             assert!(delay <= RETRY_MAX_DELAY);
         }
         // The cap for attempt 1 is the base delay; later attempts have a
@@ -1398,7 +1398,7 @@ mod tests {
         );
         let url = spawn_rpc_stub(router).await;
 
-        let rpc = Rpc::new(url, STUB_SOURCE.to_string());
+        let rpc = rpc_client::RpcClient::new(vec![url], STUB_SOURCE.to_string());
         let started = Instant::now();
         let err = rpc
             .read(STUB_CONTRACT, "get_assets", vec![])
@@ -1473,7 +1473,7 @@ mod tests {
         let base = spawn_rpc_stub(router).await;
 
         let read = |path: &str| {
-            let rpc = Rpc::new(format!("{base}{path}"), STUB_SOURCE.to_string());
+            let rpc = rpc_client::RpcClient::new(vec![format!("{base}{path}")], STUB_SOURCE.to_string());
             async move { rpc.read(STUB_CONTRACT, "get_assets", vec![]).await }
         };
 
