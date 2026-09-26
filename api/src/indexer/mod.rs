@@ -198,6 +198,7 @@ pub struct AppState {
     inner: Arc<ArcSwap<Snapshot>>,
     pub config: Arc<Config>,
     pub metrics: PrometheusHandle,
+    pub audit: Arc<crate::audit::AuditLog>,
 }
 
 impl AppState {
@@ -206,6 +207,7 @@ impl AppState {
             inner: Arc::new(ArcSwap::from(Arc::new(Snapshot::default()))),
             config: Arc::new(config),
             metrics,
+            audit: Arc::new(crate::audit::AuditLog::new()),
         }
     }
 
@@ -251,11 +253,7 @@ impl AppState {
             read_source: "GAIQGTOBTTLLDJ4SWGGESM7UWJ2DI4K3ZNHUSHPDKJL2IE5FKY3BSRAA".to_string(),
         };
         let metrics = PrometheusBuilder::new().build_recorder().handle();
-        AppState {
-            inner: Arc::new(ArcSwap::from(Arc::new(Snapshot::default()))),
-            config: Arc::new(config),
-            metrics,
-        }
+        AppState::new(config, metrics)
     }
 
     /// Test-only: build state pre-seeded with the provided assets.
