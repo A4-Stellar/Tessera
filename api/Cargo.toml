@@ -32,6 +32,7 @@ utoipa = { version = "6.0.0", features = ["axum_extras", "chrono"] }
 utoipa-swagger-ui = { version = "10.0.1", features = ["axum"] }
 sha2 = "0.10"
 hex = "0.4"
+sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "tls-rustls-ring-webpki", "postgres"] }
 
 [dev-dependencies]
 insta = { version = "1", features = ["json"] }
