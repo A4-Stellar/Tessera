@@ -5,10 +5,12 @@
 //! and serves the current in-memory snapshot over HTTP. It holds no secrets,
 //! signs nothing, and never mutates on-chain state.
 
+pub mod audit;
 mod healthcheck;
 mod indexer;
 mod models;
 mod routes;
+mod ws;
 
 use std::net::SocketAddr;
 
@@ -33,7 +35,7 @@ async fn main() {
         }
     };
     tracing::info!(
-        rpc = %config.rpc_url,
+        rpc = ?config.rpc_urls,
         registry = %config.registry_id,
         "starting stellar-rwa-api"
     );
