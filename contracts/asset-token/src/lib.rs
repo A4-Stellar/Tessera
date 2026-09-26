@@ -1,4 +1,6 @@
 //! Asset-token contract — good-faith reconstruction of the deployed testnet
+//! Includes issue #40: Automated Share Buyback & Capital Reduction module
+//! (`buyback.rs`).
 //! contract at `CBMCWLSQSWUTLUJFCNBHNBSXMUM3XU7NAQ5TSNERW4HA4ZZBYHLG4ECZ`,
 //! built from `docs/app/docs/contracts/asset-token/page.mdx` and
 //! cross-checked against the `RawMetadata` shape `api/src/indexer/mod.rs`
