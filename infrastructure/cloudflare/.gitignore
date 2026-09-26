@@ -1,0 +1,8 @@
+# Wrangler build output and local dev state.
+dist/
+.wrangler/
+.dev.vars
+
+# Node
+node_modules/
+npm-debug.log*
