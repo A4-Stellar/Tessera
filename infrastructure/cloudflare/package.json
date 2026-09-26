@@ -1,0 +1,11 @@
+{
+  "name": "tessera-cloudflare-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "check:deploy": "npx --yes wrangler@4.36.0 deploy --dry-run",
+    "deploy": "npx --yes wrangler@4.36.0 deploy",
+    "secret:jwt": "npx --yes wrangler@4.36.0 secret put JWT_SECRET"
+  }
+}
