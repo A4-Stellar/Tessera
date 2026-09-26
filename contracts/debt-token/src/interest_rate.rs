@@ -7,9 +7,7 @@
 //! Multiplications go through 256-bit intermediates so 18-decimal token
 //! amounts (up to ~1e38 base units) never overflow or lose precision before
 //! the single final truncating division.
-use soroban_sdk::{
-    contracterror, contracttype, panic_with_error, Address, Env, Symbol, I256,
-};
+use soroban_sdk::{contracterror, contracttype, panic_with_error, Address, Env, Symbol, I256};
 
 pub const WAD: i128 = 1_000_000_000_000_000_000;
 pub const SECONDS_PER_YEAR: u64 = 31_536_000;
@@ -96,14 +94,19 @@ pub fn accrue(env: &Env, index: i128, rate: i128, dt: u64) -> i128 {
 
 pub fn do_set_rate_params(env: &Env, admin: Address, params: RateParams) {
     admin.require_auth();
-    match env.storage().instance().get::<_, Address>(&RateKey::RateAdmin) {
+    match env
+        .storage()
+        .instance()
+        .get::<_, Address>(&RateKey::RateAdmin)
+    {
         Some(a) if a != admin => panic_with_error!(env, RateError::Unauthorized),
         Some(_) => {}
         None => env.storage().instance().set(&RateKey::RateAdmin, &admin),
     }
     validate(env, &params);
     env.storage().instance().set(&RateKey::Params, &params);
-    env.events().publish((Symbol::new(env, "rate_params"),), params);
+    env.events()
+        .publish((Symbol::new(env, "rate_params"),), params);
 }
 
 pub fn get_params(env: &Env) -> RateParams {
@@ -116,12 +119,17 @@ pub fn get_params(env: &Env) -> RateParams {
 pub fn do_accrue_index(env: &Env, borrowed: i128, available: i128) -> i128 {
     let now = env.ledger().timestamp();
     let index: i128 = env.storage().instance().get(&RateKey::Index).unwrap_or(WAD);
-    let last: u64 = env.storage().instance().get(&RateKey::LastAccrual).unwrap_or(now);
+    let last: u64 = env
+        .storage()
+        .instance()
+        .get(&RateKey::LastAccrual)
+        .unwrap_or(now);
     let rate = borrow_rate(env, &get_params(env), utilization(env, borrowed, available));
     let new_index = accrue(env, index, rate, now.saturating_sub(last));
     env.storage().instance().set(&RateKey::Index, &new_index);
     env.storage().instance().set(&RateKey::LastAccrual, &now);
-    env.events().publish((Symbol::new(env, "index_accrued"),), (rate, new_index));
+    env.events()
+        .publish((Symbol::new(env, "index_accrued"),), (rate, new_index));
     new_index
 }
 

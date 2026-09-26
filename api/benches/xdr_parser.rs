@@ -27,7 +27,10 @@ fn events() -> Vec<Vec<u8>> {
                 vec![
                     xdr::ScMapEntry {
                         key: sym("amount"),
-                        val: xdr::ScVal::I128(xdr::Int128Parts { hi: 0, lo: 1000 + i as u64 }),
+                        val: xdr::ScVal::I128(xdr::Int128Parts {
+                            hi: 0,
+                            lo: 1000 + i as u64,
+                        }),
                     },
                     xdr::ScMapEntry {
                         key: sym("memo"),

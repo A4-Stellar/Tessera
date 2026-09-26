@@ -19,13 +19,25 @@ pub struct RentDistributionVault;
 impl RentDistributionVault {
     pub fn claim_yield(env: Env, holder: Address) {
         holder.require_auth();
-        let _reward: i128 = env.storage().instance().get(&DataKey::Rewards(holder.clone())).unwrap_or(0);
-        env.storage().instance().set(&DataKey::Rewards(holder), &0i128);
+        let _reward: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::Rewards(holder.clone()))
+            .unwrap_or(0);
+        env.storage()
+            .instance()
+            .set(&DataKey::Rewards(holder), &0i128);
     }
-    
+
     pub fn reinvest_yield(env: Env, holder: Address) {
         holder.require_auth();
-        let _reward: i128 = env.storage().instance().get(&DataKey::Rewards(holder.clone())).unwrap_or(0);
-        env.storage().instance().set(&DataKey::Rewards(holder), &0i128);
+        let _reward: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::Rewards(holder.clone()))
+            .unwrap_or(0);
+        env.storage()
+            .instance()
+            .set(&DataKey::Rewards(holder), &0i128);
     }
 }

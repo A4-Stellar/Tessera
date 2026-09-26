@@ -227,7 +227,9 @@ impl DividendContract {
     }
 
     pub fn has_claimed(env: Env, id: u64, holder: Address) -> bool {
-        env.storage().persistent().has(&DataKey::Claimed(id, holder))
+        env.storage()
+            .persistent()
+            .has(&DataKey::Claimed(id, holder))
     }
 
     /// Current contract ABI version, polled by the off-chain indexer.

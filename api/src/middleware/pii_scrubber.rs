@@ -91,8 +91,10 @@ pub fn mask_email(email: &str) -> String {
     let masked = match chars.as_slice() {
         [] => "***".to_string(),
         [c] => format!("{c}***"),
-        [first, rest @ ..] if rest.len() <= 4 && local[first.len_utf8()..].starts_with("***")
-            && rest.iter().filter(|c| **c != '*').count() <= 1 =>
+        [first, rest @ ..]
+            if rest.len() <= 4
+                && local[first.len_utf8()..].starts_with("***")
+                && rest.iter().filter(|c| **c != '*').count() <= 1 =>
         {
             // Already masked (`a***` / `a***b`): keep as is (idempotence).
             local.to_string()
@@ -127,7 +129,9 @@ pub fn scrub(input: &str) -> Cow<'_, str> {
 
     // Secrets first, so a key is never partially matched by a later pattern.
     out = replace(out, &p.pem, |_| REDACTED_KEY.to_string());
-    out = replace(out, &p.labelled_hex, |c| format!("{}{}", &c[1], REDACTED_KEY));
+    out = replace(out, &p.labelled_hex, |c| {
+        format!("{}{}", &c[1], REDACTED_KEY)
+    });
     out = replace(out, &p.stellar_secret, |_| REDACTED_KEY.to_string());
     out = replace(out, &p.email, |c| mask_email(&c[0]));
     out = replace(out, &p.ipv4, |c| {
@@ -171,9 +175,7 @@ fn is_scrubbable(content_type: Option<&HeaderValue>) -> bool {
         .and_then(|v| v.to_str().ok())
         .map(|v| {
             let v = v.to_ascii_lowercase();
-            v.starts_with("application/json")
-                || v.starts_with("text/")
-                || v.contains("+json")
+            v.starts_with("application/json") || v.starts_with("text/") || v.contains("+json")
         })
         .unwrap_or(false)
 }
@@ -195,13 +197,19 @@ pub async fn pii_scrub_middleware(req: Request, next: Next) -> Response {
         Err(e) => {
             tracing::error!(error = %e, "response body too large or unreadable for PII scrubbing");
             // Fail closed: never emit a body we could not scrub.
-            return (StatusCode::INTERNAL_SERVER_ERROR, "response could not be scrubbed")
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "response could not be scrubbed",
+            )
                 .into_response();
         }
     };
     let Ok(text) = std::str::from_utf8(&bytes) else {
         // Declared text/JSON but not UTF-8: fail closed rather than leak.
-        return (StatusCode::INTERNAL_SERVER_ERROR, "response could not be scrubbed")
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "response could not be scrubbed",
+        )
             .into_response();
     };
     match scrub(text) {
@@ -255,7 +263,11 @@ impl<W: Write> ScrubbingWriter<W> {
             return Ok(());
         }
         let text = String::from_utf8_lossy(&self.buf);
-        let out: Cow<'_, str> = if scrubbing_enabled() { scrub(&text) } else { text };
+        let out: Cow<'_, str> = if scrubbing_enabled() {
+            scrub(&text)
+        } else {
+            text
+        };
         let res = self.inner.write_all(out.as_bytes());
         self.buf.clear();
         res
@@ -292,17 +304,29 @@ mod tests {
     #[test]
     fn masks_emails_in_required_format() {
         assert_eq!(scrub("alice@example.com"), "a***e@example.com");
-        assert_eq!(scrub("contact: bob.smith+tag@mail.example.co.uk!"), "contact: b***g@mail.example.co.uk!");
+        assert_eq!(
+            scrub("contact: bob.smith+tag@mail.example.co.uk!"),
+            "contact: b***g@mail.example.co.uk!"
+        );
         assert_eq!(scrub("x@ab.io"), "x***@ab.io");
         assert_eq!(scrub("ab@ab.io"), "a***b@ab.io");
     }
 
     #[test]
     fn masks_ipv4_and_ipv6_but_keeps_loopback() {
-        assert_eq!(scrub("from 203.0.113.7 ok"), format!("from {REDACTED_IP} ok"));
-        assert_eq!(scrub("client=2001:db8::ff00:42:8329"), format!("client={REDACTED_IP}"));
+        assert_eq!(
+            scrub("from 203.0.113.7 ok"),
+            format!("from {REDACTED_IP} ok")
+        );
+        assert_eq!(
+            scrub("client=2001:db8::ff00:42:8329"),
+            format!("client={REDACTED_IP}")
+        );
         assert_eq!(scrub("fe80::1%eth0"), format!("{REDACTED_IP}%eth0"));
-        assert_eq!(scrub("listening 127.0.0.1:8080 and 0.0.0.0:80 and ::1"), "listening 127.0.0.1:8080 and 0.0.0.0:80 and ::1");
+        assert_eq!(
+            scrub("listening 127.0.0.1:8080 and 0.0.0.0:80 and ::1"),
+            "listening 127.0.0.1:8080 and 0.0.0.0:80 and ::1"
+        );
     }
 
     #[test]
@@ -328,7 +352,10 @@ mod tests {
         let j = format!(r#"{{"secret_key":"{hex}","tx":"{hex}"}}"#);
         let out = scrub(&j);
         assert!(out.contains(&format!(r#""secret_key":"{REDACTED_KEY}""#)));
-        assert!(out.contains(&format!(r#""tx":"{hex}""#)), "unlabelled hashes preserved");
+        assert!(
+            out.contains(&format!(r#""tx":"{hex}""#)),
+            "unlabelled hashes preserved"
+        );
     }
 
     #[test]
@@ -356,8 +383,17 @@ mod tests {
     /// survive in output, across many representative shapes.
     #[test]
     fn compliance_no_raw_pii_survives() {
-        let emails = ["jane.doe@example.com", "j@x.org", "first_last+news@sub.domain.io"];
-        let ips = ["8.8.8.8", "192.168.1.20", "2606:4700:4700::1111", "2001:db8:85a3:0:0:8a2e:370:7334"];
+        let emails = [
+            "jane.doe@example.com",
+            "j@x.org",
+            "first_last+news@sub.domain.io",
+        ];
+        let ips = [
+            "8.8.8.8",
+            "192.168.1.20",
+            "2606:4700:4700::1111",
+            "2001:db8:85a3:0:0:8a2e:370:7334",
+        ];
         let mut samples = Vec::new();
         for e in emails {
             samples.push(format!("memo={e}"));
@@ -399,7 +435,15 @@ mod tests {
                     Json(serde_json::json!({"memo": "hi bob@example.com from 203.0.113.9"}))
                 }),
             )
-            .route("/bin", get(|| async { ([(header::CONTENT_TYPE, "application/octet-stream")], "bob@example.com") }))
+            .route(
+                "/bin",
+                get(|| async {
+                    (
+                        [(header::CONTENT_TYPE, "application/octet-stream")],
+                        "bob@example.com",
+                    )
+                }),
+            )
             .layer(axum::middleware::from_fn(pii_scrub_middleware));
 
         let resp = app
@@ -407,7 +451,11 @@ mod tests {
             .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
             .await
             .unwrap();
-        let declared: usize = resp.headers()[header::CONTENT_LENGTH].to_str().unwrap().parse().unwrap();
+        let declared: usize = resp.headers()[header::CONTENT_LENGTH]
+            .to_str()
+            .unwrap()
+            .parse()
+            .unwrap();
         let body = to_bytes(resp.into_body(), 1 << 20).await.unwrap();
         assert_eq!(declared, body.len());
         let text = std::str::from_utf8(&body).unwrap();
@@ -446,7 +494,10 @@ mod tests {
             w.write_all(b"mple.com from 198.51.100.77\n").unwrap();
         }
         let out = String::from_utf8(sink.0.lock().unwrap().clone()).unwrap();
-        assert_eq!(out, format!("INFO login c***l@example.com from {REDACTED_IP}\n"));
+        assert_eq!(
+            out,
+            format!("INFO login c***l@example.com from {REDACTED_IP}\n")
+        );
     }
 
     #[test]
@@ -466,10 +517,17 @@ mod tests {
             .with_ansi(false)
             .finish();
         tracing::subscriber::with_default(sub, || {
-            tracing::info!(email = "dave@example.com", ip = "203.0.113.55", "user event");
+            tracing::info!(
+                email = "dave@example.com",
+                ip = "203.0.113.55",
+                "user event"
+            );
         });
         let out = String::from_utf8(sink.0.lock().unwrap().clone()).unwrap();
         assert!(out.contains("user event"));
-        assert!(!out.contains("dave@example.com") && !out.contains("203.0.113.55"), "{out}");
+        assert!(
+            !out.contains("dave@example.com") && !out.contains("203.0.113.55"),
+            "{out}"
+        );
     }
 }

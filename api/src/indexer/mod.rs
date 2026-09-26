@@ -862,7 +862,11 @@ impl Indexer {
         // detector (issue #101) so replayed/backfilled activity is scored once.
         let events = replay::stored_events().unwrap_or_else(|| prev.events.clone());
         let known: HashSet<u64> = prev.events.iter().map(|e| e.id).collect();
-        let fresh: Vec<Event> = events.iter().filter(|e| !known.contains(&e.id)).cloned().collect();
+        let fresh: Vec<Event> = events
+            .iter()
+            .filter(|e| !known.contains(&e.id))
+            .cloned()
+            .collect();
         self.state.anomalies.observe_events(&fresh);
 
         let count = assets.len();
@@ -1476,7 +1480,8 @@ mod tests {
         let base = spawn_rpc_stub(router).await;
 
         let read = |path: &str| {
-            let rpc = rpc_client::RpcClient::new(vec![format!("{base}{path}")], STUB_SOURCE.to_string());
+            let rpc =
+                rpc_client::RpcClient::new(vec![format!("{base}{path}")], STUB_SOURCE.to_string());
             async move { rpc.read(STUB_CONTRACT, "get_assets", vec![]).await }
         };
 

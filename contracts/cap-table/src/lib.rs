@@ -113,7 +113,10 @@ impl CapTableContract {
         balance: i128,
         proof: Vec<BytesN<32>>,
     ) -> bool {
-        let snapshot: Option<Snapshot> = env.storage().persistent().get(&DataKey::Snapshot(snapshot_id));
+        let snapshot: Option<Snapshot> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Snapshot(snapshot_id));
         let snapshot = match snapshot {
             Some(s) => s,
             None => return false,
