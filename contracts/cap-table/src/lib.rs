@@ -10,6 +10,7 @@
 //! `O(log n)`-sized proof instead of an on-chain enumeration.
 #![no_std]
 
+use soroban_sdk::xdr::ToXdr;
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, Address,
     Bytes, BytesN, Env, Vec,
@@ -33,6 +34,8 @@ pub enum Error {
     NotInitialized = 2,
     Unauthorized = 3,
     SnapshotNotFound = 4,
+    UnauthorizedRegistrar = 5,
+    InvalidAmount = 6,
 }
 
 #[derive(Clone)]
@@ -41,6 +44,8 @@ enum DataKey {
     Admin,
     NextId,
     Snapshot(u64),
+    DripRegistrar,
+    DripAcquisition(Address, Address),
 }
 
 #[contract]
@@ -95,6 +100,48 @@ impl CapTableContract {
             .unwrap_or_else(|| panic_with_error!(env, Error::SnapshotNotFound))
     }
 
+    /// Set the dividend contract allowed to record completed DRIP purchases.
+    pub fn set_drip_registrar(env: Env, admin: Address, registrar: Address) {
+        Self::require_admin(&env, &admin);
+        env.storage()
+            .instance()
+            .set(&DataKey::DripRegistrar, &registrar);
+        env.events()
+            .publish((symbol_short!("dripreg"), admin), registrar);
+    }
+
+    /// Record asset tokens delivered to a holder by a DRIP swap. This is a
+    /// cumulative audit ledger; token balances remain authoritative. The
+    /// configured dividend contract is the only permitted caller.
+    pub fn record_drip_acquisition(env: Env, asset_token: Address, holder: Address, amount: i128) {
+        let registrar: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::DripRegistrar)
+            .unwrap_or_else(|| panic_with_error!(env, Error::UnauthorizedRegistrar));
+        registrar.require_auth();
+        if amount <= 0 {
+            panic_with_error!(env, Error::InvalidAmount);
+        }
+        let key = DataKey::DripAcquisition(asset_token.clone(), holder.clone());
+        let old: i128 = env.storage().persistent().get(&key).unwrap_or(0);
+        let new = old
+            .checked_add(amount)
+            .unwrap_or_else(|| panic_with_error!(env, Error::InvalidAmount));
+        env.storage().persistent().set(&key, &new);
+        env.events().publish(
+            (symbol_short!("dripbuy"), asset_token, holder),
+            (amount, new),
+        );
+    }
+
+    pub fn drip_acquisitions(env: Env, asset_token: Address, holder: Address) -> i128 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::DripAcquisition(asset_token, holder))
+            .unwrap_or(0)
+    }
+
     /// Verify that `holder` held `balance` at `snapshot_id`'s recorded
     /// Merkle root.
     ///
@@ -113,7 +160,10 @@ impl CapTableContract {
         balance: i128,
         proof: Vec<BytesN<32>>,
     ) -> bool {
-        let snapshot: Option<Snapshot> = env.storage().persistent().get(&DataKey::Snapshot(snapshot_id));
+        let snapshot: Option<Snapshot> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Snapshot(snapshot_id));
         let snapshot = match snapshot {
             Some(s) => s,
             None => return false,
