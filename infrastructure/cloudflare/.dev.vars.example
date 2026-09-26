@@ -1,0 +1,13 @@
+# Local development secrets for `wrangler dev` (copy to .dev.vars, never commit).
+#
+# Only needed when you verify HS256 tokens locally, or when you want to point
+# the worker at a local origin instead of the one in wrangler.toml.
+#
+#   cp .dev.vars.example .dev.vars
+#   npx wrangler dev
+#
+# In production these are set with `npx wrangler secret put <NAME>`.
+
+JWT_SECRET="replace-with-a-local-hs256-signing-key"
+# JWT_JWKS_URL="https://auth.tessera.xyz/.well-known/jwks.json"
+# ORIGIN_URL="http://localhost:8080"
