@@ -7,6 +7,7 @@ pub mod dividends;
 pub mod events;
 pub mod holders;
 pub mod stats;
+pub mod simulate;
 
 #[cfg(test)]
 mod test_support;
