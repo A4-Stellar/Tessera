@@ -12,6 +12,9 @@ use soroban_sdk::{
     BytesN, Env, IntoVal, String, Symbol, Val, Vec,
 };
 
+mod attestation;
+pub use attestation::{IdentityAttestation, RevocationProof};
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ComplianceStatus {
@@ -47,11 +50,13 @@ pub enum Error {
     /// highest pre-existing error code (6) rather than renumbering anything.
     HookAlreadyRegistered = 7,
     HookNotRegistered = 8,
+    InvalidAttestation = 9,
+    IssuerNotRegistered = 10,
 }
 
 #[derive(Clone)]
 #[contracttype]
-enum DataKey {
+pub(crate) enum DataKey {
     Admin,
     Record(Address),
     AllowList,
@@ -61,6 +66,10 @@ enum DataKey {
     /// `check(env, address: Address) -> bool`.
     Hooks,
     TaxResidency(Address),
+    IssuerKey(Address),
+    RevocationRoot(Address),
+    AttestationMode,
+    Attestation(Address),
 }
 
 #[contract]
@@ -85,6 +94,7 @@ impl ComplianceContract {
             .set(&DataKey::Hooks, &Vec::<Address>::new(&env));
     }
 
+    #[allow(deprecated)] // Preserve the existing event topic and payload ABI.
     pub fn add_to_allowlist(
         env: Env,
         admin: Address,
@@ -121,10 +131,13 @@ impl ComplianceContract {
             env.storage().instance().set(&DataKey::AllowList, &list);
         }
 
-        env.events()
-            .publish((symbol_short!("approved"), address), (jurisdiction, expires_at));
+        env.events().publish(
+            (symbol_short!("approved"), address),
+            (jurisdiction, expires_at),
+        );
     }
 
+    #[allow(deprecated)] // Preserve the existing event topic and payload ABI.
     pub fn suspend(env: Env, admin: Address, address: Address) {
         Self::require_not_paused(&env);
         Self::require_admin(&env, &admin);
@@ -135,9 +148,11 @@ impl ComplianceContract {
             .persistent()
             .set(&DataKey::Record(address.clone()), &record);
 
-        env.events().publish((symbol_short!("suspend"), address), ());
+        env.events()
+            .publish((symbol_short!("suspend"), address), ());
     }
 
+    #[allow(deprecated)] // Preserve the existing event topic and payload ABI.
     pub fn remove(env: Env, admin: Address, address: Address) {
         Self::require_not_paused(&env);
         Self::require_admin(&env, &admin);
@@ -163,10 +178,14 @@ impl ComplianceContract {
             env.storage().instance().set(&DataKey::AllowList, &list);
         }
 
-        env.events().publish((symbol_short!("removed"), address), ());
+        env.events()
+            .publish((symbol_short!("removed"), address), ());
     }
 
     pub fn is_allowed(env: Env, address: Address) -> bool {
+        if attestation::issuer_mode_enabled(&env) {
+            return attestation::verify(&env, &address);
+        }
         let record: Option<KycRecord> = env.storage().persistent().get(&DataKey::Record(address));
         let record = match record {
             Some(r) => r,
@@ -179,6 +198,71 @@ impl ComplianceContract {
             return false;
         }
         !Self::is_jurisdiction_blocked(env.clone(), record.jurisdiction)
+    }
+
+    pub fn set_issuer(
+        env: Env,
+        admin: Address,
+        issuer: Address,
+        public_key: BytesN<32>,
+        revocation_root: BytesN<32>,
+    ) {
+        Self::require_not_paused(&env);
+        Self::require_admin(&env, &admin);
+        env.storage()
+            .instance()
+            .set(&DataKey::IssuerKey(issuer.clone()), &public_key);
+        env.storage()
+            .instance()
+            .set(&DataKey::RevocationRoot(issuer.clone()), &revocation_root);
+        env.storage()
+            .instance()
+            .set(&DataKey::AttestationMode, &true);
+    }
+
+    pub fn update_revocation_root(env: Env, issuer: Address, revocation_root: BytesN<32>) {
+        issuer.require_auth();
+        if !env
+            .storage()
+            .instance()
+            .has(&DataKey::IssuerKey(issuer.clone()))
+        {
+            panic_with_error!(env, Error::IssuerNotRegistered);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::RevocationRoot(issuer), &revocation_root);
+    }
+
+    /// Publicly query a provider's active verification key and revocation
+    /// root so attestation submitters can construct proofs for the live root.
+    pub fn get_issuer(env: Env, issuer: Address) -> Option<(BytesN<32>, BytesN<32>)> {
+        let public_key = env
+            .storage()
+            .instance()
+            .get(&DataKey::IssuerKey(issuer.clone()));
+        let root = env
+            .storage()
+            .instance()
+            .get(&DataKey::RevocationRoot(issuer));
+        match (public_key, root) {
+            (Some(key), Some(root)) => Some((key, root)),
+            _ => None,
+        }
+    }
+
+    /// Validate a signed assertion and its proof before storing it. The
+    /// persistent entry's TTL is extended on submission and during checks.
+    pub fn submit_attestation(env: Env, attestation: IdentityAttestation, proof: RevocationProof) {
+        let investor = attestation.investor.clone();
+        if !attestation::verify_with_proof(&env, &attestation, &investor, &proof) {
+            panic_with_error!(env, Error::InvalidAttestation);
+        }
+        let key = DataKey::Attestation(investor);
+        env.storage().persistent().set(&key, &(attestation, proof));
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, 100_000, 120_000);
     }
 
     pub fn get_record(env: Env, address: Address) -> Option<KycRecord> {
@@ -204,6 +288,7 @@ impl ComplianceContract {
     // entry point that layers hook evaluation on top of it.
 
     /// Register a rule-module hook contract. Admin-authenticated.
+    #[allow(deprecated)] // Preserve the existing event topic and payload ABI.
     pub fn register_hook(env: Env, admin: Address, hook_contract: Address) {
         Self::require_not_paused(&env);
         Self::require_admin(&env, &admin);
@@ -224,6 +309,7 @@ impl ComplianceContract {
     }
 
     /// Unregister a previously-registered hook contract. Admin-authenticated.
+    #[allow(deprecated)] // Preserve the existing event topic and payload ABI.
     pub fn unregister_hook(env: Env, admin: Address, hook_contract: Address) {
         Self::require_not_paused(&env);
         Self::require_admin(&env, &admin);
@@ -276,6 +362,7 @@ impl ComplianceContract {
         true
     }
 
+    #[allow(deprecated)] // Preserve the existing event topic and payload ABI.
     pub fn block_jurisdiction(env: Env, admin: Address, jurisdiction: String) {
         Self::require_not_paused(&env);
         Self::require_admin(&env, &admin);
@@ -292,9 +379,11 @@ impl ComplianceContract {
                 .set(&DataKey::BlockedJurisdictions, &list);
         }
 
-        env.events().publish((symbol_short!("blockjur"),), jurisdiction);
+        env.events()
+            .publish((symbol_short!("blockjur"),), jurisdiction);
     }
 
+    #[allow(deprecated)] // Preserve the existing event topic and payload ABI.
     pub fn unblock_jurisdiction(env: Env, admin: Address, jurisdiction: String) {
         Self::require_not_paused(&env);
         Self::require_admin(&env, &admin);
@@ -311,7 +400,8 @@ impl ComplianceContract {
                 .set(&DataKey::BlockedJurisdictions, &list);
         }
 
-        env.events().publish((symbol_short!("unblkjur"),), jurisdiction);
+        env.events()
+            .publish((symbol_short!("unblkjur"),), jurisdiction);
     }
 
     pub fn is_jurisdiction_blocked(env: Env, jurisdiction: String) -> bool {
@@ -323,7 +413,12 @@ impl ComplianceContract {
         list.iter().any(|j| j == jurisdiction)
     }
 
-    pub fn set_tax_residency(env: Env, admin: Address, investor: Address, residency_hash: BytesN<32>) {
+    pub fn set_tax_residency(
+        env: Env,
+        admin: Address,
+        investor: Address,
+        residency_hash: BytesN<32>,
+    ) {
         Self::require_not_paused(&env);
         Self::require_admin(&env, &admin);
         env.storage()
@@ -332,7 +427,9 @@ impl ComplianceContract {
     }
 
     pub fn get_tax_residency(env: Env, investor: Address) -> Option<BytesN<32>> {
-        env.storage().persistent().get(&DataKey::TaxResidency(investor))
+        env.storage()
+            .persistent()
+            .get(&DataKey::TaxResidency(investor))
     }
 
     /// Current contract ABI version, polled by the off-chain indexer.
