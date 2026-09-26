@@ -66,7 +66,13 @@ pub enum ReplayError {
 
 impl ReplayError {
     fn is_transient(&self) -> bool {
-        matches!(self, ReplayError::Rpc { transient: true, .. })
+        matches!(
+            self,
+            ReplayError::Rpc {
+                transient: true,
+                ..
+            }
+        )
     }
 }
 
@@ -130,7 +136,8 @@ pub fn parse_args(args: &[String]) -> Result<ReplayArgs, ReplayError> {
             other => return Err(ReplayError::Args(format!("unknown argument `{other}`"))),
         }
     }
-    let start_ledger = start.ok_or_else(|| ReplayError::Args("--start-ledger is required".into()))?;
+    let start_ledger =
+        start.ok_or_else(|| ReplayError::Args("--start-ledger is required".into()))?;
     let end_ledger = end.ok_or_else(|| ReplayError::Args("--end-ledger is required".into()))?;
     if start_ledger == 0 || end_ledger < start_ledger {
         return Err(ReplayError::Args(
@@ -141,7 +148,9 @@ pub fn parse_args(args: &[String]) -> Result<ReplayArgs, ReplayError> {
         return Err(ReplayError::Args("--window must be > 0".into()));
     }
     if contracts.is_empty() {
-        return Err(ReplayError::Args("--contracts needs at least one contract ID".into()));
+        return Err(ReplayError::Args(
+            "--contracts needs at least one contract ID".into(),
+        ));
     }
     if contracts.len() > MAX_CONTRACTS {
         return Err(ReplayError::Args(format!(
@@ -196,7 +205,11 @@ impl Progress {
     /// inflate the rate.
     pub fn report(&self, elapsed: Duration, done_this_run: u64) -> ProgressReport {
         let secs = elapsed.as_secs_f64();
-        let rate = if secs > 0.0 { done_this_run as f64 / secs } else { 0.0 };
+        let rate = if secs > 0.0 {
+            done_this_run as f64 / secs
+        } else {
+            0.0
+        };
         let remaining = self.total.saturating_sub(self.done);
         let eta = if remaining == 0 {
             Some(Duration::ZERO)
@@ -208,7 +221,11 @@ impl Progress {
         ProgressReport {
             done: self.done,
             total: self.total,
-            percent: if self.total == 0 { 100.0 } else { self.done as f64 * 100.0 / self.total as f64 },
+            percent: if self.total == 0 {
+                100.0
+            } else {
+                self.done as f64 * 100.0 / self.total as f64
+            },
             ledgers_per_sec: rate,
             eta,
         }
@@ -286,10 +303,7 @@ pub fn merge_events(
         by_key.insert((e.ledger, e.id), e.clone());
     }
     let mut seen = HashSet::new();
-    by_key
-        .into_values()
-        .filter(|e| seen.insert(e.id))
-        .collect()
+    by_key.into_values().filter(|e| seen.insert(e.id)).collect()
 }
 
 impl AppState {
@@ -344,8 +358,9 @@ impl FileEventStore {
 
     pub fn load(&self) -> Result<Vec<Event>, ReplayError> {
         match fs::read(&self.path) {
-            Ok(b) => serde_json::from_slice(&b)
-                .map_err(|e| ReplayError::Store(format!("corrupt store {}: {e}", self.path.display()))),
+            Ok(b) => serde_json::from_slice(&b).map_err(|e| {
+                ReplayError::Store(format!("corrupt store {}: {e}", self.path.display()))
+            }),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
             Err(e) => Err(ReplayError::Store(e.to_string())),
         }
@@ -494,8 +509,15 @@ impl RpcEventSource {
         }
     }
 
-    async fn call(&self, url: &str, params: serde_json::Value) -> Result<GetEventsResult, ReplayError> {
-        let transient = |m: String| ReplayError::Rpc { message: m, transient: true };
+    async fn call(
+        &self,
+        url: &str,
+        params: serde_json::Value,
+    ) -> Result<GetEventsResult, ReplayError> {
+        let transient = |m: String| ReplayError::Rpc {
+            message: m,
+            transient: true,
+        };
         let resp = self
             .http
             .post(url)
@@ -507,13 +529,16 @@ impl RpcEventSource {
         if status.as_u16() == 429 || status.is_server_error() {
             return Err(transient(format!("http {status}")));
         }
-        let body: GetEventsResponse = resp
-            .json()
-            .await
-            .map_err(|e| ReplayError::Rpc { message: e.to_string(), transient: false })?;
+        let body: GetEventsResponse = resp.json().await.map_err(|e| ReplayError::Rpc {
+            message: e.to_string(),
+            transient: false,
+        })?;
         if let Some(e) = body.error {
             // Ledger outside the RPC retention window etc.: retrying won't help.
-            return Err(ReplayError::Rpc { message: e.message, transient: false });
+            return Err(ReplayError::Rpc {
+                message: e.message,
+                transient: false,
+            });
         }
         body.result.ok_or(ReplayError::Rpc {
             message: "empty rpc result".into(),
@@ -611,8 +636,16 @@ pub fn decode_event(raw: &RawEvent) -> Result<Event, ReplayError> {
             .map_err(|e| ReplayError::Decode(e.to_string()))?;
         scval_to_json(&v).map_err(|e| ReplayError::Decode(e.to_string()))
     };
-    let topics = raw.topic.iter().map(|t| dec(t)).collect::<Result<Vec<_>, _>>()?;
-    let value = if raw.value.is_empty() { serde_json::Value::Null } else { dec(&raw.value)? };
+    let topics = raw
+        .topic
+        .iter()
+        .map(|t| dec(t))
+        .collect::<Result<Vec<_>, _>>()?;
+    let value = if raw.value.is_empty() {
+        serde_json::Value::Null
+    } else {
+        dec(&raw.value)?
+    };
     let event_type = topics
         .first()
         .and_then(|t| t.as_str())
@@ -682,7 +715,10 @@ pub async fn run_replay(
         .and_then(|b| serde_json::from_slice::<ShadowState>(&b).ok())
         .filter(|s| s.matches(args) && s.next_ledger >= args.start_ledger)
         .map(|s| {
-            tracing::info!(next_ledger = s.next_ledger, "resuming replay from checkpoint");
+            tracing::info!(
+                next_ledger = s.next_ledger,
+                "resuming replay from checkpoint"
+            );
             s
         })
         .unwrap_or_else(|| ShadowState::new(args));
@@ -693,7 +729,9 @@ pub async fn run_replay(
     let resumed = progress.done;
     let started = Instant::now();
     tracing::info!(
-        start = args.start_ledger, end = args.end_ledger, contracts = args.contracts.len(),
+        start = args.start_ledger,
+        end = args.end_ledger,
+        contracts = args.contracts.len(),
         "replay started (shadow state; live data untouched until merge)"
     );
 
@@ -706,7 +744,12 @@ pub async fn run_replay(
         progress.advance((w_end - w_start) as u64 + 1);
         let bytes = serde_json::to_vec(&shadow).map_err(|e| ReplayError::Store(e.to_string()))?;
         write_atomic(&ckpt, &bytes).map_err(|e| ReplayError::Store(e.to_string()))?;
-        tracing::info!("{}", progress.report(started.elapsed(), progress.done - resumed).line(shadow.events.len()));
+        tracing::info!(
+            "{}",
+            progress
+                .report(started.elapsed(), progress.done - resumed)
+                .line(shadow.events.len())
+        );
     }
 
     let report = if args.dry_run {
@@ -714,7 +757,12 @@ pub async fn run_replay(
         None
     } else {
         let r = store.merge(&shadow)?;
-        tracing::info!(replaced = r.replaced, inserted = r.inserted, total = r.total_after, "shadow merged atomically");
+        tracing::info!(
+            replaced = r.replaced,
+            inserted = r.inserted,
+            total = r.total_after,
+            "shadow merged atomically"
+        );
         let _ = fs::remove_file(&ckpt);
         Some(r)
     };
@@ -737,7 +785,12 @@ pub async fn run_cli(args: &[String], config: &Config) -> i32 {
             println!(
                 "replay complete: {} events{}",
                 shadow.events.len(),
-                report.map(|r| format!(", merged (replaced {}, store now {})", r.replaced, r.total_after)).unwrap_or_else(|| " (dry run, not merged)".into())
+                report
+                    .map(|r| format!(
+                        ", merged (replaced {}, store now {})",
+                        r.replaced, r.total_after
+                    ))
+                    .unwrap_or_else(|| " (dry run, not merged)".into())
             );
             0
         }
@@ -780,10 +833,31 @@ mod tests {
 
     #[test]
     fn parses_cli_arguments() {
-        let a = parse_args(&s(&["--start-ledger", "10", "--end-ledger", "20", "--contracts", C2, C1])).unwrap();
-        assert_eq!((a.start_ledger, a.end_ledger, a.window), (10, 20, DEFAULT_WINDOW_LEDGERS));
+        let a = parse_args(&s(&[
+            "--start-ledger",
+            "10",
+            "--end-ledger",
+            "20",
+            "--contracts",
+            C2,
+            C1,
+        ]))
+        .unwrap();
+        assert_eq!(
+            (a.start_ledger, a.end_ledger, a.window),
+            (10, 20, DEFAULT_WINDOW_LEDGERS)
+        );
         assert_eq!(a.contracts.len(), 2);
-        let b = parse_args(&s(&["--contracts", &format!("{C1},{C1}"), "--start-ledger", "1", "--end-ledger", "1", "--dry-run"])).unwrap();
+        let b = parse_args(&s(&[
+            "--contracts",
+            &format!("{C1},{C1}"),
+            "--start-ledger",
+            "1",
+            "--end-ledger",
+            "1",
+            "--dry-run",
+        ]))
+        .unwrap();
         assert_eq!(b.contracts, vec![C1.to_string()]);
         assert!(b.dry_run);
     }
@@ -792,12 +866,48 @@ mod tests {
     fn rejects_bad_arguments() {
         for bad in [
             s(&["--end-ledger", "5", "--contracts", C1]),
-            s(&["--start-ledger", "9", "--end-ledger", "5", "--contracts", C1]),
-            s(&["--start-ledger", "0", "--end-ledger", "5", "--contracts", C1]),
+            s(&[
+                "--start-ledger",
+                "9",
+                "--end-ledger",
+                "5",
+                "--contracts",
+                C1,
+            ]),
+            s(&[
+                "--start-ledger",
+                "0",
+                "--end-ledger",
+                "5",
+                "--contracts",
+                C1,
+            ]),
             s(&["--start-ledger", "1", "--end-ledger", "5"]),
-            s(&["--start-ledger", "1", "--end-ledger", "5", "--contracts", "nope"]),
-            s(&["--start-ledger", "x", "--end-ledger", "5", "--contracts", C1]),
-            s(&["--start-ledger", "1", "--end-ledger", "5", "--contracts", C1, "--bogus"]),
+            s(&[
+                "--start-ledger",
+                "1",
+                "--end-ledger",
+                "5",
+                "--contracts",
+                "nope",
+            ]),
+            s(&[
+                "--start-ledger",
+                "x",
+                "--end-ledger",
+                "5",
+                "--contracts",
+                C1,
+            ]),
+            s(&[
+                "--start-ledger",
+                "1",
+                "--end-ledger",
+                "5",
+                "--contracts",
+                C1,
+                "--bogus",
+            ]),
         ] {
             assert!(parse_args(&bad).is_err(), "{bad:?}");
         }
@@ -812,7 +922,10 @@ mod tests {
         // id 2 (in scope) replaced; C2 event, out-of-range events kept.
         assert_eq!(ids, vec![1, 3, 20, 21, 4]);
         // Idempotent.
-        assert_eq!(merge_events(merged.clone(), &shadow, 6, 20, &[C1.to_string()]).len(), merged.len());
+        assert_eq!(
+            merge_events(merged.clone(), &shadow, 6, 20, &[C1.to_string()]).len(),
+            merged.len()
+        );
     }
 
     #[test]
@@ -826,7 +939,10 @@ mod tests {
         assert!(r.line(7).contains("ETA 30s") && r.line(7).contains("25.0%"));
         assert_eq!(Progress::new(10).report(Duration::ZERO, 0).eta, None);
         p.advance(10_000);
-        assert_eq!(p.report(Duration::from_secs(1), 1).eta, Some(Duration::ZERO));
+        assert_eq!(
+            p.report(Duration::from_secs(1), 1).eta,
+            Some(Duration::ZERO)
+        );
     }
 
     struct FakeSource {
@@ -837,13 +953,24 @@ mod tests {
 
     #[async_trait]
     impl EventSource for FakeSource {
-        async fn fetch_window(&self, start: u32, end: u32, contracts: &[String]) -> Result<Vec<Event>, ReplayError> {
+        async fn fetch_window(
+            &self,
+            start: u32,
+            end: u32,
+            contracts: &[String],
+        ) -> Result<Vec<Event>, ReplayError> {
             let n = self.calls.fetch_add(1, Ordering::SeqCst);
             if n < self.fail_first {
-                return Err(ReplayError::Rpc { message: "boom".into(), transient: true });
+                return Err(ReplayError::Rpc {
+                    message: "boom".into(),
+                    transient: true,
+                });
             }
             if self.fail_after_ledger.is_some_and(|l| start > l) {
-                return Err(ReplayError::Rpc { message: "gone".into(), transient: false });
+                return Err(ReplayError::Rpc {
+                    message: "gone".into(),
+                    transient: false,
+                });
             }
             Ok((start..=end)
                 .map(|l| ev(l as u64, l, &contracts[0]))
@@ -852,7 +979,13 @@ mod tests {
     }
 
     fn args(start: u32, end: u32, window: u32) -> ReplayArgs {
-        ReplayArgs { start_ledger: start, end_ledger: end, contracts: vec![C1.to_string()], window, dry_run: false }
+        ReplayArgs {
+            start_ledger: start,
+            end_ledger: end,
+            contracts: vec![C1.to_string()],
+            window,
+            dry_run: false,
+        }
     }
 
     #[tokio::test]
@@ -860,18 +993,38 @@ mod tests {
         let dir = tmpdir("ok");
         let store = FileEventStore::new(dir.join("events.json"));
         // Pre-existing data: one in-scope stale event, one outside the range.
-        store.merge(&ShadowState { start_ledger: 1, end_ledger: 200, contracts: vec![C1.into()], next_ledger: 201, events: vec![ev(9_999, 105, C1), ev(8_888, 150, C1)] }).unwrap();
+        store
+            .merge(&ShadowState {
+                start_ledger: 1,
+                end_ledger: 200,
+                contracts: vec![C1.into()],
+                next_ledger: 201,
+                events: vec![ev(9_999, 105, C1), ev(8_888, 150, C1)],
+            })
+            .unwrap();
 
-        let src = FakeSource { calls: AtomicU32::new(0), fail_first: 0, fail_after_ledger: None };
-        let (shadow, report) = run_replay(&args(100, 109, 4), &src, &store, Duration::ZERO).await.unwrap();
+        let src = FakeSource {
+            calls: AtomicU32::new(0),
+            fail_first: 0,
+            fail_after_ledger: None,
+        };
+        let (shadow, report) = run_replay(&args(100, 109, 4), &src, &store, Duration::ZERO)
+            .await
+            .unwrap();
         assert_eq!(src.calls.load(Ordering::SeqCst), 3, "10 ledgers / window 4");
         assert_eq!(shadow.events.len(), 10);
         let report = report.unwrap();
         assert_eq!(report.replaced, 1);
         let stored = store.load().unwrap();
         assert_eq!(stored.len(), 11);
-        assert!(stored.iter().all(|e| e.id != 9_999), "stale in-range event replaced");
-        assert!(stored.iter().any(|e| e.id == 8_888), "out-of-range event kept");
+        assert!(
+            stored.iter().all(|e| e.id != 9_999),
+            "stale in-range event replaced"
+        );
+        assert!(
+            stored.iter().any(|e| e.id == 8_888),
+            "out-of-range event kept"
+        );
         assert!(!checkpoint_path(&dir.join("events.json"), &args(100, 109, 4)).exists());
         assert!(!dir.join("events.lock").exists());
     }
@@ -880,8 +1033,14 @@ mod tests {
     async fn transient_errors_are_retried() {
         let dir = tmpdir("retry");
         let store = FileEventStore::new(dir.join("events.json"));
-        let src = FakeSource { calls: AtomicU32::new(0), fail_first: 2, fail_after_ledger: None };
-        let (shadow, _) = run_replay(&args(1, 3, 10), &src, &store, Duration::ZERO).await.unwrap();
+        let src = FakeSource {
+            calls: AtomicU32::new(0),
+            fail_first: 2,
+            fail_after_ledger: None,
+        };
+        let (shadow, _) = run_replay(&args(1, 3, 10), &src, &store, Duration::ZERO)
+            .await
+            .unwrap();
         assert_eq!(shadow.events.len(), 3);
         assert_eq!(src.calls.load(Ordering::SeqCst), 3);
     }
@@ -891,22 +1050,56 @@ mod tests {
         let dir = tmpdir("resume");
         let path = dir.join("events.json");
         let store = FileEventStore::new(&path);
-        store.merge(&ShadowState { start_ledger: 1, end_ledger: 1, contracts: vec![C1.into()], next_ledger: 2, events: vec![ev(1, 1, C1)] }).unwrap();
+        store
+            .merge(&ShadowState {
+                start_ledger: 1,
+                end_ledger: 1,
+                contracts: vec![C1.into()],
+                next_ledger: 2,
+                events: vec![ev(1, 1, C1)],
+            })
+            .unwrap();
         let before = fs::read(&path).unwrap();
 
         // Windows 1-4 and 5-8 succeed, window 9-10 fails permanently.
-        let bad = FakeSource { calls: AtomicU32::new(0), fail_first: 0, fail_after_ledger: Some(8) };
+        let bad = FakeSource {
+            calls: AtomicU32::new(0),
+            fail_first: 0,
+            fail_after_ledger: Some(8),
+        };
         let a = args(100, 109, 5);
         let mut a = a;
-        a.start_ledger = 1; a.end_ledger = 10; a.window = 4;
-        let err = run_replay(&a, &bad, &store, Duration::ZERO).await.unwrap_err();
-        assert!(matches!(err, ReplayError::Rpc { transient: false, .. }));
-        assert_eq!(fs::read(&path).unwrap(), before, "store must be untouched after failed replay");
+        a.start_ledger = 1;
+        a.end_ledger = 10;
+        a.window = 4;
+        let err = run_replay(&a, &bad, &store, Duration::ZERO)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            ReplayError::Rpc {
+                transient: false,
+                ..
+            }
+        ));
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            before,
+            "store must be untouched after failed replay"
+        );
 
         // Second run with a healthy source resumes at ledger 9.
-        let good = FakeSource { calls: AtomicU32::new(0), fail_first: 0, fail_after_ledger: None };
+        let good = FakeSource {
+            calls: AtomicU32::new(0),
+            fail_first: 0,
+            fail_after_ledger: None,
+        };
         let (shadow, _) = run_replay(&a, &good, &store, Duration::ZERO).await.unwrap();
-        assert_eq!(good.calls.load(Ordering::SeqCst), 1, "only the failed window is refetched");
+        assert_eq!(
+            good.calls.load(Ordering::SeqCst),
+            1,
+            "only the failed window is refetched"
+        );
         assert_eq!(shadow.events.len(), 10);
         assert_eq!(store.load().unwrap().len(), 10);
     }
@@ -917,7 +1110,11 @@ mod tests {
         let store = FileEventStore::new(dir.join("events.json"));
         let mut a = args(1, 4, 2);
         a.dry_run = true;
-        let src = FakeSource { calls: AtomicU32::new(0), fail_first: 0, fail_after_ledger: None };
+        let src = FakeSource {
+            calls: AtomicU32::new(0),
+            fail_first: 0,
+            fail_after_ledger: None,
+        };
         let (shadow, report) = run_replay(&a, &src, &store, Duration::ZERO).await.unwrap();
         assert!(report.is_none());
         assert_eq!(shadow.events.len(), 4);
@@ -929,14 +1126,26 @@ mod tests {
         let dir = tmpdir("lock");
         let store = FileEventStore::new(dir.join("events.json"));
         fs::write(dir.join("events.lock"), b"").unwrap();
-        let sh = ShadowState { start_ledger: 1, end_ledger: 1, contracts: vec![C1.into()], next_ledger: 2, events: vec![] };
+        let sh = ShadowState {
+            start_ledger: 1,
+            end_ledger: 1,
+            contracts: vec![C1.into()],
+            next_ledger: 2,
+            events: vec![],
+        };
         assert!(matches!(store.merge(&sh), Err(ReplayError::Store(_))));
     }
 
     #[test]
     fn live_snapshot_merge_is_atomic_swap() {
         let state = AppState::for_test_empty();
-        let sh = ShadowState { start_ledger: 1, end_ledger: 9, contracts: vec![C1.into()], next_ledger: 10, events: vec![ev(1, 3, C1)] };
+        let sh = ShadowState {
+            start_ledger: 1,
+            end_ledger: 9,
+            contracts: vec![C1.into()],
+            next_ledger: 10,
+            events: vec![ev(1, 3, C1)],
+        };
         state.merge_events(&sh);
         assert_eq!(state.snapshot().events.len(), 1);
         state.merge_events(&sh);
@@ -947,7 +1156,11 @@ mod tests {
     fn decodes_rpc_events_into_api_events() {
         use stellar_xdr::curr::WriteXdr;
         let sym = |x: &str| xdr::ScVal::Symbol(xdr::ScSymbol(x.try_into().unwrap()));
-        let acct = |b: u8| xdr::ScVal::Address(xdr::ScAddress::Account(xdr::AccountId(xdr::PublicKey::PublicKeyTypeEd25519(xdr::Uint256([b; 32])))));
+        let acct = |b: u8| {
+            xdr::ScVal::Address(xdr::ScAddress::Account(xdr::AccountId(
+                xdr::PublicKey::PublicKeyTypeEd25519(xdr::Uint256([b; 32])),
+            )))
+        };
         let b64 = |v: &xdr::ScVal| v.to_xdr_base64(Limits::none()).unwrap();
         let raw = RawEvent {
             id: "0000000012345-0000000001".into(),

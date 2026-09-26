@@ -219,7 +219,10 @@ impl AnomalyDetector {
         while series.buckets.front().is_some_and(|(i, _)| *i < oldest) {
             series.buckets.pop_front();
         }
-        let pos = match series.buckets.binary_search_by_key(&bucket_idx, |(i, _)| *i) {
+        let pos = match series
+            .buckets
+            .binary_search_by_key(&bucket_idx, |(i, _)| *i)
+        {
             Ok(p) => p,
             Err(p) => {
                 series.buckets.insert(p, (bucket_idx, Bucket::default()));
@@ -267,7 +270,10 @@ impl AnomalyDetector {
             let touched = matches!(
                 (metric, obs.kind),
                 (Metric::AllowlistChanges, ObservationKind::AllowlistChange)
-                    | (Metric::Volume | Metric::Velocity, ObservationKind::Transfer { .. })
+                    | (
+                        Metric::Volume | Metric::Velocity,
+                        ObservationKind::Transfer { .. }
+                    )
             );
             if !touched {
                 continue;
@@ -342,7 +348,9 @@ impl AnomalyDetector {
     pub fn active_flags(&self, now: u64) -> Vec<RiskFlag> {
         let ttl = self.cfg.flag_ttl_secs;
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        inner.flags.retain(|_, f| now.saturating_sub(f.last_seen) <= ttl);
+        inner
+            .flags
+            .retain(|_, f| now.saturating_sub(f.last_seen) <= ttl);
         let mut v: Vec<RiskFlag> = inner.flags.values().cloned().collect();
         v.sort_by(|a, b| {
             b.peak_z_score
@@ -419,7 +427,10 @@ mod tests {
     fn warm(d: &AnomalyDetector, acct: &str) {
         for m in 0..20u64 {
             let amt = 100.0 + (m % 3) as f64 * 5.0;
-            assert!(d.observe(&transfer(acct, m * 60, amt)).is_empty(), "minute {m}");
+            assert!(
+                d.observe(&transfer(acct, m * 60, amt)).is_empty(),
+                "minute {m}"
+            );
         }
     }
 

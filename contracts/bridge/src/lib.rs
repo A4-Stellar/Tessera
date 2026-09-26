@@ -23,8 +23,14 @@ impl BridgeProtocol {
         _destination_address: Bytes,
     ) {
         caller.require_auth();
-        let nonce: u64 = env.storage().instance().get(&DataKey::Nonce(caller.clone())).unwrap_or(0);
-        env.storage().instance().set(&DataKey::Nonce(caller), &(nonce + 1));
+        let nonce: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::Nonce(caller.clone()))
+            .unwrap_or(0);
+        env.storage()
+            .instance()
+            .set(&DataKey::Nonce(caller), &(nonce + 1));
         // Logic to lock tokens
     }
 
@@ -41,7 +47,11 @@ impl BridgeProtocol {
         if env.ledger().timestamp() > ttl {
             panic!("message expired");
         }
-        if env.storage().instance().has(&DataKey::ProcessedMessage(message_hash.clone())) {
+        if env
+            .storage()
+            .instance()
+            .has(&DataKey::ProcessedMessage(message_hash.clone()))
+        {
             panic!("message already processed");
         }
 
@@ -49,7 +59,8 @@ impl BridgeProtocol {
         for i in 0..signatures.len() {
             let pk = public_keys.get(i).unwrap();
             let sig = signatures.get(i).unwrap();
-            env.crypto().ed25519_verify(&pk, &message_hash.clone().into(), &sig);
+            env.crypto()
+                .ed25519_verify(&pk, &message_hash.clone().into(), &sig);
             valid_signatures += 1;
         }
 
@@ -57,6 +68,8 @@ impl BridgeProtocol {
             panic!("insufficient signatures");
         }
 
-        env.storage().instance().set(&DataKey::ProcessedMessage(message_hash), &true);
+        env.storage()
+            .instance()
+            .set(&DataKey::ProcessedMessage(message_hash), &true);
     }
 }
