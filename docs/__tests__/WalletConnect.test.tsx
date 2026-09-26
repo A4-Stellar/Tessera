@@ -11,7 +11,7 @@ describe('WalletConnect', () => {
   });
 
   it('shows not installed message if wallet is not installed', async () => {
-    (FreighterAPI.isConnected as jest.Mock).mockResolvedValue(false);
+    (FreighterAPI.isConnected as jest.Mock).mockResolvedValue({ isConnected: false });
     
     render(<WalletConnect />);
     
@@ -21,8 +21,8 @@ describe('WalletConnect', () => {
   });
 
   it('shows connect button if wallet is installed but not connected', async () => {
-    (FreighterAPI.isConnected as jest.Mock).mockResolvedValue(true);
-    (FreighterAPI.isAllowed as jest.Mock).mockResolvedValue(false);
+    (FreighterAPI.isConnected as jest.Mock).mockResolvedValue({ isConnected: true });
+    (FreighterAPI.isAllowed as jest.Mock).mockResolvedValue({ isAllowed: false });
     
     render(<WalletConnect />);
     
@@ -32,10 +32,10 @@ describe('WalletConnect', () => {
   });
 
   it('connects and displays address/network on success', async () => {
-    (FreighterAPI.isConnected as jest.Mock).mockResolvedValue(true);
-    (FreighterAPI.isAllowed as jest.Mock).mockResolvedValue(false);
-    (FreighterAPI.requestAccess as jest.Mock).mockResolvedValue(true);
-    (FreighterAPI.getAddress as jest.Mock).mockResolvedValue('GBXXX123');
+    (FreighterAPI.isConnected as jest.Mock).mockResolvedValue({ isConnected: true });
+    (FreighterAPI.isAllowed as jest.Mock).mockResolvedValue({ isAllowed: false });
+    (FreighterAPI.requestAccess as jest.Mock).mockResolvedValue({ address: 'GBXXX123' });
+    (FreighterAPI.getAddress as jest.Mock).mockResolvedValue({ address: 'GBXXX123' });
     (FreighterAPI.getNetworkDetails as jest.Mock).mockResolvedValue({ network: 'TESTNET' });
     
     render(<WalletConnect />);
@@ -52,10 +52,10 @@ describe('WalletConnect', () => {
   });
 
   it('shows warning when not on Testnet', async () => {
-    (FreighterAPI.isConnected as jest.Mock).mockResolvedValue(true);
-    (FreighterAPI.isAllowed as jest.Mock).mockResolvedValue(false);
-    (FreighterAPI.requestAccess as jest.Mock).mockResolvedValue(true);
-    (FreighterAPI.getAddress as jest.Mock).mockResolvedValue('GBXXX123');
+    (FreighterAPI.isConnected as jest.Mock).mockResolvedValue({ isConnected: true });
+    (FreighterAPI.isAllowed as jest.Mock).mockResolvedValue({ isAllowed: false });
+    (FreighterAPI.requestAccess as jest.Mock).mockResolvedValue({ address: 'GBXXX123' });
+    (FreighterAPI.getAddress as jest.Mock).mockResolvedValue({ address: 'GBXXX123' });
     (FreighterAPI.getNetworkDetails as jest.Mock).mockResolvedValue({ network: 'PUBLIC' });
     
     render(<WalletConnect />);

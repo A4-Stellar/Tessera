@@ -6,9 +6,9 @@ pub mod compliance;
 pub mod dividends;
 pub mod events;
 pub mod holders;
-pub mod stats;
 pub mod search;
 pub mod simulate;
+pub mod stats;
 
 #[cfg(test)]
 mod test_support;
@@ -18,6 +18,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crate::middleware::rate_limit::{
+    rate_limit_middleware, MemoryRateLimiter, RateLimitState, RedisRateLimiter,
+};
 use axum::{
     body::Body,
     extract::{MatchedPath, Request, State},
@@ -28,7 +31,6 @@ use axum::{
     Json, Router,
 };
 use serde_json::json;
-use crate::middleware::rate_limit::{RateLimitState, MemoryRateLimiter, RedisRateLimiter, rate_limit_middleware};
 use tower_http::{cors::CorsLayer, limit::RequestBodyLimitLayer, timeout::TimeoutLayer};
 
 use crate::indexer::{AppState, POLL_INTERVAL};
@@ -89,11 +91,12 @@ pub fn router(state: AppState) -> Router {
     let burst = env_value("RWA_RATE_LIMIT_BURST", RATE_LIMIT_BURST);
 
     // Rate limiter allows switching between memory and Redis
-    let limiter: Arc<dyn crate::middleware::rate_limit::RateLimiter> = if let Ok(redis_url) = std::env::var("RWA_RATE_LIMIT_REDIS_URL") {
-        Arc::new(RedisRateLimiter::new(&redis_url).expect("failed to connect to Redis"))
-    } else {
-        Arc::new(MemoryRateLimiter::new(per_second, burst))
-    };
+    let limiter: Arc<dyn crate::middleware::rate_limit::RateLimiter> =
+        if let Ok(redis_url) = std::env::var("RWA_RATE_LIMIT_REDIS_URL") {
+            Arc::new(RedisRateLimiter::new(&redis_url).expect("failed to connect to Redis"))
+        } else {
+            Arc::new(MemoryRateLimiter::new(per_second, burst))
+        };
     let rate_limit_state = Arc::new(RateLimitState {
         limiter,
         limit: burst as u64,
@@ -151,7 +154,10 @@ pub fn router(state: AppState) -> Router {
             "RWA_MAX_BODY_BYTES",
             MAX_BODY_BYTES,
         )))
-        .layer(middleware::from_fn_with_state(rate_limit_state, rate_limit_middleware))
+        .layer(middleware::from_fn_with_state(
+            rate_limit_state,
+            rate_limit_middleware,
+        ))
         .layer(cors)
 }
 
