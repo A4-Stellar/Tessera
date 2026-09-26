@@ -7,7 +7,7 @@ authors = ["Afolabi <afolabiaderonke1995@gmail.com>"]
 license = "Apache-2.0"
 
 [dependencies]
-axum = "0.7"
+axum = { version = "0.7", features = ["ws"] }
 tokio = { version = "1", features = ["full"] }
 tower = { version = "0.4", features = ["util"] }
 tower-http = { version = "0.5", features = ["cors", "limit", "timeout", "trace"] }
