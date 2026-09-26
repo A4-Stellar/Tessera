@@ -3,17 +3,30 @@
 //!
 //! The server starts the background indexer (which polls Soroban RPC every 10s)
 //! and serves the current in-memory snapshot over HTTP. It holds no secrets,
-//! signs nothing, and never mutates on-chain state.
+//! signs nothing, and never mutates on-chain state. The `signer` module it also
+//! ships is the HSM-backed signing path for the trusted jobs that *do* submit
+//! transactions (dividends, rent, registry updates): the Stellar key stays
+//! inside AWS KMS and only a signature ever leaves it.
 
 pub mod audit;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "DbRouter::route/primary gain callers with the PostgreSQL persistence layer (#42)"
+    )
+)]
+mod db;
 mod healthcheck;
 mod indexer;
 mod middleware;
 mod models;
 mod routes;
+mod services;
 mod ws;
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use indexer::{AppState, Config, Indexer};
 use metrics_exporter_prometheus::PrometheusBuilder;
@@ -35,6 +48,11 @@ async fn main() {
             std::process::exit(1);
         }
     };
+    // `tessera-api replay ...` (issue #104): admin backfill, then exit.
+    if std::env::args().nth(1).as_deref() == Some("replay") {
+        let rest: Vec<String> = std::env::args().skip(2).collect();
+        std::process::exit(indexer::replay::run_cli(&rest, &config).await);
+    }
     tracing::info!(
         rpc = ?config.rpc_urls,
         registry = %config.registry_id,
@@ -58,6 +76,16 @@ async fn main() {
     // by the indexer's poll loop so it stops issuing new refresh cycles
     // once the process is terminating, rather than racing shutdown.
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
+
+    // Issue #95: probe read replicas for availability and replication lag.
+    match db::DbRouter::from_env() {
+        Ok(Some(router)) => Arc::new(router).spawn_health_monitor(shutdown_rx.clone()),
+        Ok(None) => {}
+        Err(e) => {
+            tracing::error!(error = %e, "database config validation failed; exiting");
+            std::process::exit(1);
+        }
+    }
 
     // Spawn the indexer; it owns its own clone of the shared state.
     let indexer = Indexer::new(state.clone());
@@ -132,6 +160,7 @@ fn init_tracing() {
         .unwrap_or_else(|_| EnvFilter::new("tessera_api=info,tower_http=warn"));
     tracing_subscriber::registry()
         .with(filter)
-        .with(fmt::layer())
+        // Issue #103: every log record is PII-scrubbed before it is written.
+        .with(fmt::layer().with_writer(middleware::pii_scrubber::ScrubbingMakeWriter))
         .init();
 }

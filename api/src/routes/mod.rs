@@ -7,6 +7,7 @@ pub mod dividends;
 pub mod events;
 pub mod holders;
 pub mod search;
+pub mod security;
 pub mod simulate;
 pub mod stats;
 
@@ -124,6 +125,7 @@ pub fn router(state: AppState) -> Router {
             get(holders::by_address_compliance),
         )
         .route("/compliance/:address", get(compliance::for_address))
+        .route("/security/anomalies", get(security::list))
         .route("/audit/verify", get(audit::verify))
         .route(
             "/audit/entries",
@@ -159,6 +161,10 @@ pub fn router(state: AppState) -> Router {
             rate_limit_middleware,
         ))
         .layer(cors)
+        // Outermost: scrub PII from every JSON/text response (issue #103).
+        .layer(middleware::from_fn(
+            crate::middleware::pii_scrubber::pii_scrub_middleware,
+        ))
 }
 
 /// Issue #7: per-route Prometheus request counts and latencies.
@@ -258,6 +264,7 @@ async fn index() -> Json<serde_json::Value> {
             "GET /v1/holders/:address",
             "GET /v1/holders/:address/compliance",
             "GET /v1/compliance/:address",
+            "GET /v1/security/anomalies",
             "GET /health",
             "GET /metrics"
         ],
