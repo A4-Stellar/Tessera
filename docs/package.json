@@ -5,7 +5,7 @@
   "description": "Documentation site for Tessera — contracts, API and web app.",
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "node scripts/build-search-index.mjs && next build",
     "start": "next start",
     "lint": "next lint && eslint . --ext .tsx,.ts --plugin jsx-a11y",
     "lint:a11y": "eslint . --ext .tsx,.ts --plugin jsx-a11y",
@@ -19,6 +19,7 @@
     "@mdx-js/react": "^3.1.0",
     "@monaco-editor/react": "^4.7.0",
     "@next/mdx": "^14.2.5",
+    "@stellar/freighter-api": "^2.0.0",
     "@stellar/freighter-api": "^6.0.1",
     "@stellar/stellar-sdk": "^17.1.0",
     "flexsearch": "^0.7.43",
@@ -49,7 +50,9 @@
     "jest-axe": "^8.0.0",
     "jest-environment-jsdom": "^29.7.0",
     "postcss": "^8.4.38",
+    "remark": "^15.0.1",
     "tailwindcss": "^3.4.6",
-    "typescript": "^5.5.3"
+    "typescript": "^5.5.3",
+    "unist-util-visit": "^5.0.0"
   }
 }
