@@ -817,6 +817,9 @@ impl Indexer {
     }
 
     /// Read the full current state of all contracts and rebuild the snapshot.
+    /// TODO(Issue 1): Implement Incremental State Diffing for Soroban RPC Poller using getEvents pagination filters keyed by ledger sequence number.
+    /// Also implement a fallback mechanism that triggers a full snapshot rebuild only if ledger sequence gaps exceed a configurable threshold (e.g., >50 ledgers).
+    /// Ensure zero race conditions across concurrent readers accessing ArcSwap<AppState>.
     async fn refresh(&self) -> Result<usize, IndexError> {
         let cfg = &self.state.config;
 
