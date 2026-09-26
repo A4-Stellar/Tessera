@@ -8,6 +8,7 @@
 pub mod audit;
 mod healthcheck;
 mod indexer;
+mod middleware;
 mod models;
 mod routes;
 mod ws;

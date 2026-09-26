@@ -28,7 +28,7 @@ use axum::{
     Json, Router,
 };
 use serde_json::json;
-use tower_governor::{governor::GovernorConfigBuilder, GovernorLayer};
+use crate::middleware::rate_limit::{RateLimitState, MemoryRateLimiter, RedisRateLimiter, rate_limit_middleware};
 use tower_http::{cors::CorsLayer, limit::RequestBodyLimitLayer, timeout::TimeoutLayer};
 
 use crate::indexer::{AppState, POLL_INTERVAL};
@@ -88,16 +88,17 @@ pub fn router(state: AppState) -> Router {
     let per_second = env_value("RWA_RATE_LIMIT_PER_SECOND", RATE_LIMIT_PER_SECOND);
     let burst = env_value("RWA_RATE_LIMIT_BURST", RATE_LIMIT_BURST);
 
-    // Each request clones the in-memory snapshot, so cap how fast a single
-    // client can drive that cost. Checked before `cache_headers`, which
-    // itself touches shared state, so a throttled request stays cheap.
-    let governor_conf = Arc::new(
-        GovernorConfigBuilder::default()
-            .per_second(per_second)
-            .burst_size(burst)
-            .finish()
-            .expect("rate limit config: period and burst size are non-zero"),
-    );
+    // Rate limiter allows switching between memory and Redis
+    let limiter: Arc<dyn crate::middleware::rate_limit::RateLimiter> = if let Ok(redis_url) = std::env::var("RWA_RATE_LIMIT_REDIS_URL") {
+        Arc::new(RedisRateLimiter::new(&redis_url).expect("failed to connect to Redis"))
+    } else {
+        Arc::new(MemoryRateLimiter::new(per_second, burst))
+    };
+    let rate_limit_state = Arc::new(RateLimitState {
+        limiter,
+        limit: burst as u64,
+        window: (burst as u64).max(1) / per_second.max(1), // simple approximation for window if needed by Redis
+    });
 
     // Snapshot-backed endpoints: cacheable and safe to answer with 304 when
     // the client's ETag still matches the last indexed ledger.
@@ -150,9 +151,7 @@ pub fn router(state: AppState) -> Router {
             "RWA_MAX_BODY_BYTES",
             MAX_BODY_BYTES,
         )))
-        .layer(GovernorLayer {
-            config: governor_conf,
-        })
+        .layer(middleware::from_fn_with_state(rate_limit_state, rate_limit_middleware))
         .layer(cors)
 }
 
