@@ -43,6 +43,8 @@ pub enum Error {
     /// Appended for issue #11. Placed after the highest pre-existing error
     /// code (7) rather than renumbering anything.
     Paused = 8,
+    DripNotConfigured = 9,
+    InvalidSwapOutput = 10,
 }
 
 #[derive(Clone)]
@@ -53,6 +55,8 @@ enum DataKey {
     AllIds,
     Distribution(u64),
     Claimed(u64, Address),
+    DripAmm,
+    DripCapTable,
 }
 
 #[contract]
@@ -165,7 +169,7 @@ impl DividendContract {
         Self::require_not_paused(&env);
         holder.require_auth();
 
-        let mut dist = env
+        let mut dist: Distribution = env
             .storage()
             .persistent()
             .get(&DataKey::Distribution(distribution_id))
@@ -181,13 +185,35 @@ impl DividendContract {
             panic_with_error!(env, Error::NothingToClaim);
         }
 
-        Self::token_transfer(
-            &env,
-            &dist.payment_token,
-            &env.current_contract_address(),
-            &holder,
-            amount,
-        );
+        if drip::is_enabled(&env, &holder) {
+            let amm: Address = env
+                .storage()
+                .instance()
+                .get(&DataKey::DripAmm)
+                .unwrap_or_else(|| panic_with_error!(env, Error::DripNotConfigured));
+            let cap_table: Address = env
+                .storage()
+                .instance()
+                .get(&DataKey::DripCapTable)
+                .unwrap_or_else(|| panic_with_error!(env, Error::DripNotConfigured));
+            drip::execute(
+                &env,
+                &amm,
+                &cap_table,
+                &dist.payment_token,
+                &dist.asset_token,
+                &holder,
+                amount,
+            );
+        } else {
+            Self::token_transfer(
+                &env,
+                &dist.payment_token,
+                &env.current_contract_address(),
+                &holder,
+                amount,
+            );
+        }
 
         env.storage().persistent().set(&claimed_key, &true);
         dist.distributed = dist.distributed.saturating_add(amount);
@@ -200,6 +226,28 @@ impl DividendContract {
 
         env.events()
             .publish((symbol_short!("claim"), holder), (distribution_id, amount));
+    }
+
+    /// Opt in or out of receiving dividend claims as an AMM purchase of the
+    /// distribution's asset token. The preference is shared by all claims.
+    pub fn set_drip_preference(env: Env, holder: Address, enabled: bool) {
+        drip::set_preference(&env, &holder, enabled);
+    }
+
+    pub fn get_drip_preference(env: Env, holder: Address) -> bool {
+        drip::is_enabled(&env, &holder)
+    }
+
+    /// Configure the router and cap-table ledger used for opted-in claims.
+    /// The cap-table must separately authorize this contract as a registrar.
+    pub fn configure_drip(env: Env, admin: Address, amm: Address, cap_table: Address) {
+        Self::require_admin(&env, &admin);
+        env.storage().instance().set(&DataKey::DripAmm, &amm);
+        env.storage()
+            .instance()
+            .set(&DataKey::DripCapTable, &cap_table);
+        env.events()
+            .publish((symbol_short!("dripcfg"),), (amm, cap_table));
     }
 
     pub fn get_distribution(env: Env, id: u64) -> Distribution {
@@ -227,7 +275,9 @@ impl DividendContract {
     }
 
     pub fn has_claimed(env: Env, id: u64, holder: Address) -> bool {
-        env.storage().persistent().has(&DataKey::Claimed(id, holder))
+        env.storage()
+            .persistent()
+            .has(&DataKey::Claimed(id, holder))
     }
 
     /// Current contract ABI version, polled by the off-chain indexer.
@@ -291,4 +341,8 @@ impl DividendContract {
         env.invoke_contract(token, &Symbol::new(env, "total_supply"), args)
     }
 }
+pub mod drip;
 mod tax_withholding;
+
+#[cfg(test)]
+mod test;
