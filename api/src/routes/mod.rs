@@ -1,11 +1,15 @@
 //! HTTP routing and the shared API error type.
 
 pub mod assets;
+pub mod audit;
 pub mod compliance;
 pub mod dividends;
 pub mod events;
 pub mod holders;
 pub mod stats;
+pub mod search;
+pub mod security;
+pub mod simulate;
 
 #[cfg(test)]
 mod test_support;
@@ -25,7 +29,7 @@ use axum::{
     Json, Router,
 };
 use serde_json::json;
-use tower_governor::{governor::GovernorConfigBuilder, GovernorLayer};
+use crate::middleware::rate_limit::{RateLimitState, MemoryRateLimiter, RedisRateLimiter, rate_limit_middleware};
 use tower_http::{cors::CorsLayer, limit::RequestBodyLimitLayer, timeout::TimeoutLayer};
 
 use crate::indexer::{AppState, POLL_INTERVAL};
@@ -49,12 +53,14 @@ fn env_value<T: std::str::FromStr>(name: &str, default: T) -> T {
 #[derive(Debug)]
 pub enum ApiError {
     NotFound(String),
+    BadRequest(String),
 }
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, error, message) = match self {
             ApiError::NotFound(msg) => (StatusCode::NOT_FOUND, "not_found", msg),
+            ApiError::BadRequest(msg) => (StatusCode::BAD_REQUEST, "bad_request", msg),
         };
         (
             status,
@@ -77,22 +83,23 @@ pub fn router(state: AppState) -> Router {
         .collect::<Vec<_>>();
     let cors = CorsLayer::new()
         .allow_origin(origins)
-        .allow_methods([Method::GET])
+        .allow_methods([Method::GET, Method::POST])
         .allow_headers([header::CONTENT_TYPE]);
 
     let per_second = env_value("RWA_RATE_LIMIT_PER_SECOND", RATE_LIMIT_PER_SECOND);
     let burst = env_value("RWA_RATE_LIMIT_BURST", RATE_LIMIT_BURST);
 
-    // Each request clones the in-memory snapshot, so cap how fast a single
-    // client can drive that cost. Checked before `cache_headers`, which
-    // itself touches shared state, so a throttled request stays cheap.
-    let governor_conf = Arc::new(
-        GovernorConfigBuilder::default()
-            .per_second(per_second)
-            .burst_size(burst)
-            .finish()
-            .expect("rate limit config: period and burst size are non-zero"),
-    );
+    // Rate limiter allows switching between memory and Redis
+    let limiter: Arc<dyn crate::middleware::rate_limit::RateLimiter> = if let Ok(redis_url) = std::env::var("RWA_RATE_LIMIT_REDIS_URL") {
+        Arc::new(RedisRateLimiter::new(&redis_url).expect("failed to connect to Redis"))
+    } else {
+        Arc::new(MemoryRateLimiter::new(per_second, burst))
+    };
+    let rate_limit_state = Arc::new(RateLimitState {
+        limiter,
+        limit: burst as u64,
+        window: (burst as u64).max(1) / per_second.max(1), // simple approximation for window if needed by Redis
+    });
 
     // Snapshot-backed endpoints: cacheable and safe to answer with 304 when
     // the client's ETag still matches the last indexed ledger.
@@ -115,6 +122,15 @@ pub fn router(state: AppState) -> Router {
             get(holders::by_address_compliance),
         )
         .route("/compliance/:address", get(compliance::for_address))
+        .route("/security/anomalies", get(security::list))
+        .route("/audit/verify", get(audit::verify))
+        .route(
+            "/audit/entries",
+            get(audit::list_entries).post(audit::create_entry),
+        )
+        .route("/audit/entries/:sequence", get(audit::get_entry))
+        .route("/audit/anchors", get(audit::list_anchors))
+        .route("/audit/anchor", axum::routing::post(audit::publish_anchor))
         .layer(middleware::from_fn_with_state(state.clone(), cache_headers));
 
     Router::new()
@@ -123,6 +139,7 @@ pub fn router(state: AppState) -> Router {
         .route("/health", get(health))
         .route("/metrics", get(metrics))
         .nest("/v1", data_routes)
+        .route("/v1/ws", get(crate::ws::handler))
         // `route_layer` (rather than `layer`) so the middleware runs after
         // route matching and can read `MatchedPath` from the request
         // extensions for a low-cardinality route label.
@@ -136,10 +153,12 @@ pub fn router(state: AppState) -> Router {
             "RWA_MAX_BODY_BYTES",
             MAX_BODY_BYTES,
         )))
-        .layer(GovernorLayer {
-            config: governor_conf,
-        })
+        .layer(middleware::from_fn_with_state(rate_limit_state, rate_limit_middleware))
         .layer(cors)
+        // Outermost: scrub PII from every JSON/text response (issue #103).
+        .layer(middleware::from_fn(
+            crate::middleware::pii_scrubber::pii_scrub_middleware,
+        ))
 }
 
 /// Issue #7: per-route Prometheus request counts and latencies.
@@ -239,6 +258,7 @@ async fn index() -> Json<serde_json::Value> {
             "GET /v1/holders/:address",
             "GET /v1/holders/:address/compliance",
             "GET /v1/compliance/:address",
+            "GET /v1/security/anomalies",
             "GET /health",
             "GET /metrics"
         ],

@@ -1,5 +1,3 @@
-//! Application services layer.
-//!
-//! Currently exposes:
-//! - [`webhook`] — Real-time webhook notification dispatcher (issue #43).
-pub mod webhook;
+//! Application services layered on top of the indexer.
+
+pub mod anomaly_detector;

@@ -1,0 +1,70 @@
+use soroban_sdk::{testutils::Address as _, Address, Env, String};
+
+use {{crate_name}}::{{{contract_name}}, {{contract_name}}Client};
+
+#[test]
+fn initializes_with_selected_configuration() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let contract_id = env.register({{contract_name}}, ());
+    let client = {{contract_name}}Client::new(&env, &contract_id);
+    let name = String::from_str(&env, "{{package_name}}");
+    let symbol = String::from_str(&env, "{{symbol}}");
+
+    client.initialize(&admin, &name, &symbol, &100);
+
+    let details = client.details();
+    let expected_asset_type = String::from_str(&env, "{{asset_type}}");
+    let expected_compliance_model = String::from_str(&env, "{{compliance_model}}");
+    let expected_dividend_strategy = String::from_str(&env, "{{dividend_strategy}}");
+    assert_eq!(details.name, name);
+    assert_eq!(details.symbol, symbol);
+    assert_eq!(details.asset_type, expected_asset_type);
+    assert_eq!(details.compliance_model, expected_compliance_model);
+    assert_eq!(details.dividend_strategy, expected_dividend_strategy);
+    assert_eq!(details.admin, admin);
+    assert_eq!(details.total_supply, 100);
+}
+
+#[test]
+fn transfers_only_compliant_balances() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let holder = Address::generate(&env);
+    let contract_id = env.register({{contract_name}}, ());
+    let client = {{contract_name}}Client::new(&env, &contract_id);
+    let name = String::from_str(&env, "{{package_name}}");
+    let symbol = String::from_str(&env, "{{symbol}}");
+
+    client.initialize(&admin, &name, &symbol, &100);
+    client.set_compliance(&admin, &admin, &true);
+    client.set_compliance(&admin, &holder, &true);
+    client.transfer(&admin, &holder, &25);
+
+    assert_eq!(client.balance(&admin), 75);
+    assert_eq!(client.balance(&holder), 25);
+    assert!(client.is_compliant(&holder));
+    assert!(client.try_transfer(&admin, &holder, &0).is_err());
+}
+
+#[test]
+fn previews_the_selected_dividend_strategy() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let holder = Address::generate(&env);
+    let contract_id = env.register({{contract_name}}, ());
+    let client = {{contract_name}}Client::new(&env, &contract_id);
+    let name = String::from_str(&env, "{{package_name}}");
+    let symbol = String::from_str(&env, "{{symbol}}");
+
+    client.initialize(&admin, &name, &symbol, &100);
+    client.set_compliance(&admin, &admin, &true);
+    client.set_compliance(&admin, &holder, &true);
+    client.transfer(&admin, &holder, &25);
+    let distribution_id = client.create_distribution(&admin, &50);
+
+    assert_eq!(client.dividend_preview(&distribution_id, &holder), {{expected_dividend}});
+}

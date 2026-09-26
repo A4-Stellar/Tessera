@@ -7,6 +7,9 @@ import { EventExplorer } from "@/components/EventExplorer";
 import { ApiEndpoint } from "@/components/ApiEndpoint";
 import { ApiPlayground } from "@/components/ApiPlayground";
 import { CapTableVisualizer } from "@/components/CapTableVisualizer";
+import { ProspectusViewer } from "@/components/ProspectusViewer";
+import { LazyProspectusViewer } from "@/components/LazyProspectusViewer";
+import { SorobanIDE } from "@/components/SorobanIDE";
 
 /**
  * Global MDX component map. Custom components (CalloutBox, ApiEndpoint,
@@ -38,6 +41,9 @@ export function useMDXComponents(components: MDXComponents): MDXComponents {
     ApiEndpoint,
     ApiPlayground,
     CapTableVisualizer,
+    ProspectusViewer,
+    LazyProspectusViewer,
+    SorobanIDE,
     ...components,
   };
 }
