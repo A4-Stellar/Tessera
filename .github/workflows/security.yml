@@ -102,7 +102,7 @@ jobs:
           tags: tessera-api:security-scan
 
       - name: Run Trivy Vulnerability Scanner (Table Output)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
         with:
           image-ref: tessera-api:security-scan
           format: table
@@ -112,7 +112,7 @@ jobs:
           severity: CRITICAL,HIGH
 
       - name: Run Trivy Vulnerability Scanner (SARIF Report)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
         with:
           image-ref: tessera-api:security-scan
           format: sarif

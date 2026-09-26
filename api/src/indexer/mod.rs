@@ -110,8 +110,11 @@ impl Config {
         } else {
             env_or("RWA_RPC_URL", TESTNET_RPC)
         };
-        
-        let rpc_urls: Vec<String> = rpc_urls_str.split(',').map(|s| s.trim().to_string()).collect();
+
+        let rpc_urls: Vec<String> = rpc_urls_str
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .collect();
         for rpc_url in &rpc_urls {
             url::Url::parse(rpc_url).map_err(|e| ConfigError::RpcUrl(format!("{e}: {rpc_url}")))?;
         }

@@ -22,10 +22,10 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
     metrics::gauge!("active_websocket_connections").increment(1.0);
 
     let mut subscriptions: HashSet<String> = HashSet::new();
-    
+
     let mut ping_interval = interval(Duration::from_secs(15));
     let mut poll_interval = interval(Duration::from_secs(2));
-    
+
     let mut last_events_count = state.snapshot().events.len();
 
     loop {
@@ -61,13 +61,13 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
             _ = poll_interval.tick() => {
                 let snapshot = state.snapshot();
                 let current_events = &snapshot.events;
-                
+
                 if current_events.len() > last_events_count {
                     let new_events = &current_events[last_events_count..];
-                    
+
                     for event in new_events {
                         let mut should_send = subscriptions.is_empty(); // If no subscriptions, do we send all? Let's say no, only send if matches. Or send all if empty? Usually send all if no sub. Wait, no, only send what is subscribed.
-                        
+
                         // If there are subscriptions, check if event matches any
                         for sub in &subscriptions {
                             if matches_subscription(event, sub) {
@@ -75,7 +75,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                                 break;
                             }
                         }
-                        
+
                         if should_send {
                             if let Ok(msg) = serde_json::to_string(event) {
                                 if socket.send(Message::Text(msg)).await.is_err() {
@@ -84,7 +84,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                             }
                         }
                     }
-                    
+
                     last_events_count = current_events.len();
                 }
             }
