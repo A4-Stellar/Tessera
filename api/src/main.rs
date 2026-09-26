@@ -6,6 +6,14 @@
 //! signs nothing, and never mutates on-chain state.
 
 pub mod audit;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "DbRouter::route/primary gain callers with the PostgreSQL persistence layer (#42)"
+    )
+)]
+mod db;
 mod healthcheck;
 mod indexer;
 mod middleware;
@@ -14,6 +22,7 @@ mod routes;
 mod ws;
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use indexer::{AppState, Config, Indexer};
 use metrics_exporter_prometheus::PrometheusBuilder;
@@ -58,6 +67,16 @@ async fn main() {
     // by the indexer's poll loop so it stops issuing new refresh cycles
     // once the process is terminating, rather than racing shutdown.
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
+
+    // Issue #95: probe read replicas for availability and replication lag.
+    match db::DbRouter::from_env() {
+        Ok(Some(router)) => Arc::new(router).spawn_health_monitor(shutdown_rx.clone()),
+        Ok(None) => {}
+        Err(e) => {
+            tracing::error!(error = %e, "database config validation failed; exiting");
+            std::process::exit(1);
+        }
+    }
 
     // Spawn the indexer; it owns its own clone of the shared state.
     let indexer = Indexer::new(state.clone());
