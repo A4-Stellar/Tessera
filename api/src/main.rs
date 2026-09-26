@@ -5,6 +5,7 @@
 //! and serves the current in-memory snapshot over HTTP. It holds no secrets,
 //! signs nothing, and never mutates on-chain state.
 
+mod healthcheck;
 mod indexer;
 mod models;
 mod routes;
@@ -17,6 +18,11 @@ use tokio::sync::watch;
 
 #[tokio::main]
 async fn main() {
+    // Container health probe (#26): the distroless image has no curl/shell.
+    if std::env::args().nth(1).as_deref() == Some("healthcheck") {
+        std::process::exit(healthcheck::run());
+    }
+
     init_tracing();
 
     let config = match Config::from_env() {
