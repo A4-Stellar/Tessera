@@ -2520,6 +2520,7 @@ dependencies = [
  "arc-swap",
  "async-trait",
  "axum 0.7.9",
+ "base64 0.22.1",
  "chrono",
  "criterion",
  "futures",
@@ -2548,6 +2549,7 @@ dependencies = [
  "url",
  "utoipa",
  "utoipa-swagger-ui",
+ "zeroize",
 ]
 
 [[package]]
