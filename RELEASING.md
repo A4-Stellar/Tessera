@@ -74,7 +74,10 @@ From a clean `main` checkout:
    the next changelog run, so the v<X+1>.Y.<Z+1> section won't end up with a
    "Chores: chore(release): v<X>.<Y>.<Z>" bullet describing the bump itself.
 
-5. **Tag and push.**
+5. **Tag and push.** First run the **Load Test** workflow on `main` (Actions →
+   Load Test → Run workflow, or `gh workflow run load-test.yml --ref main`) and
+   tag only if it passes: it fails when p95 latency reaches 50 ms, the error
+   rate reaches 0.01 %, or 2,000 req/s is not sustained.
    ```sh
    git tag -s v<X>.<Y>.<Z> -m 'v<X>.<Y>.<Z>'   # sign if you have a GPG key configured
    git push origin main --follow-tags

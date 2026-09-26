@@ -1,0 +1,26 @@
+{
+  "name": "tessera-edge-shield",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Cloudflare Worker edge shield for the Tessera API: header validation, per-IP rate limiting, edge JWT verification, SQLi/bot blocking and stale-while-revalidate caching.",
+  "type": "module",
+  "main": "worker.js",
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "dev": "npx --yes wrangler dev",
+    "deploy": "npx --yes wrangler deploy",
+    "deploy:dry-run": "npx --yes wrangler deploy --dry-run --outdir dist"
+  },
+  "keywords": [
+    "cloudflare-workers",
+    "edge-security",
+    "rate-limiting",
+    "jwt",
+    "stellar",
+    "tessera"
+  ],
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
