@@ -15,6 +15,7 @@
 pub mod diagnostics;
 pub mod nav_calculator;
 pub mod price_feed;
+pub mod replay;
 pub mod rpc_client;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -213,6 +214,8 @@ pub struct AppState {
     pub config: Arc<Config>,
     pub metrics: PrometheusHandle,
     pub audit: Arc<crate::audit::AuditLog>,
+    /// Real-time anomaly detector (issue #101).
+    pub anomalies: Arc<crate::services::anomaly_detector::AnomalyDetector>,
 }
 
 impl AppState {
@@ -222,6 +225,7 @@ impl AppState {
             config: Arc::new(config),
             metrics,
             audit: Arc::new(crate::audit::AuditLog::new()),
+            anomalies: Arc::new(crate::services::anomaly_detector::AnomalyDetector::default()),
         }
     }
 
@@ -853,13 +857,21 @@ impl Indexer {
             last_updated: Some(chrono::Utc::now().to_rfc3339()),
         };
 
+        // Events persisted by `tessera-api replay` (issue #104). Events not
+        // seen in the previous snapshot are also fed to the anomaly
+        // detector (issue #101) so replayed/backfilled activity is scored once.
+        let events = replay::stored_events().unwrap_or_else(|| prev.events.clone());
+        let known: HashSet<u64> = prev.events.iter().map(|e| e.id).collect();
+        let fresh: Vec<Event> = events.iter().filter(|e| !known.contains(&e.id)).cloned().collect();
+        self.state.anomalies.observe_events(&fresh);
+
         let count = assets.len();
         self.state.replace(Snapshot {
             assets,
             holders: holders_map,
             compliance: compliance_map,
             dividends: dividends_map,
-            events: Vec::new(),
+            events,
             diagnostics: diagnostics_map,
             stats,
         });
@@ -1150,7 +1162,7 @@ mod tests {
     #[test]
     fn retry_delay_is_bounded_and_grows() {
         for attempt in 1..=6 {
-            let delay = retry_delay(attempt);
+            let delay = rpc_client::retry_delay(attempt);
             assert!(delay <= RETRY_MAX_DELAY);
         }
         // The cap for attempt 1 is the base delay; later attempts have a
@@ -1389,7 +1401,7 @@ mod tests {
         );
         let url = spawn_rpc_stub(router).await;
 
-        let rpc = Rpc::new(url, STUB_SOURCE.to_string());
+        let rpc = rpc_client::RpcClient::new(vec![url], STUB_SOURCE.to_string());
         let started = Instant::now();
         let err = rpc
             .read(STUB_CONTRACT, "get_assets", vec![])
@@ -1464,7 +1476,7 @@ mod tests {
         let base = spawn_rpc_stub(router).await;
 
         let read = |path: &str| {
-            let rpc = Rpc::new(format!("{base}{path}"), STUB_SOURCE.to_string());
+            let rpc = rpc_client::RpcClient::new(vec![format!("{base}{path}")], STUB_SOURCE.to_string());
             async move { rpc.read(STUB_CONTRACT, "get_assets", vec![]).await }
         };
 

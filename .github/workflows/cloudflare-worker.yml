@@ -1,0 +1,34 @@
+name: Cloudflare Worker
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "infrastructure/cloudflare/**"
+      - ".github/workflows/cloudflare-worker.yml"
+  pull_request:
+    branches: [main, master]
+    paths:
+      - "infrastructure/cloudflare/**"
+      - ".github/workflows/cloudflare-worker.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  worker:
+    name: Worker Tests and Wrangler Validation
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infrastructure/cloudflare
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Run Worker Tests
+        run: npm test
+      - name: Validate Wrangler Bundle
+        run: npm run check:deploy
