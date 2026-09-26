@@ -34,7 +34,7 @@ async fn main() {
         }
     };
     tracing::info!(
-        rpc = %config.rpc_url,
+        rpc = ?config.rpc_urls,
         registry = %config.registry_id,
         "starting stellar-rwa-api"
     );
