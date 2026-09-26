@@ -7,6 +7,7 @@
 
 mod healthcheck;
 mod indexer;
+mod middleware;
 mod models;
 mod routes;
 
