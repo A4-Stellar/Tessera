@@ -9,6 +9,7 @@ mod healthcheck;
 mod indexer;
 mod models;
 mod routes;
+mod ws;
 
 use std::net::SocketAddr;
 
