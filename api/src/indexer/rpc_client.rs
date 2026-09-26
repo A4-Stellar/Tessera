@@ -185,7 +185,10 @@ impl RpcClient {
                 endpoints[idx].url.clone()
             };
             let started = Instant::now();
-            match self.read_once_inner(&url, contract, method, args.clone()).await {
+            match self
+                .read_once_inner(&url, contract, method, args.clone())
+                .await
+            {
                 Ok(outcome) => {
                     let latency = started.elapsed();
                     metrics::histogram!("soroban_rpc_simulation_duration_seconds", "method" => method.to_string())

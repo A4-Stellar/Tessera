@@ -74,10 +74,18 @@ export default function SearchModal() {
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center pt-16 sm:pt-24 bg-black/50" onClick={() => setIsOpen(false)}>
-      <div 
+    <div className="fixed inset-0 z-50 flex items-start justify-center pt-16 sm:pt-24">
+      <button
+        type="button"
+        className="absolute inset-0 h-full w-full cursor-default bg-black/50"
+        aria-label="Close search"
+        onClick={() => setIsOpen(false)}
+      />
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Search documentation"
         className="w-full max-w-xl bg-white dark:bg-gray-900 rounded-xl shadow-2xl overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
       >
         <div className="p-4 border-b border-gray-200 dark:border-gray-800 flex items-center">
           <svg className="w-5 h-5 text-gray-400 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
@@ -100,23 +108,25 @@ export default function SearchModal() {
         {results.length > 0 && (
           <ul className="max-h-96 overflow-y-auto p-2">
             {results.map((res, i) => (
-              <li
-                key={res.id}
-                className={`p-3 rounded-lg cursor-pointer flex flex-col gap-1 ${
-                  i === activeIndex 
-                    ? 'bg-blue-50 dark:bg-blue-900/30' 
-                    : 'hover:bg-gray-50 dark:hover:bg-gray-800/50'
-                }`}
-                onClick={() => handleSelect(res)}
-                onMouseEnter={() => setActiveIndex(i)}
-              >
-                <div className="font-medium text-gray-900 dark:text-white flex justify-between">
-                  <span>{res.title}</span>
-                  <span className="text-xs text-gray-400">{res.route}</span>
-                </div>
-                <div className="text-sm text-gray-500 dark:text-gray-400 truncate">
-                  {res.headers ? res.headers : res.content.substring(0, 100) + "..."}
-                </div>
+              <li key={res.id}>
+                <button
+                  type="button"
+                  className={`w-full p-3 text-left rounded-lg cursor-pointer flex flex-col gap-1 ${
+                    i === activeIndex
+                      ? 'bg-blue-50 dark:bg-blue-900/30'
+                      : 'hover:bg-gray-50 dark:hover:bg-gray-800/50'
+                  }`}
+                  onClick={() => handleSelect(res)}
+                  onMouseEnter={() => setActiveIndex(i)}
+                >
+                  <div className="font-medium text-gray-900 dark:text-white flex justify-between">
+                    <span>{res.title}</span>
+                    <span className="text-xs text-gray-400">{res.route}</span>
+                  </div>
+                  <div className="text-sm text-gray-500 dark:text-gray-400 truncate">
+                    {res.headers ? res.headers : res.content.substring(0, 100) + "..."}
+                  </div>
+                </button>
               </li>
             ))}
           </ul>
@@ -124,7 +134,7 @@ export default function SearchModal() {
         
         {query && results.length === 0 && (
           <div className="p-8 text-center text-gray-500 dark:text-gray-400">
-            No results found for "{query}"
+            No results found for &ldquo;{query}&rdquo;
           </div>
         )}
       </div>

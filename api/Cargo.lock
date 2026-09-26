@@ -2522,8 +2522,6 @@ dependencies = [
  "axum 0.7.9",
  "base64 0.22.1",
  "chrono",
- "criterion",
- "futures",
  "governor",
  "hex",
  "insta",

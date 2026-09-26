@@ -18,22 +18,30 @@ export function useFreighterWallet() {
     let intervalId: NodeJS.Timeout;
     
     const checkInstallation = async () => {
-      if (typeof window !== 'undefined') {
-        const connected = await isConnected();
-        setIsInstalled(connected);
-        if (connected) {
+      try {
+        if (typeof window !== 'undefined') {
+          const connected = await isConnected();
+          if (connected.error) throw new Error(connected.error.message);
+        setIsInstalled(connected.isConnected);
+        if (connected.isConnected) {
           const allowed = await isAllowed();
-          if (allowed) {
+          if (allowed.error) throw new Error(allowed.error.message);
+          if (allowed.isAllowed) {
             try {
               const addr = await getAddress();
-              setAddress(addr);
+              if (addr.error) throw new Error(addr.error.message);
+              setAddress(addr.address);
               const net = await getNetworkDetails();
+              if (net.error) throw new Error(net.error.message);
               setNetwork(net.network);
             } catch (err) {
               console.error(err);
             }
           }
         }
+        }
+      } catch (err) {
+        console.error(err);
       }
     };
     checkInstallation();
@@ -42,14 +50,18 @@ export function useFreighterWallet() {
     intervalId = setInterval(async () => {
       if (typeof window !== 'undefined') {
         const connected = await isConnected();
-        if (connected) {
+        if (connected.error) return;
+        if (connected.isConnected) {
           const allowed = await isAllowed();
-          if (allowed) {
+          if (allowed.error) return;
+          if (allowed.isAllowed) {
             try {
               const addr = await getAddress();
+              if (addr.error) throw new Error(addr.error.message);
               const net = await getNetworkDetails();
+              if (net.error) throw new Error(net.error.message);
               setAddress((prev) => {
-                if (prev !== addr) return addr;
+                if (prev !== addr.address) return addr.address;
                 return prev;
               });
               setNetwork((prev) => {
@@ -71,17 +83,20 @@ export function useFreighterWallet() {
     setIsConnecting(true);
     setError(null);
     try {
-      const allowed = await requestAccess();
-      if (allowed) {
+      const access = await requestAccess();
+      if (access.error) throw new Error(access.error.message);
+      if (access.address) {
         const addr = await getAddress();
-        setAddress(addr);
+        if (addr.error) throw new Error(addr.error.message);
+        setAddress(addr.address);
         const net = await getNetworkDetails();
+        if (net.error) throw new Error(net.error.message);
         setNetwork(net.network);
       } else {
         setError('Connection rejected');
       }
-    } catch (e: any) {
-      setError(e.message || 'Failed to connect');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to connect');
     } finally {
       setIsConnecting(false);
     }
