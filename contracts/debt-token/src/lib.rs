@@ -1,4 +1,6 @@
 #![no_std]
+pub mod interest_rate;
+
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Symbol};
 
 #[contracttype]
@@ -70,6 +72,31 @@ impl DebtTokenAmortization {
         env.events().publish((Symbol::new(&env, "interest_accrued"), tranche), amount);
     }
     
+    /// Issue #85: set kinked-curve parameters (first caller becomes rate admin).
+    pub fn set_rate_params(env: Env, admin: Address, params: interest_rate::RateParams) {
+        interest_rate::do_set_rate_params(&env, admin, params);
+    }
+
+    pub fn get_rate_params(env: Env) -> interest_rate::RateParams {
+        interest_rate::get_params(&env)
+    }
+
+    /// Annual borrow rate (WAD) for the given pool balances.
+    pub fn current_borrow_rate(env: Env, borrowed: i128, available: i128) -> i128 {
+        let u = interest_rate::utilization(&env, borrowed, available);
+        interest_rate::borrow_rate(&env, &interest_rate::get_params(&env), u)
+    }
+
+    /// Pool utilization (WAD).
+    pub fn pool_utilization(env: Env, borrowed: i128, available: i128) -> i128 {
+        interest_rate::utilization(&env, borrowed, available)
+    }
+
+    /// Accrue the WAD borrow index to the current ledger time; returns it.
+    pub fn accrue_rate_index(env: Env, borrowed: i128, available: i128) -> i128 {
+        interest_rate::do_accrue_index(&env, borrowed, available)
+    }
+
     pub fn trigger_default(env: Env) {
         env.events().publish((Symbol::new(&env, "default_triggered"),), ());
     }
