@@ -46,7 +46,9 @@
     "jest-axe": "^8.0.0",
     "jest-environment-jsdom": "^29.7.0",
     "postcss": "^8.4.38",
+    "remark": "^15.0.1",
     "tailwindcss": "^3.4.6",
-    "typescript": "^5.5.3"
+    "typescript": "^5.5.3",
+    "unist-util-visit": "^5.0.0"
   }
 }
