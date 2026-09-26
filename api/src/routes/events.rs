@@ -28,7 +28,7 @@ mod tests {
             .route("/events", get(super::list))
             .with_state(AppState::for_test(
                 crate::indexer::Config {
-                    rpc_url: "https://soroban-testnet.stellar.org".to_string(),
+                    rpc_urls: vec!["https://soroban-testnet.stellar.org".to_string()],
                     registry_id: "CBX5SMLTXX6JP4HA5GQIO2V6QM7WCUGL2GZ6D4U773HMRI6RXISKPUR3"
                         .to_string(),
                     dividend_id: "CAR4XY3CEBQWFOL27JEWFW34KXSIZA7RFKDQMEIV7ZU723RWY37I2SYX"

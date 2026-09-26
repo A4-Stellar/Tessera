@@ -1,11 +1,13 @@
 //! HTTP routing and the shared API error type.
 
 pub mod assets;
+pub mod audit;
 pub mod compliance;
 pub mod dividends;
 pub mod events;
 pub mod holders;
 pub mod stats;
+pub mod simulate;
 
 #[cfg(test)]
 mod test_support;
@@ -49,12 +51,14 @@ fn env_value<T: std::str::FromStr>(name: &str, default: T) -> T {
 #[derive(Debug)]
 pub enum ApiError {
     NotFound(String),
+    BadRequest(String),
 }
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, error, message) = match self {
             ApiError::NotFound(msg) => (StatusCode::NOT_FOUND, "not_found", msg),
+            ApiError::BadRequest(msg) => (StatusCode::BAD_REQUEST, "bad_request", msg),
         };
         (
             status,
@@ -77,7 +81,7 @@ pub fn router(state: AppState) -> Router {
         .collect::<Vec<_>>();
     let cors = CorsLayer::new()
         .allow_origin(origins)
-        .allow_methods([Method::GET])
+        .allow_methods([Method::GET, Method::POST])
         .allow_headers([header::CONTENT_TYPE]);
 
     let per_second = env_value("RWA_RATE_LIMIT_PER_SECOND", RATE_LIMIT_PER_SECOND);
@@ -115,6 +119,14 @@ pub fn router(state: AppState) -> Router {
             get(holders::by_address_compliance),
         )
         .route("/compliance/:address", get(compliance::for_address))
+        .route("/audit/verify", get(audit::verify))
+        .route(
+            "/audit/entries",
+            get(audit::list_entries).post(audit::create_entry),
+        )
+        .route("/audit/entries/:sequence", get(audit::get_entry))
+        .route("/audit/anchors", get(audit::list_anchors))
+        .route("/audit/anchor", axum::routing::post(audit::publish_anchor))
         .layer(middleware::from_fn_with_state(state.clone(), cache_headers));
 
     Router::new()
@@ -123,6 +135,7 @@ pub fn router(state: AppState) -> Router {
         .route("/health", get(health))
         .route("/metrics", get(metrics))
         .nest("/v1", data_routes)
+        .route("/v1/ws", get(crate::ws::handler))
         // `route_layer` (rather than `layer`) so the middleware runs after
         // route matching and can read `MatchedPath` from the request
         // extensions for a low-cardinality route label.
