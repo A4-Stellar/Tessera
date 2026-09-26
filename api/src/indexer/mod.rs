@@ -15,6 +15,7 @@
 pub mod diagnostics;
 pub mod nav_calculator;
 pub mod price_feed;
+pub mod replay;
 pub mod rpc_client;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -210,6 +211,8 @@ pub struct AppState {
     pub config: Arc<Config>,
     pub metrics: PrometheusHandle,
     pub audit: Arc<crate::audit::AuditLog>,
+    /// Real-time anomaly detector (issue #101).
+    pub anomalies: Arc<crate::services::anomaly_detector::AnomalyDetector>,
 }
 
 impl AppState {
@@ -219,6 +222,7 @@ impl AppState {
             config: Arc::new(config),
             metrics,
             audit: Arc::new(crate::audit::AuditLog::new()),
+            anomalies: Arc::new(crate::services::anomaly_detector::AnomalyDetector::default()),
         }
     }
 
@@ -850,13 +854,21 @@ impl Indexer {
             last_updated: Some(chrono::Utc::now().to_rfc3339()),
         };
 
+        // Events persisted by `tessera-api replay` (issue #104). Events not
+        // seen in the previous snapshot are also fed to the anomaly
+        // detector (issue #101) so replayed/backfilled activity is scored once.
+        let events = replay::stored_events().unwrap_or_else(|| prev.events.clone());
+        let known: HashSet<u64> = prev.events.iter().map(|e| e.id).collect();
+        let fresh: Vec<Event> = events.iter().filter(|e| !known.contains(&e.id)).cloned().collect();
+        self.state.anomalies.observe_events(&fresh);
+
         let count = assets.len();
         self.state.replace(Snapshot {
             assets,
             holders: holders_map,
             compliance: compliance_map,
             dividends: dividends_map,
-            events: Vec::new(),
+            events,
             diagnostics: diagnostics_map,
             stats,
         });

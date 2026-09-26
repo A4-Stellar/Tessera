@@ -11,6 +11,7 @@ mod indexer;
 mod middleware;
 mod models;
 mod routes;
+mod services;
 mod ws;
 
 use std::net::SocketAddr;
@@ -35,6 +36,11 @@ async fn main() {
             std::process::exit(1);
         }
     };
+    // `tessera-api replay ...` (issue #104): admin backfill, then exit.
+    if std::env::args().nth(1).as_deref() == Some("replay") {
+        let rest: Vec<String> = std::env::args().skip(2).collect();
+        std::process::exit(indexer::replay::run_cli(&rest, &config).await);
+    }
     tracing::info!(
         rpc = ?config.rpc_urls,
         registry = %config.registry_id,
@@ -132,6 +138,7 @@ fn init_tracing() {
         .unwrap_or_else(|_| EnvFilter::new("tessera_api=info,tower_http=warn"));
     tracing_subscriber::registry()
         .with(filter)
-        .with(fmt::layer())
+        // Issue #103: every log record is PII-scrubbed before it is written.
+        .with(fmt::layer().with_writer(middleware::pii_scrubber::ScrubbingMakeWriter))
         .init();
 }
