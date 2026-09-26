@@ -3,7 +3,10 @@
 //!
 //! The server starts the background indexer (which polls Soroban RPC every 10s)
 //! and serves the current in-memory snapshot over HTTP. It holds no secrets,
-//! signs nothing, and never mutates on-chain state.
+//! signs nothing, and never mutates on-chain state. The `signer` module it also
+//! ships is the HSM-backed signing path for the trusted jobs that *do* submit
+//! transactions (dividends, rent, registry updates): the Stellar key stays
+//! inside AWS KMS and only a signature ever leaves it.
 
 pub mod audit;
 #[cfg_attr(
