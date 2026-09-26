@@ -2047,6 +2047,7 @@ dependencies = [
  "async-trait",
  "axum",
  "axum 0.7.9",
+ "base64 0.22.1",
  "chrono",
  "hex",
  "insta",
@@ -2070,6 +2071,7 @@ dependencies = [
  "url",
  "utoipa",
  "utoipa-swagger-ui",
+ "zeroize",
 ]
 
 [[package]]
