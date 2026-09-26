@@ -1,18 +1,63 @@
-name = "tessera-edge-security"
+# Tessera edge shield — Cloudflare Worker configuration.
+#
+# Deploy with any of:
+#   ./deploy.sh                 # creates the KV namespace on first run, then deploys
+#   npx wrangler deploy         # when the KV id below is already filled in
+#   npm run deploy:dry-run      # bundles without touching the account
+#
+# Secrets are NOT stored here. Set them with `wrangler secret put` (see README).
+
+name = "tessera-edge-shield"
 main = "worker.js"
-compatibility_date = "2026-09-26"
-workers_dev = false
+compatibility_date = "2024-09-23"
+workers_dev = true
 
-# Change this route if the API hostname differs in your Cloudflare zone.
-routes = [{ pattern = "api.tessera.xyz/*", zone_name = "tessera.xyz" }]
+# ---------------------------------------------------------------------------
+# Per-IP rate-limit counters (Workers KV).
+#
+# `deploy.sh` runs `wrangler kv namespace create RATE_LIMIT` on the first
+# deploy and substitutes the real id for the placeholder below, so the account
+# specific id is never committed by hand.
+# ---------------------------------------------------------------------------
+[[kv_namespaces]]
+binding = "RATE_LIMIT"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"
 
+# ---------------------------------------------------------------------------
+# Plain-text bindings. Override per environment as needed.
+# ---------------------------------------------------------------------------
 [vars]
-API_ORIGIN = "https://replace-with-origin.example.com"
-ALLOWED_HOSTS = "api.tessera.xyz"
-JWT_ISSUER = "tessera-api"
-JWT_AUDIENCE = "tessera-api"
+# Required: the origin the worker proxies to (ALB DNS name, CloudFront domain,
+# or the public API hostname during a staged rollout).
+ORIGIN_URL = "https://api.tessera.xyz"
 
-[[ratelimits]]
-name = "IP_RATE_LIMIT"
-namespace_id = "1001"
-simple = { limit = 120, period = 60 }
+# Per-IP sliding window (matches docs/app/docs/api/rate-limits/page.mdx: 300/min).
+RATE_LIMIT_MAX = "300"
+RATE_LIMIT_WINDOW_SECONDS = "60"
+RATE_LIMIT_FAIL_OPEN = "true"
+
+# Static REST responses cached at the edge with stale-while-revalidate.
+CACHE_PATHS = "/stats,/assets,/v1/stats,/v1/assets"
+CACHE_TTL_SECONDS = "30"
+CACHE_STALE_SECONDS = "120"
+
+# Edge JWT verification. RS256/ES256 use JWT_JWKS_URL; HS256 uses JWT_SECRET.
+JWT_ALGORITHMS = "RS256,ES256,HS256"
+JWT_JWKS_URL = "https://auth.tessera.xyz/.well-known/jwks.json"
+JWT_ISSUER = "https://auth.tessera.xyz"
+JWT_AUDIENCE = "tessera-api"
+# Require a token on the protected write/audit surface. Space/comma separated;
+# a trailing `*` means prefix match.
+JWT_REQUIRED_PATHS = "/v1/audit/*"
+
+# Bot / injection heuristics.
+BOT_PROTECTION = "true"
+
+# Uncomment to require a client header on every request, e.g. an API version.
+# REQUIRED_HEADERS = "x-api-version"
+
+# ---------------------------------------------------------------------------
+# Secrets — set out-of-band, never in this file:
+#   npx wrangler secret put JWT_SECRET      # HS256 signing key
+#   npx wrangler secret put JWT_JWKS_URL    # if you prefer not to keep it in vars
+# ---------------------------------------------------------------------------
