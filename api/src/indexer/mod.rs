@@ -12,6 +12,7 @@
 //! [`POLL_INTERVAL`] rather than panicking, so the API always keeps serving
 //! the last good snapshot.
 
+pub mod archive;
 pub mod diagnostics;
 pub mod nav_calculator;
 pub mod price_feed;
@@ -111,7 +112,7 @@ impl Config {
         } else {
             env_or("RWA_RPC_URL", TESTNET_RPC)
         };
-        
+
         let rpc_urls: Vec<String> = rpc_urls_str.split(',').map(|s| s.trim().to_string()).collect();
         for rpc_url in &rpc_urls {
             url::Url::parse(rpc_url).map_err(|e| ConfigError::RpcUrl(format!("{e}: {rpc_url}")))?;
