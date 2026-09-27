@@ -134,7 +134,8 @@ impl RegistryContract {
             .persistent()
             .set(&DataKey::Asset(asset_id), &entry);
 
-        env.events().publish((symbol_short!("deactvate"),), asset_id);
+        env.events()
+            .publish((symbol_short!("deactvate"),), asset_id);
     }
 
     pub fn total_value_locked(env: Env) -> i128 {

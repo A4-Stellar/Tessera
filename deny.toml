@@ -1,20 +1,15 @@
-# cargo-deny configuration for Tessera workspace
+# cargo-deny policy for the API dependency graph.
 # Documentation: https://embarkstudios.github.io/cargo-deny/
 
 [advisories]
-vulnerability = "deny"
-unmaintained = "warn"
+# Keep unmaintained workspace dependencies blocking; report transitive ones
+# without failing on dependencies the project does not select directly.
+unmaintained = "workspace"
 yanked = "warn"
-notice = "warn"
 ignore = []
 
 [licenses]
 version = 2
-unlicensed = "deny"
-allow-osi-fsf-free = "neither"
-copyleft = "warn"
-default = "deny"
-
 allow = [
     "Apache-2.0",
     "MIT",
@@ -24,11 +19,12 @@ allow = [
     "Unicode-3.0",
     "Unicode-DFS-2016",
     "OpenSSL",
+    "CDLA-Permissive-2.0",
+    "BSL-1.0",
     "CC0-1.0",
     "Zlib",
     "0BSD"
 ]
-
 confidence-threshold = 0.8
 
 [licenses.private]

@@ -16,7 +16,7 @@ ARG RUST_VERSION=1.88
 
 FROM --platform=$BUILDPLATFORM rust:${RUST_VERSION}-slim-bookworm AS chef
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3-pip \
+    && apt-get install -y --no-install-recommends python3-pip curl \
     && rm -rf /var/lib/apt/lists/* \
     && pip3 install --no-cache-dir --break-system-packages cargo-zigbuild==0.23.4 ziglang==0.16.0 \
     && cargo install --locked cargo-chef --version 0.1.78 \
@@ -27,6 +27,7 @@ WORKDIR /app
 FROM chef AS planner
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
+COPY benches ./benches
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
@@ -42,6 +43,7 @@ ENV RUSTFLAGS="-C target-feature=+crt-static"
 
 # Cache dependencies separately from source.
 COPY --from=planner /app/recipe.json recipe.json
+COPY --from=planner /app/benches ./benches
 RUN cargo chef cook --release --locked --zigbuild --target "$(cat /rust-target)" --recipe-path recipe.json
 
 COPY Cargo.toml Cargo.lock ./

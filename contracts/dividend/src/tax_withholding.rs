@@ -1,11 +1,7 @@
 // tax_withholding.rs
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, panic_with_error, Address, BytesN, Env,
-    IntoVal, Symbol, Val, Vec,
+    contract, contractimpl, contracttype, Address, BytesN, Env, IntoVal, Symbol, Val, Vec,
 };
-
-/// Basis points in 100%. Rates are stored as basis points, so 10_000 is 100%.
-pub const MAX_RATE_BPS: u32 = 10_000;
 
 #[contracttype]
 #[derive(Clone)]
@@ -99,7 +95,7 @@ impl TaxWithholdingContract {
             .storage()
             .instance()
             .get(&DataKey::ComplianceContract)
-            .unwrap_or_else(|| panic_with_error!(env, Error::NotInitialized));
+            .unwrap();
 
         let args: Vec<Val> = (investor.clone(),).into_val(&env);
         let residency_hash: Option<BytesN<32>> = env.invoke_contract(
@@ -121,8 +117,17 @@ impl TaxWithholdingContract {
                 .storage()
                 .persistent()
                 .get(&DataKey::TaxRate(hash))
-                .unwrap_or(default),
-            None => default,
+                .unwrap_or_else(|| {
+                    env.storage()
+                        .instance()
+                        .get(&DataKey::DefaultTaxRate)
+                        .unwrap()
+                }),
+            None => env
+                .storage()
+                .instance()
+                .get(&DataKey::DefaultTaxRate)
+                .unwrap(),
         };
 
         // The rate is validated to be at most 10_000 bps on every write, so

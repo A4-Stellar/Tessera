@@ -3,27 +3,38 @@
 import { useState, useRef, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { search, type SearchResult } from "@/lib/search";
+import { initSearch, search, type SearchDocument } from "@/lib/search";
 
 /** Client-side documentation search with keyboard shortcuts. */
 export function Search() {
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState<SearchResult[]>([]);
+  const [results, setResults] = useState<SearchDocument[]>([]);
+  const [searchReady, setSearchReady] = useState(false);
   const [isOpen, setIsOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
   const inputRef = useRef<HTMLInputElement>(null);
   const router = useRouter();
 
   useEffect(() => {
+    let mounted = true;
+    initSearch().then(() => {
+      if (mounted) setSearchReady(true);
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
     setActiveIndex(-1);
-    if (query.trim()) {
-      setResults(search(query));
+    if (query.trim() && searchReady) {
+      setResults(search(query.trim()));
       setIsOpen(true);
     } else {
       setResults([]);
       setIsOpen(false);
     }
-  }, [query]);
+  }, [query, searchReady]);
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -40,11 +51,11 @@ export function Search() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
-  function selectResult(result: SearchResult) {
+  function selectResult(result: SearchDocument) {
     setQuery("");
     setIsOpen(false);
     setActiveIndex(-1);
-    router.push(result.href);
+    router.push(result.route);
   }
 
   function handleInputKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
@@ -80,7 +91,10 @@ export function Search() {
           type="search"
           placeholder="Search docs... (⌘K)"
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            setActiveIndex(-1);
+          }}
           onFocus={() => query && setIsOpen(true)}
           onKeyDown={handleInputKeyDown}
           role="combobox"
@@ -101,13 +115,13 @@ export function Search() {
             >
               {results.map((result, index) => (
                 <div
-                  key={result.href}
+                  key={result.route}
                   id={`search-result-${index}`}
                   role="option"
                   aria-selected={index === activeIndex}
                 >
                   <Link
-                    href={result.href}
+                    href={result.route}
                     onClick={() => {
                       setQuery("");
                       setIsOpen(false);
@@ -118,10 +132,10 @@ export function Search() {
                     }`}
                   >
                     <div className="font-medium text-base-100">{result.title}</div>
-                    <div className="text-xs text-base-300">{result.section}</div>
-                    {result.excerpt && (
+                    <div className="text-xs text-base-300">{result.headers}</div>
+                    {result.content && (
                       <div className="mt-1 line-clamp-1 text-xs text-base-200/80">
-                        {result.excerpt}
+                        {result.content}
                       </div>
                     )}
                   </Link>
