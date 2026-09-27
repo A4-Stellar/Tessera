@@ -1,0 +1,17 @@
+[package]
+name = "tessera-cdp"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+description = "Tessera Multi-Asset Collateralized Debt Position (CDP) Vault — issue #41."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+soroban-sdk = { workspace = true }
+tessera-common = { path = "../common" }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }

@@ -5,6 +5,9 @@
 //! reported itself as an error — they either trapped, which is
 //! indistinguishable from a genuine bug, or silently corrupted the ledger.
 #![no_std]
+pub mod interest_rate;
+
+use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Symbol};
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, Address,
@@ -182,50 +185,33 @@ impl DebtTokenAmortization {
     pub fn senior_owed(env: Env) -> i128 {
         env.storage().instance().get(&DataKey::SeniorOwed).unwrap_or(0)
     }
-
-    pub fn mezzanine_owed(env: Env) -> i128 {
-        env.storage()
-            .instance()
-            .get(&DataKey::MezzanineOwed)
-            .unwrap_or(0)
+    
+    /// Issue #85: set kinked-curve parameters (first caller becomes rate admin).
+    pub fn set_rate_params(env: Env, admin: Address, params: interest_rate::RateParams) {
+        interest_rate::do_set_rate_params(&env, admin, params);
     }
 
-    pub fn equity_owed(env: Env) -> i128 {
-        env.storage().instance().get(&DataKey::EquityOwed).unwrap_or(0)
+    pub fn get_rate_params(env: Env) -> interest_rate::RateParams {
+        interest_rate::get_params(&env)
     }
 
-    pub fn total_owed(env: Env) -> i128 {
-        Self::senior_owed(env.clone())
-            .saturating_add(Self::mezzanine_owed(env.clone()))
-            .saturating_add(Self::equity_owed(env))
+    /// Annual borrow rate (WAD) for the given pool balances.
+    pub fn current_borrow_rate(env: Env, borrowed: i128, available: i128) -> i128 {
+        let u = interest_rate::utilization(&env, borrowed, available);
+        interest_rate::borrow_rate(&env, &interest_rate::get_params(&env), u)
     }
 
-    pub fn admin(env: Env) -> Address {
-        env.storage()
-            .instance()
-            .get(&DataKey::Admin)
-            .unwrap_or_else(|| panic_with_error!(env, Error::NotInitialized))
+    /// Pool utilization (WAD).
+    pub fn pool_utilization(env: Env, borrowed: i128, available: i128) -> i128 {
+        interest_rate::utilization(&env, borrowed, available)
     }
 
-    /// Current contract ABI version, polled by the off-chain indexer.
-    pub fn version(_env: Env) -> u64 {
-        1
+    /// Accrue the WAD borrow index to the current ledger time; returns it.
+    pub fn accrue_rate_index(env: Env, borrowed: i128, available: i128) -> i128 {
+        interest_rate::do_accrue_index(&env, borrowed, available)
     }
 
-    // ---- internal ----
-
-    fn require_initialized(env: &Env) {
-        if !env.storage().instance().has(&DataKey::Admin) {
-            panic_with_error!(env, Error::NotInitialized);
-        }
-    }
-
-    fn require_admin(env: &Env, admin: &Address) {
-        Self::require_initialized(env);
-        let stored: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
-        admin.require_auth();
-        if admin != &stored {
-            panic_with_error!(env, Error::Unauthorized);
-        }
+    pub fn trigger_default(env: Env) {
+        env.events().publish((Symbol::new(&env, "default_triggered"),), ());
     }
 }
