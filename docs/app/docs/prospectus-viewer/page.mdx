@@ -1,0 +1,65 @@
+import { LazyProspectusViewer } from "@/components/LazyProspectusViewer";
+
+export const metadata = {
+  title: "Prospectus Viewer",
+  description: "Embed verified investor PDFs with navigation, search, zoom, and lazy loading.",
+  canonical: "/docs/prospectus-viewer",
+};
+
+# Prospectus Viewer
+
+Investor-facing asset pages can embed legal and diligence documents directly in
+the page with `LazyProspectusViewer`. The component renders PDFs with PDF.js,
+loads only when scrolled near the viewport, verifies an expected SHA-256 digest,
+and includes page navigation, zoom controls, text search, and touch gestures.
+
+<CalloutBox variant="note">
+Use this viewer for prospectuses, property appraisals, SEC filings, audit reports,
+warehouse certificates, and other documents whose digest is committed in registry
+metadata or an off-chain disclosure record.
+</CalloutBox>
+
+## Recommended embed
+
+Pass an HTTPS document URL and the normalized on-chain document hash. The hash
+may be plain hex, `0x` prefixed, or `sha256:` prefixed.
+
+```jsx
+<LazyProspectusViewer
+  title="Manhattan Loft appraisal"
+  src={asset.legalDocuments.appraisalUrl}
+  expectedOnChainHash={asset.legalDocuments.appraisalSha256}
+/>
+```
+
+The viewer rejects unsafe sources before making a request. Production documents
+must be served over HTTPS; local `http://localhost` URLs are accepted only for
+development.
+
+## Live sample
+
+<LazyProspectusViewer
+  title="Sample verified PDF"
+  src="https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf"
+  expectedHash="sha256:3df79d34abbca99308e79cb94461c1893582604d68329a41fd4bec1885e6adb4"
+/>
+
+## Integration checklist
+
+- Store document URLs separately from the digest so a CDN or storage migration
+  cannot silently change the expected content.
+- Persist the SHA-256 digest in on-chain metadata, registry metadata, or an
+  issuer-signed disclosure record before exposing the document to investors.
+- Use `LazyProspectusViewer` on asset detail pages so initial page load is not
+  blocked by PDF.js or large document downloads.
+- Keep every document URL public-read but uncredentialed. The viewer fetches with
+  `credentials: "omit"` to avoid leaking wallet-session cookies to document hosts.
+- Show the digest next to issuer disclosures when investors need to compare the
+  displayed document with on-chain metadata.
+
+## Failure states
+
+The component reports each failure explicitly: unsafe URL, invalid expected hash,
+hash mismatch, non-PDF response, empty file, fetch failure, render failure, or
+unavailable browser crypto. Treat a mismatch as a hard disclosure failure and
+hide any action that depends on the document being verified.
