@@ -127,7 +127,7 @@ impl RateLimiter for MemoryRateLimiter {
         match self.limiter.check_key(&key.to_string()) {
             Ok(_) => Ok((true, None)),
             Err(e) => {
-                let wait = e.wait_time_from(self.limiter.clock().now());
+                let wait = e.wait_time_from(DefaultClock::default().now());
                 Ok((false, Some(wait.as_secs())))
             }
         }
