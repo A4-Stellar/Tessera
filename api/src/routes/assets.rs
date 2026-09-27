@@ -156,6 +156,47 @@ pub async fn detail(
     Ok(Json(payload))
 }
 
+/// Query parameters for `GET /assets/:id/metrics/analytics`.
+#[derive(Debug, Deserialize)]
+pub struct AssetAnalyticsQuery {
+    /// Window duration: "1h", "24h", "7d", "30d" (defaults to "24h").
+    pub window: Option<String>,
+    /// Window type: "sliding" | "tumbling" (defaults to "sliding").
+    pub window_type: Option<String>,
+    /// Limit for historical window data points (defaults to 50, capped at 100).
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+/// Pre-computed sliding and tumbling window analytics for an asset.
+///
+/// Backs `GET /assets/:id/metrics/analytics` (Issue #96).
+pub async fn analytics(
+    State(state): State<AppState>,
+    Path(id): Path<u64>,
+    Query(query): Query<AssetAnalyticsQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let snap = state.snapshot();
+    let asset = snap
+        .asset(id)
+        .ok_or_else(|| ApiError::NotFound(format!("no asset with id {id}")))?;
+
+    let result = state
+        .stream_processor
+        .get_analytics(
+            id,
+            &asset.symbol,
+            query.window.as_deref(),
+            query.window_type.as_deref(),
+            query.limit.unwrap_or(50),
+        )
+        .await;
+
+    Ok(Json(
+        serde_json::to_value(&result).expect("analytics response serializes"),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use axum::{
@@ -635,5 +676,33 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn analytics_returns_precomputed_window_metrics() {
+        let asset = stub_asset(1, "real_estate", true);
+        let state = AppState::with_assets(vec![asset]);
+        let app = Router::new()
+            .route("/assets/:id/metrics/analytics", get(super::analytics))
+            .with_state(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/assets/1/metrics/analytics?window=24h&window_type=sliding")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let val: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(val["asset_id"], 1);
+        assert_eq!(val["symbol"], "TKN1");
+        assert!(val["current_window"].is_object());
+        assert_eq!(val["current_window"]["window_duration"], "24h");
     }
 }
