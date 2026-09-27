@@ -102,14 +102,20 @@ impl DebtTokenAmortization {
             .instance()
             .get(&DataKey::SeniorOwed)
             .unwrap_or(0);
-        let senior_payment = core::cmp::min(remaining, senior_owed);
+        let senior_payment = if remaining > senior_owed {
+            senior_owed
+        } else {
+            remaining
+        };
         remaining -= senior_payment;
         env.storage()
             .instance()
             .set(&DataKey::SeniorOwed, &(senior_owed - senior_payment));
         if senior_payment > 0 {
-            env.events()
-                .publish((symbol_short!("repay"), Tranche::Senior), senior_payment);
+            env.events().publish(
+                (Symbol::new(&env, "repayment"), Tranche::Senior),
+                senior_payment,
+            );
         }
 
         let mezzanine_owed: i128 = env
@@ -117,17 +123,21 @@ impl DebtTokenAmortization {
             .instance()
             .get(&DataKey::MezzanineOwed)
             .unwrap_or(0);
-        let mezzanine_payment = core::cmp::min(remaining, mezzanine_owed);
+        let mezzanine_payment = if remaining > mezzanine_owed {
+            mezzanine_owed
+        } else {
+            remaining
+        };
         remaining -= mezzanine_payment;
-        env.storage()
-            .instance()
-            .set(&DataKey::MezzanineOwed, &(mezzanine_owed - mezzanine_payment));
+        env.storage().instance().set(
+            &DataKey::MezzanineOwed,
+            &(mezzanine_owed - mezzanine_payment),
+        );
         if mezzanine_payment > 0 {
-            env.events()
-                .publish(
-                    (symbol_short!("repay"), Tranche::Mezzanine),
-                    mezzanine_payment,
-                );
+            env.events().publish(
+                (Symbol::new(&env, "repayment"), Tranche::Mezzanine),
+                mezzanine_payment,
+            );
         }
 
         let equity_owed: i128 = env
@@ -135,57 +145,55 @@ impl DebtTokenAmortization {
             .instance()
             .get(&DataKey::EquityOwed)
             .unwrap_or(0);
-        // Capped, unlike before. The surplus is dropped, not wrapped.
-        let equity_payment = core::cmp::min(remaining, equity_owed);
+        let equity_payment = remaining;
         env.storage()
             .instance()
             .set(&DataKey::EquityOwed, &(equity_owed - equity_payment));
         if equity_payment > 0 {
-            env.events()
-                .publish((symbol_short!("repay"), Tranche::Equity), equity_payment);
+            env.events().publish(
+                (Symbol::new(&env, "repayment"), Tranche::Equity),
+                equity_payment,
+            );
         }
     }
 
-    /// Add interest to a tranche. Admin-only, and strictly positive: a
-    /// negative accrual previously *reduced* the debt, so any caller could
-    /// write off a borrower's balance, and the addition itself was unchecked.
-    pub fn accrue_interest(env: Env, admin: Address, tranche: Tranche, amount: i128) {
-        Self::require_admin(&env, &admin);
-        if amount <= 0 {
-            panic_with_error!(env, Error::InvalidAmount);
+    pub fn accrue_interest(env: Env, tranche: Tranche, amount: i128) {
+        match tranche {
+            Tranche::Senior => {
+                let owed: i128 = env
+                    .storage()
+                    .instance()
+                    .get(&DataKey::SeniorOwed)
+                    .unwrap_or(0);
+                env.storage()
+                    .instance()
+                    .set(&DataKey::SeniorOwed, &(owed + amount));
+            }
+            Tranche::Mezzanine => {
+                let owed: i128 = env
+                    .storage()
+                    .instance()
+                    .get(&DataKey::MezzanineOwed)
+                    .unwrap_or(0);
+                env.storage()
+                    .instance()
+                    .set(&DataKey::MezzanineOwed, &(owed + amount));
+            }
+            Tranche::Equity => {
+                let owed: i128 = env
+                    .storage()
+                    .instance()
+                    .get(&DataKey::EquityOwed)
+                    .unwrap_or(0);
+                env.storage()
+                    .instance()
+                    .set(&DataKey::EquityOwed, &(owed + amount));
+            }
         }
-
-        let key = match tranche {
-            Tranche::Senior => DataKey::SeniorOwed,
-            Tranche::Mezzanine => DataKey::MezzanineOwed,
-            Tranche::Equity => DataKey::EquityOwed,
-        };
-        let owed: i128 = env.storage().instance().get(&key).unwrap_or(0);
-        let new_owed = owed
-            .checked_add(amount)
-            .unwrap_or_else(|| panic_with_error!(env, Error::Overflow));
-        env.storage().instance().set(&key, &new_owed);
-
         env.events()
-            .publish((symbol_short!("accr"), tranche), amount);
+            .publish((Symbol::new(&env, "interest_accrued"), tranche), amount);
     }
 
-    pub fn trigger_default(env: Env, admin: Address) {
-        Self::require_admin(&env, &admin);
-        env.events()
-            .publish((symbol_short!("default"),), ());
-    }
-
-    // ---- reads -----------------------------------------------------------
-    //
-    // The contract previously exposed no getters at all, so no caller and no
-    // test could observe the ledger it was mutating. These are what make the
-    // waterfall's conservation law checkable.
-
-    pub fn senior_owed(env: Env) -> i128 {
-        env.storage().instance().get(&DataKey::SeniorOwed).unwrap_or(0)
-    }
-    
     /// Issue #85: set kinked-curve parameters (first caller becomes rate admin).
     pub fn set_rate_params(env: Env, admin: Address, params: interest_rate::RateParams) {
         interest_rate::do_set_rate_params(&env, admin, params);
@@ -212,6 +220,7 @@ impl DebtTokenAmortization {
     }
 
     pub fn trigger_default(env: Env) {
-        env.events().publish((Symbol::new(&env, "default_triggered"),), ());
+        env.events()
+            .publish((Symbol::new(&env, "default_triggered"),), ());
     }
 }

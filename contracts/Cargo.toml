@@ -11,6 +11,7 @@ members = [
     "bridge",
     "debt-token",
     "vesting",
+    "amm",
 ]
 # `fuzz/` is a self-contained sub-tree of three independent packages:
 #

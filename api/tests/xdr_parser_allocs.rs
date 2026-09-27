@@ -4,7 +4,6 @@
 //! (the API is a binary crate with no library target).
 
 #[path = "../src/indexer/xdr_parser.rs"]
-#[allow(dead_code)]
 mod xdr_parser;
 
 use std::alloc::{GlobalAlloc, Layout, System};

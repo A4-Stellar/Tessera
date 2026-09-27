@@ -25,7 +25,10 @@ fn gcd(mut a: u128, mut b: u128) -> u128 {
 }
 
 pub fn split_count(env: &Env) -> u32 {
-    env.storage().instance().get(&DataKey::SplitCount).unwrap_or(0)
+    env.storage()
+        .instance()
+        .get(&DataKey::SplitCount)
+        .unwrap_or(0)
 }
 
 pub fn multiplier(env: &Env) -> (u128, u128) {
@@ -57,13 +60,25 @@ pub fn execute(env: &Env, num: u32, den: u32) {
     let g = gcd(n, d);
     let (n, d) = (n / g, d / g);
 
-    let supply: i128 = env.storage().instance().get(&DataKey::TotalSupply).unwrap_or(0);
+    let supply: i128 = env
+        .storage()
+        .instance()
+        .get(&DataKey::TotalSupply)
+        .unwrap_or(0);
     let new_supply = scale(env, supply, num, den);
 
-    env.storage().persistent().set(&DataKey::Split(count), &(num, den));
-    env.storage().instance().set(&DataKey::SplitCount, &(count + 1));
-    env.storage().instance().set(&DataKey::SplitMultiplier, &(n, d));
-    env.storage().instance().set(&DataKey::TotalSupply, &new_supply);
+    env.storage()
+        .persistent()
+        .set(&DataKey::Split(count), &(num, den));
+    env.storage()
+        .instance()
+        .set(&DataKey::SplitCount, &(count + 1));
+    env.storage()
+        .instance()
+        .set(&DataKey::SplitMultiplier, &(n, d));
+    env.storage()
+        .instance()
+        .set(&DataKey::TotalSupply, &new_supply);
 
     env.events().publish(
         (Symbol::new(env, "ShareSplit"),),
@@ -109,9 +124,7 @@ pub fn set_balance(env: &Env, holder: &Address, value: i128) {
 #[cfg(test)]
 mod test {
     use crate::{AssetTokenContract, AssetTokenContractClient};
-    use soroban_sdk::{
-        contract, contractimpl, testutils::Address as _, Address, Env, String,
-    };
+    use soroban_sdk::{contract, contractimpl, testutils::Address as _, Address, Env, String};
 
     #[contract]
     struct AllowAll;
@@ -131,7 +144,17 @@ mod test {
         let alice = Address::generate(env);
         let bob = Address::generate(env);
         let s = |x: &str| String::from_str(env, x);
-        c.initialize(&admin, &s("A"), &s("A"), &s("re"), &1000, &7, &compliance, &s("d"), &0);
+        c.initialize(
+            &admin,
+            &s("A"),
+            &s("A"),
+            &s("re"),
+            &1000,
+            &7,
+            &compliance,
+            &s("d"),
+            &0,
+        );
         c.transfer(&admin, &alice, &300);
         c.transfer(&admin, &bob, &101);
         (c, admin, alice, bob)

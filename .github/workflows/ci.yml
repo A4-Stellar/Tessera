@@ -138,7 +138,7 @@ jobs:
         run: cargo build --release
 
   # ===========================================================================
-  # DOCS & FRONTEND PIPELINE (Next.js 14 / TypeScript / MDX)
+  # DOCS & FRONTEND PIPELINE (Next.js 16 / TypeScript / MDX)
   # Uses actions/cache for Next.js .next/cache and actions/setup-node npm cache
   # ===========================================================================
   docs-lint:
@@ -151,6 +151,9 @@ jobs:
         working-directory: docs
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
       - uses: actions/setup-node@v4
         with:
           node-version: 20

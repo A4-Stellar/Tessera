@@ -13,6 +13,7 @@ let documents: SearchDocument[] = [];
 
 export async function initSearch() {
   if (index) return;
+  if (typeof fetch !== 'function') return;
   
   try {
     const res = await fetch('/search-index.json');

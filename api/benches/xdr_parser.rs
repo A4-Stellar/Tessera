@@ -5,7 +5,6 @@
 //! Run with `cargo bench --bench xdr_parser` from `api/`.
 
 #[path = "../src/indexer/xdr_parser.rs"]
-#[allow(dead_code)]
 mod xdr_parser;
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
@@ -27,7 +26,10 @@ fn events() -> Vec<Vec<u8>> {
                 vec![
                     xdr::ScMapEntry {
                         key: sym("amount"),
-                        val: xdr::ScVal::I128(xdr::Int128Parts { hi: 0, lo: 1000 + i as u64 }),
+                        val: xdr::ScVal::I128(xdr::Int128Parts {
+                            hi: 0,
+                            lo: 1000 + i as u64,
+                        }),
                     },
                     xdr::ScMapEntry {
                         key: sym("memo"),
