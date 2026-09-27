@@ -165,3 +165,5 @@ fn init_tracing() {
         .with(fmt::layer().with_writer(middleware::pii_scrubber::ScrubbingMakeWriter))
         .init();
 }
+pub mod graphql;
+pub mod events;

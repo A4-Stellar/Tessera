@@ -395,3 +395,4 @@ impl ComplianceContract {
         env.invoke_contract(hook, &Symbol::new(env, "check"), args)
     }
 }
+pub mod zk_verifier;
