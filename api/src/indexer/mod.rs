@@ -22,6 +22,7 @@ pub mod nav_calculator;
 pub mod price_feed;
 pub mod replay;
 pub mod rpc_client;
+pub mod stream_processor;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -218,6 +219,8 @@ pub struct AppState {
     pub audit: Arc<crate::audit::AuditLog>,
     /// Real-time anomaly detector (issue #101).
     pub anomalies: Arc<crate::services::anomaly_detector::AnomalyDetector>,
+    /// Real-time event stream processor (issue #96).
+    pub stream_processor: Arc<stream_processor::StreamProcessor>,
 }
 
 impl AppState {
@@ -228,6 +231,7 @@ impl AppState {
             metrics,
             audit: Arc::new(crate::audit::AuditLog::new()),
             anomalies: Arc::new(crate::services::anomaly_detector::AnomalyDetector::default()),
+            stream_processor: Arc::new(stream_processor::StreamProcessor::new()),
         }
     }
 
@@ -870,6 +874,7 @@ impl Indexer {
             .cloned()
             .collect();
         self.state.anomalies.observe_events(&fresh);
+        self.state.stream_processor.ingest_events(&events, &assets).await;
 
         let count = assets.len();
         self.state.replace(Snapshot {

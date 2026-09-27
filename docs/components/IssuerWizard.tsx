@@ -1,399 +1,422 @@
 "use client";
 
-import { zodResolver } from "@hookform/resolvers/zod";
-import { StrKey } from "@stellar/stellar-sdk";
 import { useEffect, useMemo, useState } from "react";
-import { useForm } from "react-hook-form";
 import { z } from "zod";
 
-const STORAGE_KEY = "tessera_issuer_wizard_state";
+const STORAGE_KEY = "tessera-issuer-wizard";
 
-function isValidStellarPublicKey(value: string): boolean {
-  if (!value.trim()) return false;
-  try {
-    return StrKey.isValidEd25519PublicKey(value) || StrKey.isValidMed25519PublicKey(value);
-  } catch {
-    return false;
-  }
-}
+type AssetType = "real_estate" | "invoice" | "commodity";
+type Step = 0 | 1 | 2 | 3;
+type DeployStatus = "idle" | "deploying" | "success";
 
-const wizardSchema = z.object({
-  assetName: z.string().trim().min(1, "Asset name is required").max(120),
-  ticker: z
-    .string()
-    .trim()
-    .min(1, "Ticker symbol is required")
-    .max(12)
-    .regex(/^[A-Z0-9]+$/i, "Ticker must contain only letters and numbers"),
-  issuerPublicKey: z
-    .string()
-    .trim()
-    .min(1, "Issuer public key is required")
-    .refine(isValidStellarPublicKey, "Issuer public key must be a valid Stellar public key"),
-  totalSupply: z
-    .string()
-    .trim()
-    .min(1, "Total supply is required")
-    .refine((value) => Number.isFinite(Number(value)) && Number(value) > 0, "Total supply must be greater than zero"),
-  complianceOfficerKey: z
-    .string()
-    .trim()
-    .min(1, "Compliance officer key is required")
-    .refine(isValidStellarPublicKey, "Compliance officer key must be a valid Stellar public key"),
-  jurisdiction: z.string().trim().min(2, "Jurisdiction is required").max(64),
-  allowlistSeed: z
-    .string()
-    .trim()
-    .min(1, "Allowlist seed is required")
-    .refine(isValidStellarPublicKey, "Allowlist seed must be a valid Stellar public key"),
-});
-
-type WizardValues = z.infer<typeof wizardSchema>;
-
-const EMPTY_VALUES: WizardValues = {
-  assetName: "",
-  ticker: "",
-  issuerPublicKey: "",
-  totalSupply: "",
-  complianceOfficerKey: "",
-  jurisdiction: "US",
-  allowlistSeed: "",
+type WizardForm = {
+  projectName: string;
+  assetName: string;
+  assetType: AssetType;
+  issuerAddress: string;
+  totalSupply: string;
+  decimals: string;
+  jurisdiction: string;
+  allowlist: string;
+  complianceNote: string;
 };
 
-const steps = [
-  { id: "token-setup", title: "Token setup", description: "Define the asset metadata and issuer wallet." },
-  { id: "compliance", title: "Compliance configuration", description: "Set the officer key, jurisdiction, and allowlist seed." },
-  { id: "deploy", title: "Deployment", description: "Review script output and deploy to wallet." },
-];
+const defaultState: WizardForm = {
+  projectName: "",
+  assetName: "",
+  assetType: "real_estate",
+  issuerAddress: "",
+  totalSupply: "1000000",
+  decimals: "7",
+  jurisdiction: "US",
+  allowlist: "",
+  complianceNote: "Initial issue approved for issuer and primary admin.",
+};
 
-function readStoredValues(): WizardValues {
-  if (typeof window === "undefined") {
-    return EMPTY_VALUES;
-  }
+const stellarPublicKeySchema = z
+  .string()
+  .trim()
+  .min(1, "Issuer address is required")
+  .regex(/^G[A-Z2-7]{55}$/, "Issuer address must be a valid Stellar public key");
 
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return EMPTY_VALUES;
-    const parsed = JSON.parse(raw) as Partial<WizardValues>;
-    return { ...EMPTY_VALUES, ...parsed };
-  } catch {
-    return EMPTY_VALUES;
-  }
+const allowlistSchema = z
+  .string()
+  .trim()
+  .refine((value) => {
+    const addresses = value
+      .split(/\n|,/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+
+    if (addresses.length === 0) return false;
+    return addresses.every((address) => /^G[A-Z2-7]{55}$/.test(address));
+  }, "Add at least one valid Stellar public key for the allowlist.");
+
+const stepSchemas: Record<Step, z.ZodTypeAny> = {
+  0: z.object({
+    projectName: z.string().trim().min(2, "Project name must be at least 2 characters."),
+    assetName: z.string().trim().min(3, "Asset name must be at least 3 characters."),
+    assetType: z.enum(["real_estate", "invoice", "commodity"]),
+    issuerAddress: stellarPublicKeySchema,
+  }),
+  1: z.object({
+    totalSupply: z.coerce.number().positive("Total supply must be greater than zero."),
+    decimals: z.coerce.number().int("Decimals must be a whole number.").min(0, "Decimals cannot be negative.").max(18, "Decimals cannot exceed 18."),
+    jurisdiction: z.string().trim().min(2, "Jurisdiction is required."),
+    allowlist: allowlistSchema,
+  }),
+  2: z.object({
+    complianceNote: z.string().trim().min(10, "Add a brief compliance note."),
+  }),
+  3: z.object({}),
+};
+
+const formSummary = [
+  "Project details",
+  "Token configuration",
+  "Compliance review",
+  "Deployment",
+] as const;
+
+function parseAllowlist(raw: string) {
+  return raw
+    .split(/\n|,/)
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
-function loadDeploymentScript(values: WizardValues) {
-  const script = `#!/usr/bin/env bash
-set -e
-
-ASSET_NAME="${values.assetName || "Issuer Asset"}"
-TICKER="${values.ticker || "ASSET"}"
-ISSUER="${values.issuerPublicKey || "G..."}"
-COMPLIANCE_OFFICER="${values.complianceOfficerKey || "G..."}"
-JURISDICTION="${values.jurisdiction || "US"}"
-
-stellar contract deploy --network testnet --source "$STELLAR_SECRET_KEY" --wasm ./artifacts/asset_token.wasm
-stellar contract invoke --network testnet --source "$STELLAR_SECRET_KEY" \\
-  --id "$ASSET_ID" \\
-  -- \\
-  set_metadata "$ASSET_NAME" "$TICKER" "$ISSUER" "$COMPLIANCE_OFFICER" "$JURISDICTION"
-
-stellar contract invoke --network testnet --source "$STELLAR_SECRET_KEY" \\
-  --id "$ASSET_ID" \\
-  -- \\
-  set_allowlist "${values.allowlistSeed || "G..."}"
-`;
-
-  return script;
+function extractError(issues: z.ZodIssue[]) {
+  return issues[0]?.message ?? "Please review the form.";
 }
 
 export function IssuerWizard() {
-  const [isStarted, setIsStarted] = useState(false);
-  const [stepIndex, setStepIndex] = useState(0);
-  const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
-  const [deploymentStatus, setDeploymentStatus] = useState<string | null>(null);
-
-  const form = useForm<WizardValues>({
-    resolver: zodResolver(wizardSchema),
-    defaultValues: readStoredValues(),
-    mode: "onChange",
-  });
-
-  const values = form.watch();
+  const [form, setForm] = useState<WizardForm>(defaultState);
+  const [step, setStep] = useState<Step>(0);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [hydrated, setHydrated] = useState(false);
+  const [deployStatus, setDeployStatus] = useState<DeployStatus>("idle");
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
-    if (!isStarted) return;
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(values));
-  }, [isStarted, values]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const stored = readStoredValues();
-    if (stored.assetName || stored.ticker || stored.issuerPublicKey || stored.complianceOfficerKey) {
-      form.reset(stored);
-      setIsStarted(true);
-    }
-  }, [form]);
-
-  const currentStep = steps[stepIndex];
-  const stepFields = useMemo(() => {
-    if (stepIndex === 0) {
-      return ["assetName", "ticker", "issuerPublicKey", "totalSupply"] as const;
-    }
-    if (stepIndex === 1) {
-      return ["complianceOfficerKey", "jurisdiction", "allowlistSeed"] as const;
-    }
-    return [] as const;
-  }, [stepIndex]);
-
-  const deploymentScript = useMemo(() => loadDeploymentScript(values), [values]);
-
-  async function nextStep() {
-    if (stepIndex >= steps.length - 1) {
-      setStepIndex(steps.length - 1);
-      return;
-    }
-
-    const result = await form.trigger(stepFields);
-    if (!result) {
-      const firstError = stepFields.find((field) => form.formState.errors[field]);
-      if (firstError) {
-        form.setFocus(firstError);
+    try {
+      const raw = window.localStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as Partial<WizardForm>;
+        setForm({ ...defaultState, ...parsed });
       }
-      return;
+    } catch {
+      // Ignore malformed localStorage payloads and keep defaults.
+    } finally {
+      setHydrated(true);
     }
-    setStepIndex((current) => Math.min(current + 1, steps.length - 1));
-  }
+  }, []);
 
-  async function previousStep() {
-    setStepIndex((current) => Math.max(current - 1, 0));
-  }
+  useEffect(() => {
+    if (!hydrated) return;
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(form));
+  }, [form, hydrated]);
 
-  async function handleCopy() {
+  const updateField = <K extends keyof WizardForm>(field: K, value: WizardForm[K]) => {
+    setForm((current) => ({ ...current, [field]: value }));
+    setErrors((current) => ({ ...current, [field]: "" }));
+  };
+
+  const currentStepIndex = step;
+
+  const validateStep = (targetStep: Step) => {
+    const parsed = stepSchemas[targetStep].safeParse(
+      targetStep === 0
+        ? {
+            projectName: form.projectName,
+            assetName: form.assetName,
+            assetType: form.assetType,
+            issuerAddress: form.issuerAddress,
+          }
+        : targetStep === 1
+          ? {
+              totalSupply: form.totalSupply,
+              decimals: form.decimals,
+              jurisdiction: form.jurisdiction,
+              allowlist: form.allowlist,
+            }
+          : {
+              complianceNote: form.complianceNote,
+            }
+    );
+
+    if (!parsed.success) {
+      const nextErrors = parsed.error.issues.reduce<Record<string, string>>((acc: Record<string, string>, issue: z.ZodIssue) => {
+        const name = issue.path[0]?.toString() ?? "form";
+        acc[name] = extractError([issue]);
+        return acc;
+      }, {});
+      setErrors(nextErrors);
+      return false;
+    }
+
+    setErrors({});
+    return true;
+  };
+
+  const deploymentScript = useMemo(
+    () => `# tessera issuer onboarding script
+export ASSET_NAME="${form.assetName || "My Asset"}"
+export PROJECT_NAME="${form.projectName || "My Project"}"
+export ISSUER_ADDRESS="${form.issuerAddress || "G..."}"
+export ASSET_TYPE="${form.assetType}"
+export TOTAL_SUPPLY="${form.totalSupply || "1000000"}"
+export DECIMALS="${form.decimals || "7"}"
+export JURISDICTION="${form.jurisdiction || "US"}"
+export ALLOWLIST="${parseAllowlist(form.allowlist || form.issuerAddress).join(" ") || "G..."}"
+
+cargo run --bin issuer -- deploy \
+  --issuer "$ISSUER_ADDRESS" \
+  --asset "$ASSET_NAME" \
+  --type "$ASSET_TYPE" \
+  --supply "$TOTAL_SUPPLY" \
+  --decimals "$DECIMALS" \
+  --jurisdiction "$JURISDICTION" \
+  --allowlist "$ALLOWLIST"`,
+    [form]
+  );
+
+  const nextStep = () => {
+    if (!validateStep(step as Step)) return;
+    setStep((current) => (Math.min(current + 1, 3) as Step));
+  };
+
+  const previousStep = () => {
+    setStep((current) => (Math.max(current - 1, 0) as Step));
+  };
+
+  const completeWizard = () => {
+    if (!validateStep(2)) return;
+    setDeployStatus("deploying");
+    setTimeout(() => setDeployStatus("success"), 600);
+  };
+
+  const handleCopy = async () => {
     try {
       await navigator.clipboard.writeText(deploymentScript);
-      setCopyState("copied");
-      window.setTimeout(() => setCopyState("idle"), 1200);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1600);
     } catch {
-      setCopyState("error");
+      setCopied(false);
     }
-  }
+  };
 
-  async function runDeployment() {
-    setDeploymentStatus("Wallet deployment requested.");
-  }
-
-  if (!isStarted) {
-    return (
-      <section className="my-8 rounded-2xl border border-white/10 bg-base-900/70 p-6 shadow-2xl shadow-brand-500/10">
-        <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.2em] text-brand-300">
-          <span className="h-2 w-2 rounded-full bg-brand-400" />
-          Issuer onboarding
-        </div>
-        <h2 className="mt-4 text-3xl font-bold text-base-50">Launch a compliant token issuance workflow</h2>
-        <p className="mt-3 max-w-2xl text-base text-base-200/75">
-          Guide new issuers through token metadata, compliance setup, allowlist seeding, and deployment scripts without losing progress between refreshes.
-        </p>
-        <button
-          type="button"
-          onClick={() => setIsStarted(true)}
-          className="mt-6 inline-flex items-center rounded-xl bg-brand-500 px-5 py-3 text-sm font-semibold text-base-950 transition hover:bg-brand-400"
-        >
-          Start onboarding
-        </button>
-      </section>
-    );
-  }
+  const isLastStep = currentStepIndex === 3;
 
   return (
-    <section className="my-8 rounded-2xl border border-white/10 bg-base-900/70 p-6 shadow-2xl shadow-brand-500/10">
-      <div className="flex flex-col gap-3 border-b border-white/10 pb-5 md:flex-row md:items-center md:justify-between">
+    <div className="my-12 rounded-2xl border border-white/10 bg-base-900/70 p-6 shadow-2xl shadow-brand-500/5">
+      <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-brand-300">Issuer workflow</p>
-          <h2 className="mt-2 text-2xl font-bold text-base-50">{currentStep.title}</h2>
+          <p className="text-sm font-medium uppercase tracking-[0.2em] text-brand-300">Issuer onboarding</p>
+          <h2 className="mt-2 text-2xl font-semibold text-white">Tessera compliance workflow canvas</h2>
         </div>
-        <div className="flex items-center gap-2">
-          {steps.map((step, index) => {
-            const active = index === stepIndex;
-            const complete = index < stepIndex;
-            return (
-              <div key={step.id} className="flex items-center gap-2">
-                <div
-                  className={`flex h-8 w-8 items-center justify-center rounded-full border text-xs font-semibold ${
-                    active
-                      ? "border-brand-400 bg-brand-500 text-base-950"
-                      : complete
-                        ? "border-emerald-400 bg-emerald-500/20 text-emerald-300"
-                        : "border-white/10 bg-base-850 text-base-300"
-                  }`}
-                >
-                  {index + 1}
-                </div>
-                {index < steps.length - 1 && <div className="h-px w-6 bg-white/10" />}
-              </div>
-            );
-          })}
+        <div className="inline-flex items-center rounded-full border border-brand-500/30 bg-brand-500/10 px-3 py-1 text-xs font-semibold text-brand-200">
+          {formSummary[currentStepIndex]}
         </div>
       </div>
 
-      <p className="mt-4 text-sm text-base-200/70">{currentStep.description}</p>
+      <div className="mb-8 grid gap-3 md:grid-cols-4">
+        {formSummary.map((title, index) => {
+          const isActive = index === currentStepIndex;
+          const isComplete = index < currentStepIndex;
+          return (
+            <div
+              key={title}
+              className={`rounded-xl border px-3 py-2 text-sm ${
+                isActive
+                  ? "border-brand-500/40 bg-brand-500/10 text-brand-100"
+                  : isComplete
+                    ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
+                    : "border-white/10 bg-white/5 text-base-200/70"
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <span className="flex h-6 w-6 items-center justify-center rounded-full bg-black/20 text-xs font-semibold">
+                  {index + 1}
+                </span>
+                {title}
+              </div>
+            </div>
+          );
+        })}
+      </div>
 
-      {stepIndex === 0 && (
-        <div className="mt-6 grid gap-4 md:grid-cols-2">
-          <label htmlFor="assetName" className="block text-sm text-base-200">
-            <span className="mb-2 block font-medium">Asset name</span>
+      {currentStepIndex === 0 && (
+        <div className="grid gap-6 md:grid-cols-2">
+          <label className="flex flex-col gap-2 text-sm text-base-100">
+            Project name
             <input
-              id="assetName"
-              {...form.register("assetName")}
-              aria-invalid={Boolean(form.formState.errors.assetName)}
-              className="w-full rounded-xl border border-white/10 bg-base-950 px-3 py-2.5 text-base-100 outline-none transition focus:border-brand-400"
-              placeholder="Bluebird Capital"
+              aria-label="Project name"
+              value={form.projectName}
+              onChange={(event) => updateField("projectName", event.target.value)}
+              className="rounded-xl border border-white/10 bg-base-950/80 px-3 py-2 text-white outline-none transition focus:border-brand-500"
+              placeholder="Atlas Capital"
             />
-            {form.formState.errors.assetName && (
-              <span className="mt-1 block text-xs text-red-300">{form.formState.errors.assetName.message}</span>
-            )}
+            {errors.projectName && <span className="text-xs text-red-300">{errors.projectName}</span>}
           </label>
 
-          <label htmlFor="ticker" className="block text-sm text-base-200">
-            <span className="mb-2 block font-medium">Ticker symbol</span>
+          <label className="flex flex-col gap-2 text-sm text-base-100">
+            Asset name
             <input
-              id="ticker"
-              {...form.register("ticker")}
-              aria-invalid={Boolean(form.formState.errors.ticker)}
-              className="w-full rounded-xl border border-white/10 bg-base-950 px-3 py-2.5 text-base-100 outline-none transition focus:border-brand-400"
-              placeholder="BRC"
+              aria-label="Asset name"
+              value={form.assetName}
+              onChange={(event) => updateField("assetName", event.target.value)}
+              className="rounded-xl border border-white/10 bg-base-950/80 px-3 py-2 text-white outline-none transition focus:border-brand-500"
+              placeholder="Atlas Residences"
             />
-            {form.formState.errors.ticker && (
-              <span className="mt-1 block text-xs text-red-300">{form.formState.errors.ticker.message}</span>
-            )}
+            {errors.assetName && <span className="text-xs text-red-300">{errors.assetName}</span>}
           </label>
 
-          <label htmlFor="issuerPublicKey" className="block text-sm text-base-200 md:col-span-2">
-            <span className="mb-2 block font-medium">Issuer public key</span>
+          <label className="flex flex-col gap-2 text-sm text-base-100">
+            Asset type
+            <select
+              value={form.assetType}
+              onChange={(event) => updateField("assetType", event.target.value as AssetType)}
+              className="rounded-xl border border-white/10 bg-base-950/80 px-3 py-2 text-white outline-none transition focus:border-brand-500"
+            >
+              <option value="real_estate">Real Estate</option>
+              <option value="invoice">Invoice</option>
+              <option value="commodity">Commodity</option>
+            </select>
+          </label>
+
+          <label className="flex flex-col gap-2 text-sm text-base-100">
+            Issuer address
             <input
-              id="issuerPublicKey"
-              {...form.register("issuerPublicKey")}
-              aria-invalid={Boolean(form.formState.errors.issuerPublicKey)}
-              className="w-full rounded-xl border border-white/10 bg-base-950 px-3 py-2.5 font-mono text-sm text-base-100 outline-none transition focus:border-brand-400"
+              aria-label="Issuer address"
+              value={form.issuerAddress}
+              onChange={(event) => updateField("issuerAddress", event.target.value)}
+              className="rounded-xl border border-white/10 bg-base-950/80 px-3 py-2 font-mono text-white outline-none transition focus:border-brand-500"
               placeholder="G..."
             />
-            {form.formState.errors.issuerPublicKey && (
-              <span className="mt-1 block text-xs text-red-300">{form.formState.errors.issuerPublicKey.message}</span>
-            )}
+            {errors.issuerAddress && <span className="text-xs text-red-300">{errors.issuerAddress}</span>}
           </label>
+        </div>
+      )}
 
-          <label htmlFor="totalSupply" className="block text-sm text-base-200 md:col-span-2">
-            <span className="mb-2 block font-medium">Total supply</span>
+      {currentStepIndex === 1 && (
+        <div className="grid gap-6 md:grid-cols-2">
+          <label className="flex flex-col gap-2 text-sm text-base-100">
+            Total supply
             <input
-              id="totalSupply"
-              {...form.register("totalSupply")}
-              aria-invalid={Boolean(form.formState.errors.totalSupply)}
               type="number"
               min="1"
-              className="w-full rounded-xl border border-white/10 bg-base-950 px-3 py-2.5 text-base-100 outline-none transition focus:border-brand-400"
-              placeholder="1000000"
+              value={form.totalSupply}
+              onChange={(event) => updateField("totalSupply", event.target.value)}
+              className="rounded-xl border border-white/10 bg-base-950/80 px-3 py-2 text-white outline-none transition focus:border-brand-500"
             />
-            {form.formState.errors.totalSupply && (
-              <span className="mt-1 block text-xs text-red-300">{form.formState.errors.totalSupply.message}</span>
-            )}
-          </label>
-        </div>
-      )}
-
-      {stepIndex === 1 && (
-        <div className="mt-6 grid gap-4 md:grid-cols-2">
-          <label htmlFor="complianceOfficerKey" className="block text-sm text-base-200 md:col-span-2">
-            <span className="mb-2 block font-medium">Compliance officer key</span>
-            <input
-              id="complianceOfficerKey"
-              {...form.register("complianceOfficerKey")}
-              aria-invalid={Boolean(form.formState.errors.complianceOfficerKey)}
-              className="w-full rounded-xl border border-white/10 bg-base-950 px-3 py-2.5 font-mono text-sm text-base-100 outline-none transition focus:border-brand-400"
-              placeholder="G..."
-            />
-            {form.formState.errors.complianceOfficerKey && (
-              <span className="mt-1 block text-xs text-red-300">{form.formState.errors.complianceOfficerKey.message}</span>
-            )}
+            {errors.totalSupply && <span className="text-xs text-red-300">{errors.totalSupply}</span>}
           </label>
 
-          <label htmlFor="jurisdiction" className="block text-sm text-base-200">
-            <span className="mb-2 block font-medium">Jurisdiction</span>
+          <label className="flex flex-col gap-2 text-sm text-base-100">
+            Decimals
             <input
-              id="jurisdiction"
-              {...form.register("jurisdiction")}
-              aria-invalid={Boolean(form.formState.errors.jurisdiction)}
-              className="w-full rounded-xl border border-white/10 bg-base-950 px-3 py-2.5 text-base-100 outline-none transition focus:border-brand-400"
+              type="number"
+              min="0"
+              max="18"
+              value={form.decimals}
+              onChange={(event) => updateField("decimals", event.target.value)}
+              className="rounded-xl border border-white/10 bg-base-950/80 px-3 py-2 text-white outline-none transition focus:border-brand-500"
+            />
+            {errors.decimals && <span className="text-xs text-red-300">{errors.decimals}</span>}
+          </label>
+
+          <label className="flex flex-col gap-2 text-sm text-base-100">
+            Jurisdiction
+            <input
+              value={form.jurisdiction}
+              onChange={(event) => updateField("jurisdiction", event.target.value)}
+              className="rounded-xl border border-white/10 bg-base-950/80 px-3 py-2 text-white outline-none transition focus:border-brand-500"
               placeholder="US"
             />
-            {form.formState.errors.jurisdiction && (
-              <span className="mt-1 block text-xs text-red-300">{form.formState.errors.jurisdiction.message}</span>
-            )}
+            {errors.jurisdiction && <span className="text-xs text-red-300">{errors.jurisdiction}</span>}
           </label>
 
-          <label htmlFor="allowlistSeed" className="block text-sm text-base-200">
-            <span className="mb-2 block font-medium">Allowlist seed</span>
-            <input
-              id="allowlistSeed"
-              {...form.register("allowlistSeed")}
-              aria-invalid={Boolean(form.formState.errors.allowlistSeed)}
-              className="w-full rounded-xl border border-white/10 bg-base-950 px-3 py-2.5 font-mono text-sm text-base-100 outline-none transition focus:border-brand-400"
-              placeholder="G..."
+          <div className="md:col-span-2">
+            <label className="flex flex-col gap-2 text-sm text-base-100">
+              Seed allowlist
+              <textarea
+                value={form.allowlist}
+                onChange={(event) => updateField("allowlist", event.target.value)}
+                className="min-h-[140px] rounded-xl border border-white/10 bg-base-950/80 px-3 py-2 font-mono text-white outline-none transition focus:border-brand-500"
+                placeholder={"G...\nG...\nG..."}
+              />
+              {errors.allowlist && <span className="text-xs text-red-300">{errors.allowlist}</span>}
+            </label>
+          </div>
+        </div>
+      )}
+
+      {currentStepIndex === 2 && (
+        <div className="space-y-6">
+          <div className="rounded-xl border border-brand-500/25 bg-brand-500/5 p-4">
+            <h3 className="text-lg font-semibold text-white">Compliance gate summary</h3>
+            <ul className="mt-3 space-y-2 text-sm text-base-200/80">
+              <li>• The issuer address must be present in the allowlist before the initial mint.</li>
+              <li>• Transfers are blocked when jurisdiction, expiry, or KYC status fails compliance.</li>
+              <li>• Transaction approvals should be reviewed before deployment.</li>
+            </ul>
+          </div>
+
+          <label className="flex flex-col gap-2 text-sm text-base-100">
+            Compliance note
+            <textarea
+              value={form.complianceNote}
+              onChange={(event) => updateField("complianceNote", event.target.value)}
+              className="min-h-[120px] rounded-xl border border-white/10 bg-base-950/80 px-3 py-2 text-white outline-none transition focus:border-brand-500"
+              placeholder="Note any resale limit, jurisdiction block, or investor restrictions."
             />
-            {form.formState.errors.allowlistSeed && (
-              <span className="mt-1 block text-xs text-red-300">{form.formState.errors.allowlistSeed.message}</span>
-            )}
+            {errors.complianceNote && <span className="text-xs text-red-300">{errors.complianceNote}</span>}
           </label>
         </div>
       )}
 
-      {stepIndex === 2 && (
-        <div className="mt-6 space-y-5">
-          <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
-            <h3 className="text-lg font-semibold text-emerald-300">Review summary</h3>
-            <dl className="mt-3 grid gap-3 text-sm text-base-200 md:grid-cols-2">
-              <div>
-                <dt className="text-base-300">Asset</dt>
-                <dd className="mt-1 font-medium text-base-50">{values.assetName || "Not set"}</dd>
-              </div>
-              <div>
-                <dt className="text-base-300">Ticker</dt>
-                <dd className="mt-1 font-medium text-base-50">{values.ticker || "Not set"}</dd>
-              </div>
-              <div>
-                <dt className="text-base-300">Issuer</dt>
-                <dd className="mt-1 font-mono text-xs text-base-50">{values.issuerPublicKey || "Not set"}</dd>
-              </div>
-              <div>
-                <dt className="text-base-300">Jurisdiction</dt>
-                <dd className="mt-1 font-medium text-base-50">{values.jurisdiction || "Not set"}</dd>
-              </div>
-            </dl>
+      {currentStepIndex === 3 && (
+        <div className="space-y-6">
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="rounded-xl border border-white/10 bg-base-950/70 p-4">
+              <p className="text-xs uppercase tracking-[0.2em] text-brand-300">Project</p>
+              <p className="mt-2 text-lg font-semibold text-white">{form.projectName || "Untitled project"}</p>
+            </div>
+            <div className="rounded-xl border border-white/10 bg-base-950/70 p-4">
+              <p className="text-xs uppercase tracking-[0.2em] text-brand-300">Issuer</p>
+              <p className="mt-2 break-all font-mono text-sm text-base-100">{form.issuerAddress || "Not set"}</p>
+            </div>
           </div>
 
-          <div className="rounded-xl border border-white/10 bg-base-950 p-4">
-            <div className="flex items-center justify-between gap-3">
-              <h3 className="text-lg font-semibold text-base-50">Deployment script</h3>
+          <div className="rounded-xl border border-white/10 bg-base-950/70 p-4">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <h3 className="text-lg font-semibold text-white">Deployment script</h3>
               <button
                 type="button"
                 onClick={handleCopy}
-                className="rounded-lg border border-white/10 bg-base-900 px-3 py-1.5 text-xs font-medium text-base-100 transition hover:border-brand-400"
+                className="rounded-lg border border-brand-500/40 bg-brand-500/10 px-3 py-1.5 text-sm font-medium text-brand-100 hover:bg-brand-500/20"
               >
-                {copyState === "copied" ? "Copied" : "Copy script"}
+                {copied ? "Copied" : "Copy script"}
               </button>
             </div>
-            <pre className="mt-3 overflow-x-auto rounded-lg border border-white/10 bg-base-950 p-3 text-xs leading-6 text-brand-100">
-              <code>{deploymentScript}</code>
+            <pre className="overflow-x-auto rounded-lg border border-white/10 bg-black/20 p-4 text-xs leading-6 text-base-100">
+              {deploymentScript}
             </pre>
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
             <button
               type="button"
-              onClick={runDeployment}
-              className="rounded-xl bg-brand-500 px-5 py-3 text-sm font-semibold text-base-950 transition hover:bg-brand-400"
+              onClick={completeWizard}
+              className="rounded-xl bg-brand-500 px-5 py-2.5 text-sm font-semibold text-base-950 transition hover:bg-brand-400"
             >
-              Trigger wallet deployment
+              {deployStatus === "deploying" ? "Deploying..." : deployStatus === "success" ? "Deployed" : "Deploy via wallet"}
             </button>
-            {deploymentStatus && <span className="text-sm text-emerald-300">{deploymentStatus}</span>}
+            {deployStatus === "success" && (
+              <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-200">
+                Deployment transaction prepared for Freighter.
+              </span>
+            )}
           </div>
         </div>
       )}
@@ -401,34 +424,33 @@ export function IssuerWizard() {
       <div className="mt-8 flex items-center justify-between gap-3 border-t border-white/10 pt-5">
         <button
           type="button"
-          onClick={() => setIsStarted(false)}
-          className="rounded-lg border border-white/10 bg-base-900 px-4 py-2 text-sm text-base-200 transition hover:border-brand-400"
+          onClick={previousStep}
+          disabled={step === 0}
+          className="rounded-xl border border-white/10 px-4 py-2 text-sm font-medium text-base-100 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          Exit
+          Back
         </button>
 
-        <div className="flex items-center gap-3">
-          {stepIndex > 0 && (
-            <button
-              type="button"
-              onClick={previousStep}
-              className="rounded-lg border border-white/10 bg-base-900 px-4 py-2 text-sm text-base-200 transition hover:border-brand-400"
-            >
-              Back
-            </button>
-          )}
-
-          {stepIndex < steps.length - 1 && (
-            <button
-              type="button"
-              onClick={nextStep}
-              className="rounded-lg bg-brand-500 px-4 py-2 text-sm font-semibold text-base-950 transition hover:bg-brand-400"
-            >
-              Next
-            </button>
-          )}
-        </div>
+        {!isLastStep ? (
+          <button
+            type="button"
+            onClick={nextStep}
+            className="rounded-xl bg-brand-500 px-5 py-2.5 text-sm font-semibold text-base-950 transition hover:bg-brand-400"
+          >
+            Continue
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={previousStep}
+            className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-medium text-base-100"
+          >
+            Review again
+          </button>
+        )}
       </div>
-    </section>
+    </div>
   );
 }
+
+export default IssuerWizard;
