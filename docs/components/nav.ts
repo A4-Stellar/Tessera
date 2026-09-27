@@ -1,4 +1,4 @@
-/** Documentation navigation tree, shared by the sidebar and page metadata. */
+import { LOCALES, type Locale } from "@/lib/i18n";
 
 export interface NavItem {
   title: string;
@@ -10,7 +10,7 @@ export interface NavSection {
   items: NavItem[];
 }
 
-export const NAV: NavSection[] = [
+const baseNavSections = [
   {
     title: "Introduction",
     items: [
@@ -49,7 +49,21 @@ export const NAV: NavSection[] = [
       { title: "Integration", href: "/docs/integration" },
     ],
   },
-];
+] as const;
 
-/** Flattened, ordered list of all pages — used for prev/next navigation. */
-export const FLAT_NAV: NavItem[] = NAV.flatMap((s) => s.items);
+export function getNav(locale: Locale): NavSection[] {
+  return baseNavSections.map((section) => ({
+    ...section,
+    items: section.items.map((item) => ({
+      ...item,
+      href: `/${locale}${item.href}`,
+    })),
+  }));
+}
+
+export function getFlatNav(locale: Locale): NavItem[] {
+  return getNav(locale).flatMap((s) => s.items);
+}
+
+export const NAV = getNav("en");
+export const FLAT_NAV = getFlatNav("en");
