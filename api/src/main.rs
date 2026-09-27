@@ -9,6 +9,7 @@
 //! inside AWS KMS and only a signature ever leaves it.
 
 pub mod audit;
+mod cache;
 #[cfg_attr(
     not(test),
     expect(
