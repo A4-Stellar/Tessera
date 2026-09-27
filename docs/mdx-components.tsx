@@ -10,6 +10,7 @@ import { CapTableVisualizer } from "@/components/CapTableVisualizer";
 import { ProspectusViewer } from "@/components/ProspectusViewer";
 import { LazyProspectusViewer } from "@/components/LazyProspectusViewer";
 import { SorobanIDE } from "@/components/SorobanIDE";
+import { IssuerWizard } from "@/components/IssuerWizard";
 
 /**
  * Global MDX component map. Custom components (CalloutBox, ApiEndpoint,
@@ -44,6 +45,7 @@ export function useMDXComponents(components: MDXComponents): MDXComponents {
     ProspectusViewer,
     LazyProspectusViewer,
     SorobanIDE,
+    IssuerWizard,
     ...components,
   };
 }
