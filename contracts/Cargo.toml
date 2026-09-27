@@ -12,9 +12,38 @@ members = [
     "debt-token",
     "vesting",
 ]
+# `fuzz/` is a self-contained sub-tree of three independent packages:
+#
+#   fuzz/            cargo-fuzz driver (needs nightly + libFuzzer)
+#   fuzz/harness/    shared, dependency-free fuzz helpers (stable Rust)
+#   fuzz/proptests/  proptest property targets (stable Rust)
+#
+# None of them may be pulled into this workspace: `cargo fuzz` requires its
+# own package root so it can apply the sanitizer/coverage profile, and
+# libfuzzer-sys does not build on stable. Each carries its own empty
+# `[workspace]` table so it is a root in its own right; listing all three
+# explicitly here as well keeps a path-pattern change from silently pulling
+# one of them in.
+exclude = ["fuzz", "fuzz/harness", "fuzz/proptests"]
 
 [workspace.dependencies]
 soroban-sdk = "25.0.0"
+# Every contract's `[dev-dependencies]` turns on `testutils` so that its own
+# unit tests can register the contract natively. The fuzz harness needs the
+# same feature *enabled for the whole graph*, because it registers the
+# contracts from the outside rather than from inside their own crate.
+soroban-sdk-testutils = { package = "soroban-sdk", version = "25.0.0", features = [
+    "testutils",
+] }
+tessera-common = { path = "common" }
+tessera-asset-token = { path = "asset-token" }
+tessera-cap-table = { path = "cap-table" }
+tessera-compliance = { path = "compliance" }
+tessera-dividend = { path = "dividend" }
+tessera-registry = { path = "registry" }
+bridge = { path = "bridge" }
+vaults = { path = "vaults" }
+debt-token = { path = "debt-token" }
 
 # Standard Soroban contract release profile: small, deterministic wasm.
 [profile.release]

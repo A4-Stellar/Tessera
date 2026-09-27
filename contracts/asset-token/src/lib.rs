@@ -45,6 +45,7 @@ pub enum Error {
     Overflow = 9,
     /// Appended for issue #10 (holding-period lockups). Placed after the
     /// highest pre-existing error code (9) rather than renumbering anything.
+    /// Issue #10 — holding-period lockups.
     Locked = 10,
     /// Issue #90: split ratio is zero, or the cumulative multiplier overflows.
     InvalidSplitRatio = 11,
@@ -154,7 +155,26 @@ impl AssetTokenContract {
         if from_balance < amount {
             panic_with_error!(env, Error::InsufficientBalance);
         }
+
+        // A self-transfer is a no-op, and must be handled before the two
+        // balance writes below. Those writes read `to_balance` *before*
+        // `from_balance` is written, so with `from == to` they would store
+        // `from_balance - amount` and then immediately overwrite it with
+        // `from_balance + amount` — inflating the holder by `amount` while
+        // `total_supply` stayed put. Since the excess is not backed by supply,
+        // a holder with a small balance could transfer `amount` to themselves
+        // repeatedly to manufacture an arbitrarily large balance, which
+        // `clawback`/`burn` then treats as real. Guard it explicitly.
+        if from == to {
+            env.events()
+                .publish((symbol_short!("transfer"), from, to), amount);
+            return;
+        }
+
         let to_balance = Self::balance(env.clone(), to.clone());
+        let new_to_balance = to_balance
+            .checked_add(amount)
+            .unwrap_or_else(|| panic_with_error!(env, Error::Overflow));
 
         stock_split::set_balance(&env, &from.clone(), from_balance - amount);
         stock_split::set_balance(&env, &to.clone(), to_balance + amount);
@@ -207,9 +227,15 @@ impl AssetTokenContract {
             .instance()
             .get(&DataKey::TotalSupply)
             .unwrap_or(0);
+        // `from_balance >= amount` is checked above, which is enough *only* while
+        // the invariant `balance <= total_supply` holds. Checked explicitly so
+        // that a supply/balance divergence can never underflow into a trap.
+        let new_total = total_supply
+            .checked_sub(amount)
+            .unwrap_or_else(|| panic_with_error!(env, Error::Overflow));
         env.storage()
             .instance()
-            .set(&DataKey::TotalSupply, &(total_supply - amount));
+            .set(&DataKey::TotalSupply, &new_total);
 
         env.events().publish((symbol_short!("burn"), from), amount);
     }
@@ -369,7 +395,11 @@ impl AssetTokenContract {
     // ---- internal ----
 
     fn require_admin(env: &Env, admin: &Address) {
-        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| panic_with_error!(env, Error::NotInitialized));
         admin.require_auth();
         if admin != &stored_admin {
             panic_with_error!(env, Error::Unauthorized);

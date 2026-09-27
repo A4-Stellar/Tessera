@@ -341,8 +341,7 @@ impl DividendContract {
         env.invoke_contract(token, &Symbol::new(env, "total_supply"), args)
     }
 }
-pub mod drip;
-mod tax_withholding;
-
-#[cfg(test)]
-mod test;
+/// Tax-withholding engine, deployed alongside the dividend contract and queried
+/// for the per-jurisdiction withholding rate. Public so that its own clients
+/// and fuzz target can be generated against it.
+pub mod tax_withholding;
