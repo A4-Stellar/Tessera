@@ -28,3 +28,33 @@ dist/
 .idea
 .vscode/*
 !.vscode/extensions.json
+
+# Fuzzing (contracts/fuzz)
+#
+# Two things here are deliberately NOT ignored, and it is worth stating why:
+#
+#   contracts/fuzz/fuzz_targets/*.rs   the targets themselves - these are the
+#                                      deliverable and must be committed.
+#   contracts/fuzz/Cargo.toml          the target declarations - likewise.
+#
+# What is ignored is generated state. `corpus/` is libFuzzer's accumulated
+# coverage: it is large, it is per-machine noise, and the CI workflow caches and
+# restores it explicitly rather than storing it in git. `artifacts/` holds crash
+# reproducers, which are useful when they are attached to an issue or uploaded
+# as a CI artifact and actively harmful in the repository, since a stale crash
+# input sitting in-tree looks like a current failure.
+contracts/fuzz/target/
+contracts/fuzz/corpus/
+contracts/fuzz/artifacts/
+contracts/fuzz/coverage/
+contracts/fuzz/proptests/target/
+
+# NOTE: `contracts/fuzz/proptests/**/proptest-regressions/` is deliberately NOT
+# ignored. proptest writes a counterexample there when a property fails, and
+# replaying that seed on every subsequent run is the whole point of the file -
+# it stops a found bug from silently returning once the input shrinks past what
+# a random generator would produce. Commit them, the same as a fixture.
+
+# cargo-fuzz coverage output
+*.profraw
+*.profdata

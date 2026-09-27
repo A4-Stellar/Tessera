@@ -47,6 +47,11 @@ pub enum Error {
     /// highest pre-existing error code (6) rather than renumbering anything.
     HookAlreadyRegistered = 7,
     HookNotRegistered = 8,
+    /// Appended for the fuzzing work. `require_admin` previously did
+    /// `.unwrap()` on the stored admin, so calling any admin-gated entry point
+    /// before `initialize` trapped (`unreachable` in WASM) instead of failing
+    /// in a way a caller — or a fuzzer — could distinguish from a real bug.
+    NotInitialized = 9,
 }
 
 #[derive(Clone)]
@@ -360,7 +365,11 @@ impl ComplianceContract {
     // ---- internal ----
 
     fn require_admin(env: &Env, admin: &Address) {
-        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| panic_with_error!(env, Error::NotInitialized));
         admin.require_auth();
         if admin != &stored_admin {
             panic_with_error!(env, Error::Unauthorized);
