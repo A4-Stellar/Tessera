@@ -1,0 +1,33 @@
+name: verification
+
+# Machine-checked formal verification of the compliance gate and the token
+# supply invariants. See contracts/compliance/verification/README.md for what
+# each property means, for the two bugs the model found, and for the fidelity
+# limits of the abstraction.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: verification-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tlc:
+    name: TLA+ / TLC model check
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Run model checks
+        working-directory: contracts/compliance/verification
+        run: ./verify.sh
