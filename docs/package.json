@@ -15,6 +15,7 @@
     "test:a11y:e2e": "playwright test"
   },
   "dependencies": {
+    "@hookform/resolvers": "^5.9.1",
     "@mdx-js/loader": "^3.1.0",
     "@mdx-js/react": "^3.1.0",
     "@monaco-editor/react": "^4.7.0",
@@ -27,7 +28,10 @@
     "pdfjs-dist": "^4.10.38",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "recharts": "^2.12.7"
+    "react-hook-form": "^7.89.0",
+    "recharts": "^2.12.7",
+    "zod": "^3.25.76",
+    "zustand": "^5.0.15"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.13.0",
