@@ -27,6 +27,7 @@ WORKDIR /app
 FROM chef AS planner
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
+COPY benches ./benches
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
@@ -42,6 +43,7 @@ ENV RUSTFLAGS="-C target-feature=+crt-static"
 
 # Cache dependencies separately from source.
 COPY --from=planner /app/recipe.json recipe.json
+COPY --from=planner /app/benches ./benches
 RUN cargo chef cook --release --locked --zigbuild --target "$(cat /rust-target)" --recipe-path recipe.json
 
 COPY Cargo.toml Cargo.lock ./
