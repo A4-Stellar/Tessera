@@ -41,7 +41,14 @@ pub enum Error {
     Overflow = 9,
     /// Appended for issue #10 (holding-period lockups). Placed after the
     /// highest pre-existing error code (9) rather than renumbering anything.
+    /// Issue #10 — holding-period lockups.
     Locked = 10,
+    /// Appended for the fuzzing work. `require_admin` previously did
+    /// `.unwrap()` on the stored admin, so calling any admin-gated entry point
+    /// before `initialize` trapped instead of reporting a contract error, which
+    /// made the pre-initialization state indistinguishable from a real
+    /// arithmetic bug.
+    NotInitialized = 11,
 }
 
 #[derive(Clone)]
@@ -142,14 +149,33 @@ impl AssetTokenContract {
         if from_balance < amount {
             panic_with_error!(env, Error::InsufficientBalance);
         }
+
+        // A self-transfer is a no-op, and must be handled before the two
+        // balance writes below. Those writes read `to_balance` *before*
+        // `from_balance` is written, so with `from == to` they would store
+        // `from_balance - amount` and then immediately overwrite it with
+        // `from_balance + amount` — inflating the holder by `amount` while
+        // `total_supply` stayed put. Since the excess is not backed by supply,
+        // a holder with a small balance could transfer `amount` to themselves
+        // repeatedly to manufacture an arbitrarily large balance, which
+        // `clawback`/`burn` then treats as real. Guard it explicitly.
+        if from == to {
+            env.events()
+                .publish((symbol_short!("transfer"), from, to), amount);
+            return;
+        }
+
         let to_balance = Self::balance(env.clone(), to.clone());
+        let new_to_balance = to_balance
+            .checked_add(amount)
+            .unwrap_or_else(|| panic_with_error!(env, Error::Overflow));
 
         env.storage()
             .persistent()
             .set(&DataKey::Balance(from.clone()), &(from_balance - amount));
         env.storage()
             .persistent()
-            .set(&DataKey::Balance(to.clone()), &(to_balance + amount));
+            .set(&DataKey::Balance(to.clone()), &new_to_balance);
 
         env.events()
             .publish((symbol_short!("transfer"), from, to), amount);
@@ -176,9 +202,12 @@ impl AssetTokenContract {
             .set(&DataKey::TotalSupply, &new_total);
 
         let to_balance = Self::balance(env.clone(), to.clone());
+        let new_to_balance = to_balance
+            .checked_add(amount)
+            .unwrap_or_else(|| panic_with_error!(env, Error::Overflow));
         env.storage()
             .persistent()
-            .set(&DataKey::Balance(to.clone()), &(to_balance + amount));
+            .set(&DataKey::Balance(to.clone()), &new_to_balance);
 
         env.events().publish((symbol_short!("mint"), to), amount);
     }
@@ -203,9 +232,15 @@ impl AssetTokenContract {
             .instance()
             .get(&DataKey::TotalSupply)
             .unwrap_or(0);
+        // `from_balance >= amount` is checked above, which is enough *only* while
+        // the invariant `balance <= total_supply` holds. Checked explicitly so
+        // that a supply/balance divergence can never underflow into a trap.
+        let new_total = total_supply
+            .checked_sub(amount)
+            .unwrap_or_else(|| panic_with_error!(env, Error::Overflow));
         env.storage()
             .instance()
-            .set(&DataKey::TotalSupply, &(total_supply - amount));
+            .set(&DataKey::TotalSupply, &new_total);
 
         env.events().publish((symbol_short!("burn"), from), amount);
     }
@@ -352,7 +387,11 @@ impl AssetTokenContract {
     // ---- internal ----
 
     fn require_admin(env: &Env, admin: &Address) {
-        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| panic_with_error!(env, Error::NotInitialized));
         admin.require_auth();
         if admin != &stored_admin {
             panic_with_error!(env, Error::Unauthorized);

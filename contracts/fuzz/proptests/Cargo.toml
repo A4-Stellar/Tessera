@@ -1,0 +1,49 @@
+# Standalone package, for the same reason as `contracts/fuzz`: `proptest` must
+# run on stable and must not be pulled into the wasm-targeted workspace build.
+# `contracts/Cargo.toml` excludes both `fuzz` and `fuzz/proptests`.
+[workspace]
+
+[package]
+name = "tessera-proptests"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+description = "Property tests for the Tessera Soroban contract suite."
+
+[dependencies]
+soroban-sdk = { version = "25.0.0", features = ["testutils"] }
+proptest = "1"
+
+tessera-asset-token = { path = "../../asset-token" }
+tessera-cap-table = { path = "../../cap-table" }
+tessera-common = { path = "../../common" }
+tessera-compliance = { path = "../../compliance" }
+tessera-dividend = { path = "../../dividend" }
+tessera-registry = { path = "../../registry" }
+bridge = { path = "../../bridge" }
+debt-token = { path = "../../debt-token" }
+vaults = { path = "../../vaults" }
+
+# Mirrors the fuzz profile: these are arithmetic-invariant tests, so an
+# optimization that skips a bounds check could hide exactly the bug being
+# asserted against.
+[profile.test]
+opt-level = 0
+debug-assertions = true
+overflow-checks = true
+
+# CI runs `cargo test --release`, which selects `profile.release` and ignores
+# `profile.test` entirely. Without this, the settings above would apply only to
+# local `cargo test` runs and the checked-build guarantee would silently lapse
+# on every pull request.
+#
+# `opt-level` is left at the release default on purpose: the property tests
+# themselves are cheap, but the contracts they call are large, and a fully
+# unoptimized build of the whole suite makes the nightly job slow enough that
+# people skip it. The two settings that actually change *observable behaviour*
+# for an arithmetic test are kept on, so a wrap in test-side shadow accounting
+# still surfaces as a panic instead of a confusing downstream mismatch.
+[profile.release]
+debug-assertions = true
+overflow-checks = true
