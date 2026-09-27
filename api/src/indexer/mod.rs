@@ -12,6 +12,10 @@
 //! [`POLL_INTERVAL`] rather than panicking, so the API always keeps serving
 //! the last good snapshot.
 
+#[expect(
+    dead_code,
+    reason = "archive planning is staged until the object-storage worker is wired"
+)]
 pub mod archive;
 pub mod diagnostics;
 pub mod nav_calculator;

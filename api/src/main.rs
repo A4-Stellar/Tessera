@@ -9,6 +9,10 @@
 //! inside AWS KMS and only a signature ever leaves it.
 
 pub mod audit;
+#[expect(
+    dead_code,
+    reason = "cache policy helpers are staged until response-cache integration"
+)]
 mod cache;
 #[cfg_attr(
     not(test),
