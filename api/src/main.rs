@@ -24,6 +24,7 @@ mod middleware;
 mod models;
 mod routes;
 mod services;
+pub mod storage;
 mod ws;
 
 use std::net::SocketAddr;

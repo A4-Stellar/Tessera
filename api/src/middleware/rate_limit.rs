@@ -104,11 +104,11 @@ impl MemoryRateLimiter {
 #[async_trait]
 impl RateLimiter for MemoryRateLimiter {
     async fn check(&self, key: &str, _limit: u64, _window: u64) -> Result<(bool, Option<u64>), String> {
-        use governor::clock::Clock as _;
+        use governor::clock::{Clock as _, DefaultClock};
         match self.limiter.check_key(&key.to_string()) {
             Ok(_) => Ok((true, None)),
             Err(e) => {
-                let wait = e.wait_time_from(self.limiter.clock().now());
+                let wait = e.wait_time_from(DefaultClock::default().now());
                 Ok((false, Some(wait.as_secs())))
             }
         }
