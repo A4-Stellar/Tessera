@@ -10,6 +10,8 @@
 //! key for the pause flag, and the host call for a code upgrade.
 #![no_std]
 
+pub mod circuit_breaker;
+
 use soroban_sdk::{symbol_short, BytesN, Env, Symbol};
 
 const PAUSED_KEY: Symbol = symbol_short!("paused");
