@@ -11,8 +11,8 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, Address,
-    Bytes, BytesN, Env, Vec,
+    contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short,
+    xdr::ToXdr, Address, Bytes, BytesN, Env, Vec,
 };
 
 #[contracttype]
