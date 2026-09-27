@@ -247,7 +247,12 @@ impl AssetTokenContract {
     /// Issue #90 - execute a forward (`num > den`) or reverse (`num < den`)
     /// split. O(1): only a global multiplier changes; holder balances are
     /// settled lazily on next read/write. Admin-authenticated.
-    pub fn execute_share_split(env: Env, admin: Address, ratio_numerator: u32, ratio_denominator: u32) {
+    pub fn execute_share_split(
+        env: Env,
+        admin: Address,
+        ratio_numerator: u32,
+        ratio_denominator: u32,
+    ) {
         Self::require_admin(&env, &admin);
         stock_split::execute(&env, ratio_numerator, ratio_denominator);
     }
@@ -298,7 +303,8 @@ impl AssetTokenContract {
         env.storage()
             .instance()
             .set(&DataKey::Compliance, &compliance);
-        env.events().publish((symbol_short!("setcomp"),), compliance);
+        env.events()
+            .publish((symbol_short!("setcomp"),), compliance);
     }
 
     /// Issue #10 — set (or clear, with `unlock_ledger = 0`) the holding-period
@@ -330,11 +336,7 @@ impl AssetTokenContract {
             name: env.storage().instance().get(&DataKey::Name).unwrap(),
             symbol: env.storage().instance().get(&DataKey::Symbol).unwrap(),
             asset_type: env.storage().instance().get(&DataKey::AssetType).unwrap(),
-            total_supply: env
-                .storage()
-                .instance()
-                .get(&DataKey::TotalSupply)
-                .unwrap(),
+            total_supply: env.storage().instance().get(&DataKey::TotalSupply).unwrap(),
             decimals: env.storage().instance().get(&DataKey::Decimals).unwrap(),
             admin: env.storage().instance().get(&DataKey::Admin).unwrap(),
             compliance_contract: env.storage().instance().get(&DataKey::Compliance).unwrap(),

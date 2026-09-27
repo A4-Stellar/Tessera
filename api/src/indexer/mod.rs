@@ -12,6 +12,10 @@
 //! [`POLL_INTERVAL`] rather than panicking, so the API always keeps serving
 //! the last good snapshot.
 
+#[expect(
+    dead_code,
+    reason = "archive planning is staged until the object-storage worker is wired"
+)]
 pub mod archive;
 pub mod diagnostics;
 pub mod nav_calculator;
@@ -26,12 +30,9 @@ use std::time::{Duration, Instant};
 
 use arc_swap::ArcSwap;
 use metrics_exporter_prometheus::PrometheusHandle;
-use rand::Rng;
-use reqwest::header::RETRY_AFTER;
-use reqwest::StatusCode;
 use serde::Deserialize;
 use stellar_xdr::curr as xdr;
-use stellar_xdr::curr::{Limits, ReadXdr, WriteXdr};
+use stellar_xdr::curr::{Limits, WriteXdr};
 
 use crate::models::{
     Asset, ComplianceSummary, Distribution, Event, Holder, JurisdictionCount, Stats,
@@ -114,7 +115,10 @@ impl Config {
             env_or("RWA_RPC_URL", TESTNET_RPC)
         };
 
-        let rpc_urls: Vec<String> = rpc_urls_str.split(',').map(|s| s.trim().to_string()).collect();
+        let rpc_urls: Vec<String> = rpc_urls_str
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .collect();
         for rpc_url in &rpc_urls {
             url::Url::parse(rpc_url).map_err(|e| ConfigError::RpcUrl(format!("{e}: {rpc_url}")))?;
         }
@@ -864,7 +868,11 @@ impl Indexer {
         // detector (issue #101) so replayed/backfilled activity is scored once.
         let events = replay::stored_events().unwrap_or_else(|| prev.events.clone());
         let known: HashSet<u64> = prev.events.iter().map(|e| e.id).collect();
-        let fresh: Vec<Event> = events.iter().filter(|e| !known.contains(&e.id)).cloned().collect();
+        let fresh: Vec<Event> = events
+            .iter()
+            .filter(|e| !known.contains(&e.id))
+            .cloned()
+            .collect();
         self.state.anomalies.observe_events(&fresh);
         self.state.stream_processor.ingest_events(&events, &assets).await;
 
@@ -1082,6 +1090,7 @@ mod tests {
     use super::*;
     use serde_json::json;
     use stellar_xdr::curr as xdr;
+    use stellar_xdr::curr::ReadXdr;
 
     fn test_asset(id: u64) -> Asset {
         Asset {
@@ -1479,7 +1488,8 @@ mod tests {
         let base = spawn_rpc_stub(router).await;
 
         let read = |path: &str| {
-            let rpc = rpc_client::RpcClient::new(vec![format!("{base}{path}")], STUB_SOURCE.to_string());
+            let rpc =
+                rpc_client::RpcClient::new(vec![format!("{base}{path}")], STUB_SOURCE.to_string());
             async move { rpc.read(STUB_CONTRACT, "get_assets", vec![]).await }
         };
 
