@@ -312,7 +312,7 @@ fn read_address<'a>(r: &mut Reader<'a>) -> Result<AddressView<'a>> {
             d => Err(XdrError::InvalidDiscriminant(d)),
         },
         1 => Ok(AddressView::Contract(r.array::<32>()?)),
-        d @ (2 | 3 | 4) => {
+        d @ 2..=4 => {
             let start = r.pos;
             match d {
                 2 => {
@@ -473,8 +473,11 @@ pub fn parse_contract_event(buf: &[u8]) -> Result<ContractEventView<'_>> {
 
 #[cfg(test)]
 mod tests {
+    // This file is also included by a no-harness benchmark, where its test-only imports are unused.
+    #[allow(unused_imports)]
     use super::*;
     use stellar_xdr::curr as xdr;
+    #[allow(unused_imports)]
     use stellar_xdr::curr::{Limits, WriteXdr};
 
     fn sym(s: &str) -> xdr::ScVal {
@@ -645,7 +648,7 @@ mod tests {
 
     #[test]
     fn scalars_round_trip_against_stellar_xdr() {
-        let cases = vec![
+        let cases = [
             xdr::ScVal::Bool(false),
             xdr::ScVal::U32(u32::MAX),
             xdr::ScVal::I32(-5),

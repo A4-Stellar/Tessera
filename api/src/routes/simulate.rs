@@ -11,6 +11,6 @@ pub struct SimulateResponse {
     pub fee: u64,
 }
 
-pub async fn simulate_handler(Json(req): Json<SimulateRequest>) -> impl IntoResponse {
+pub async fn simulate_handler(Json(_req): Json<SimulateRequest>) -> impl IntoResponse {
     Json(SimulateResponse { fee: 100 })
 }

@@ -24,12 +24,9 @@ use std::time::{Duration, Instant};
 
 use arc_swap::ArcSwap;
 use metrics_exporter_prometheus::PrometheusHandle;
-use rand::Rng;
-use reqwest::header::RETRY_AFTER;
-use reqwest::StatusCode;
 use serde::Deserialize;
 use stellar_xdr::curr as xdr;
-use stellar_xdr::curr::{Limits, ReadXdr, WriteXdr};
+use stellar_xdr::curr::{Limits, WriteXdr};
 
 use crate::models::{
     Asset, ComplianceSummary, Distribution, Event, Holder, JurisdictionCount, Stats,
@@ -1083,6 +1080,7 @@ mod tests {
     use super::*;
     use serde_json::json;
     use stellar_xdr::curr as xdr;
+    use stellar_xdr::curr::ReadXdr;
 
     fn test_asset(id: u64) -> Asset {
         Asset {

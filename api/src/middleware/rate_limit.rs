@@ -7,10 +7,10 @@ use axum::{
     Json,
 };
 use governor::{
-    clock::DefaultClock, state::keyed::DefaultKeyedStateStore, Quota,
-    RateLimiter as GovernorRateLimiter,
+    clock::{Clock, DefaultClock},
+    state::keyed::DefaultKeyedStateStore,
+    Quota, RateLimiter as GovernorRateLimiter,
 };
-use redis::AsyncCommands;
 use serde_json::json;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};

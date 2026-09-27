@@ -180,6 +180,13 @@ impl AnomalyDetector {
 
     /// Subscribe to real-time alerts. Slow receivers lag (and skip) rather
     /// than blocking the indexer.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Alert subscriptions are currently consumed by service tests only."
+        )
+    )]
     pub fn subscribe(&self) -> broadcast::Receiver<AnomalyAlert> {
         self.tx.subscribe()
     }

@@ -45,6 +45,8 @@ use stellar_xdr::curr::{Limits, ReadXdr};
 use super::{scval_to_json, AppState, Config};
 use crate::models::Event;
 
+type CachedEvents = Mutex<Option<(SystemTime, Vec<Event>)>>;
+
 pub const DEFAULT_WINDOW_LEDGERS: u32 = 500;
 const PAGE_LIMIT: u32 = 1000;
 const MAX_ATTEMPTS: u32 = 5;
@@ -309,6 +311,13 @@ pub fn merge_events(
 impl AppState {
     /// Atomically merge replayed events into the live snapshot (single
     /// `ArcSwap` store: readers see the old or the new event list, never a mix).
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Live replay merges are currently exercised through the replay tests."
+        )
+    )]
     pub fn merge_events(&self, shadow: &ShadowState) {
         let mut next = self.snapshot();
         next.events = merge_events(
@@ -425,7 +434,7 @@ fn store_path() -> PathBuf {
 /// Events persisted by replay, for the indexer to serve. Cached by file
 /// modification time so the 10s refresh loop only re-parses after a merge.
 pub fn stored_events() -> Option<Vec<Event>> {
-    static CACHE: OnceLock<Mutex<Option<(SystemTime, Vec<Event>)>>> = OnceLock::new();
+    static CACHE: OnceLock<CachedEvents> = OnceLock::new();
     let path = store_path();
     let mtime = fs::metadata(&path).and_then(|m| m.modified()).ok()?;
     let mut cache = CACHE.get_or_init(|| Mutex::new(None)).lock().ok()?;
@@ -714,12 +723,11 @@ pub async fn run_replay(
         .ok()
         .and_then(|b| serde_json::from_slice::<ShadowState>(&b).ok())
         .filter(|s| s.matches(args) && s.next_ledger >= args.start_ledger)
-        .map(|s| {
+        .inspect(|s| {
             tracing::info!(
                 next_ledger = s.next_ledger,
                 "resuming replay from checkpoint"
             );
-            s
         })
         .unwrap_or_else(|| ShadowState::new(args));
 

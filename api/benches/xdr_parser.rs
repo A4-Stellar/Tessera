@@ -5,7 +5,6 @@
 //! Run with `cargo bench --bench xdr_parser` from `api/`.
 
 #[path = "../src/indexer/xdr_parser.rs"]
-#[allow(dead_code)]
 mod xdr_parser;
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
