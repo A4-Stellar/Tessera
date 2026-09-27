@@ -6,8 +6,16 @@ pub mod compliance;
 pub mod dividends;
 pub mod events;
 pub mod holders;
+#[expect(
+    dead_code,
+    reason = "The search placeholder is not part of the active API router."
+)]
 pub mod search;
 pub mod security;
+#[expect(
+    dead_code,
+    reason = "The simulation placeholder is not part of the active API router."
+)]
 pub mod simulate;
 pub mod stats;
 

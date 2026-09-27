@@ -5,8 +5,6 @@ use axum::{
     },
     response::IntoResponse,
 };
-use futures::{sink::SinkExt, stream::StreamExt};
-use serde_json::json;
 use std::collections::HashSet;
 use std::time::Duration;
 use tokio::time::interval;
