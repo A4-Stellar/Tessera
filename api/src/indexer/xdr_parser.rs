@@ -102,7 +102,9 @@ impl<'a> Reader<'a> {
 
     fn array<const N: usize>(&mut self) -> Result<&'a [u8; N]> {
         // `take` guarantees the slice length, so the conversion cannot fail.
-        self.take(N)?.try_into().map_err(|_| XdrError::UnexpectedEof)
+        self.take(N)?
+            .try_into()
+            .map_err(|_| XdrError::UnexpectedEof)
     }
 
     pub fn u32(&mut self) -> Result<u32> {
@@ -310,7 +312,7 @@ fn read_address<'a>(r: &mut Reader<'a>) -> Result<AddressView<'a>> {
             d => Err(XdrError::InvalidDiscriminant(d)),
         },
         1 => Ok(AddressView::Contract(r.array::<32>()?)),
-        d @ (2 | 3 | 4) => {
+        d @ 2..=4 => {
             let start = r.pos;
             match d {
                 2 => {
@@ -433,7 +435,11 @@ pub fn parse_contract_event(buf: &[u8]) -> Result<ContractEventView<'_>> {
         0 => {}
         d => return Err(XdrError::InvalidDiscriminant(d)),
     }
-    let contract_id = if r.bool()? { Some(r.array::<32>()?) } else { None };
+    let contract_id = if r.bool()? {
+        Some(r.array::<32>()?)
+    } else {
+        None
+    };
     let kind = match r.u32()? {
         0 => EventKind::System,
         1 => EventKind::Contract,
@@ -467,8 +473,11 @@ pub fn parse_contract_event(buf: &[u8]) -> Result<ContractEventView<'_>> {
 
 #[cfg(test)]
 mod tests {
+    // This file is also included by a no-harness benchmark, where its test-only imports are unused.
+    #[allow(unused_imports)]
     use super::*;
     use stellar_xdr::curr as xdr;
+    #[allow(unused_imports)]
     use stellar_xdr::curr::{Limits, WriteXdr};
 
     fn sym(s: &str) -> xdr::ScVal {
@@ -481,16 +490,15 @@ mod tests {
             xdr::ScVal::Address(xdr::ScAddress::Account(xdr::AccountId(
                 xdr::PublicKey::PublicKeyTypeEd25519(xdr::Uint256([7; 32])),
             ))),
-            xdr::ScVal::Address(xdr::ScAddress::Contract(xdr::ContractId(xdr::Hash([9; 32])))),
+            xdr::ScVal::Address(xdr::ScAddress::Contract(xdr::ContractId(xdr::Hash(
+                [9; 32],
+            )))),
         ];
         let data = xdr::ScVal::Map(Some(xdr::ScMap(
             vec![
                 xdr::ScMapEntry {
                     key: sym("amount"),
-                    val: xdr::ScVal::I128(xdr::Int128Parts {
-                        hi: -1,
-                        lo: 12345,
-                    }),
+                    val: xdr::ScVal::I128(xdr::Int128Parts { hi: -1, lo: 12345 }),
                 },
                 xdr::ScMapEntry {
                     key: sym("memo"),
@@ -534,8 +542,14 @@ mod tests {
         assert_eq!(view.topics.len(), 3);
         let topics: Vec<_> = view.topics.iter().collect::<Result<_>>().unwrap();
         assert_eq!(topics[0], ScValView::Symbol(b"transfer"));
-        assert_eq!(topics[1], ScValView::Address(AddressView::Account(&[7; 32])));
-        assert_eq!(topics[2], ScValView::Address(AddressView::Contract(&[9; 32])));
+        assert_eq!(
+            topics[1],
+            ScValView::Address(AddressView::Account(&[7; 32]))
+        );
+        assert_eq!(
+            topics[2],
+            ScValView::Address(AddressView::Contract(&[9; 32]))
+        );
 
         let ScValView::Map(Some(map)) = view.data else {
             panic!("data should be a map")
@@ -580,7 +594,10 @@ mod tests {
         let mut bytes = sample_event().to_xdr(Limits::none()).unwrap();
         let mut trailing = bytes.clone();
         trailing.push(0);
-        assert_eq!(parse_contract_event(&trailing), Err(XdrError::TrailingBytes));
+        assert_eq!(
+            parse_contract_event(&trailing),
+            Err(XdrError::TrailingBytes)
+        );
 
         // Symbol "transfer" is 8 bytes (no pad); use a 3-byte string instead.
         let s = xdr::ScVal::String(xdr::ScString("abc".try_into().unwrap()));
@@ -631,7 +648,7 @@ mod tests {
 
     #[test]
     fn scalars_round_trip_against_stellar_xdr() {
-        let cases = vec![
+        let cases = [
             xdr::ScVal::Bool(false),
             xdr::ScVal::U32(u32::MAX),
             xdr::ScVal::I32(-5),

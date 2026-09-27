@@ -222,7 +222,7 @@ export function AuditDashboard({
         rows,
       };
       const bytes = buildAuditPdf(report);
-      const blob = new Blob([bytes], { type: "application/pdf" });
+      const blob = new Blob([new Uint8Array(bytes).buffer as ArrayBuffer], { type: "application/pdf" });
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;

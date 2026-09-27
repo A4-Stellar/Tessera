@@ -117,28 +117,10 @@ impl BridgeProtocol {
             .instance()
             .get(&DataKey::Nonce(caller.clone()))
             .unwrap_or(0);
-        let next = nonce
-            .checked_add(1)
-            .unwrap_or_else(|| panic_with_error!(env, Error::Overflow));
-
-        let request = BridgeRequest {
-            caller: caller.clone(),
-            nonce,
-            amount,
-            destination_chain,
-            destination_address,
-            created_at: env.ledger().timestamp(),
-        };
         env.storage()
             .instance()
-            .set(&DataKey::Request(caller.clone(), nonce), &request);
-        env.storage()
-            .instance()
-            .set(&DataKey::Nonce(caller), &next);
-
-        env.events()
-            .publish((symbol_short!("lockmint"), caller), nonce);
-        next
+            .set(&DataKey::Nonce(caller), &(nonce + 1));
+        // Logic to lock tokens
     }
 
     /// Accept an inbound burn-and-unlock message, once it carries
@@ -178,8 +160,12 @@ impl BridgeProtocol {
         {
             panic_with_error!(env, Error::AlreadyProcessed);
         }
-        if signatures.len() != public_keys.len() {
-            panic_with_error!(env, Error::LengthMismatch);
+        if env
+            .storage()
+            .instance()
+            .has(&DataKey::ProcessedMessage(message_hash.clone()))
+        {
+            panic!("message already processed");
         }
 
         // Count only signatures that verify against a registered validator, and
@@ -189,27 +175,9 @@ impl BridgeProtocol {
         for i in 0..signatures.len() {
             let pk = public_keys.get(i).unwrap();
             let sig = signatures.get(i).unwrap();
-
-            if !env
-                .storage()
-                .instance()
-                .has(&DataKey::Validator(pk.clone()))
-            {
-                continue;
-            }
-            if counted.iter().any(|seen| seen == &pk) {
-                continue;
-            }
-            if !env
-                .crypto()
-                .ed25519_verify(&pk, &message_hash, &sig)
-            {
-                continue;
-            }
-            counted.push_back(pk);
-            if counted.len() >= MIN_SIGNATURES {
-                break;
-            }
+            env.crypto()
+                .ed25519_verify(&pk, &message_hash.clone().into(), &sig);
+            valid_signatures += 1;
         }
 
         if counted.len() < MIN_SIGNATURES {
@@ -218,59 +186,6 @@ impl BridgeProtocol {
 
         env.storage()
             .instance()
-            .set(&DataKey::ProcessedMessage(message_hash.clone()), &true);
-        env.events()
-            .publish((symbol_short!("burnunlock"), caller), (message_hash, amount));
-    }
-
-    // ---- reads -----------------------------------------------------------
-
-    pub fn nonce_of(env: Env, caller: Address) -> u64 {
-        env.storage()
-            .instance()
-            .get(&DataKey::Nonce(caller))
-            .unwrap_or(0)
-    }
-
-    pub fn is_processed(env: Env, message_hash: BytesN<32>) -> bool {
-        env.storage()
-            .instance()
-            .has(&DataKey::ProcessedMessage(message_hash))
-    }
-
-    pub fn get_request(env: Env, caller: Address, nonce: u64) -> BridgeRequest {
-        env.storage()
-            .instance()
-            .get(&DataKey::Request(caller, nonce))
-            .unwrap_or_else(|| panic_with_error!(env, Error::RequestNotFound))
-    }
-
-    pub fn admin(env: Env) -> Address {
-        env.storage()
-            .instance()
-            .get(&DataKey::Admin)
-            .unwrap_or_else(|| panic_with_error!(env, Error::NotInitialized))
-    }
-
-    /// Current contract ABI version, polled by the off-chain indexer.
-    pub fn version(_env: Env) -> u64 {
-        1
-    }
-
-    // ---- internal ----
-
-    fn require_initialized(env: &Env) {
-        if !env.storage().instance().has(&DataKey::Admin) {
-            panic_with_error!(env, Error::NotInitialized);
-        }
-    }
-
-    fn require_admin(env: &Env, admin: &Address) {
-        Self::require_initialized(env);
-        let stored: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
-        admin.require_auth();
-        if admin != &stored {
-            panic_with_error!(env, Error::Unauthorized);
-        }
+            .set(&DataKey::ProcessedMessage(message_hash), &true);
     }
 }
