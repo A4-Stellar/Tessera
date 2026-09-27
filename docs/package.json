@@ -15,6 +15,7 @@
     "test:a11y:e2e": "playwright test"
   },
   "dependencies": {
+    "@hookform/resolvers": "^5.9.1",
     "@mdx-js/loader": "^3.1.0",
     "@mdx-js/react": "^3.1.0",
     "@monaco-editor/react": "^4.7.0",
