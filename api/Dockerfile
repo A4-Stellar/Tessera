@@ -16,7 +16,7 @@ ARG RUST_VERSION=1.88
 
 FROM --platform=$BUILDPLATFORM rust:${RUST_VERSION}-slim-bookworm AS chef
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3-pip \
+    && apt-get install -y --no-install-recommends python3-pip curl \
     && rm -rf /var/lib/apt/lists/* \
     && pip3 install --no-cache-dir --break-system-packages cargo-zigbuild==0.23.4 ziglang==0.16.0 \
     && cargo install --locked cargo-chef --version 0.1.78 \
