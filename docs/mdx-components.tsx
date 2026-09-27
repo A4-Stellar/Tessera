@@ -8,6 +8,7 @@ import { ApiEndpoint } from "@/components/ApiEndpoint";
 import { ApiPlayground } from "@/components/ApiPlayground";
 import { CapTableVisualizer } from "@/components/CapTableVisualizer";
 import { ProspectusViewer } from "@/components/ProspectusViewer";
+import { LazyProspectusViewer } from "@/components/LazyProspectusViewer";
 import { SorobanIDE } from "@/components/SorobanIDE";
 
 /**
@@ -41,6 +42,7 @@ export function useMDXComponents(components: MDXComponents): MDXComponents {
     ApiPlayground,
     CapTableVisualizer,
     ProspectusViewer,
+    LazyProspectusViewer,
     SorobanIDE,
     ...components,
   };

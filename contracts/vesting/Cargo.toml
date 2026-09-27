@@ -1,7 +1,10 @@
 [package]
-name = "debt-token"
+name = "tessera-vesting"
 version = "0.1.0"
 edition = "2021"
+license = "Apache-2.0"
+publish = false
+description = "Tessera token vesting schedules with cliffs and admin revocation."
 
 [lib]
 crate-type = ["cdylib", "rlib"]

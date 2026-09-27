@@ -1,4 +1,6 @@
 //! Asset-token contract — good-faith reconstruction of the deployed testnet
+//! Includes issue #40: Automated Share Buyback & Capital Reduction module
+//! (`buyback.rs`).
 //! contract at `CBMCWLSQSWUTLUJFCNBHNBSXMUM3XU7NAQ5TSNERW4HA4ZZBYHLG4ECZ`,
 //! built from `docs/app/docs/contracts/asset-token/page.mdx` and
 //! cross-checked against the `RawMetadata` shape `api/src/indexer/mod.rs`
@@ -6,6 +8,8 @@
 //! `contracts/` entry in the pull request description for the full
 //! reconstruction caveat.
 #![no_std]
+
+pub mod stock_split;
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, Address,
@@ -43,12 +47,8 @@ pub enum Error {
     /// highest pre-existing error code (9) rather than renumbering anything.
     /// Issue #10 — holding-period lockups.
     Locked = 10,
-    /// Appended for the fuzzing work. `require_admin` previously did
-    /// `.unwrap()` on the stored admin, so calling any admin-gated entry point
-    /// before `initialize` trapped instead of reporting a contract error, which
-    /// made the pre-initialization state indistinguishable from a real
-    /// arithmetic bug.
-    NotInitialized = 11,
+    /// Issue #90: split ratio is zero, or the cumulative multiplier overflows.
+    InvalidSplitRatio = 11,
 }
 
 #[derive(Clone)]
@@ -68,6 +68,14 @@ enum DataKey {
     /// Issue #10: ledger sequence at/after which `holder` may transfer or
     /// burn. Absent (or `0`) means no lockup is in effect.
     Lockup(Address),
+    /// Issue #90: number of splits executed so far.
+    SplitCount,
+    /// Issue #90: `(numerator, denominator)` of the split with this 1-based index.
+    Split(u32),
+    /// Issue #90: cumulative `(numerator, denominator)` multiplier (reduced).
+    SplitMultiplier,
+    /// Issue #90: number of splits already applied to this holder's stored balance.
+    HolderEpoch(Address),
 }
 
 #[contract]
@@ -120,9 +128,7 @@ impl AssetTokenContract {
             .set(&DataKey::Valuation, &valuation);
         env.storage().instance().set(&DataKey::Paused, &false);
 
-        env.storage()
-            .persistent()
-            .set(&DataKey::Balance(admin.clone()), &total_supply);
+        stock_split::set_balance(&env, &admin.clone(), total_supply);
 
         // Mirrors the deployed contract's documented initial-mint event.
         env.events()
@@ -170,12 +176,8 @@ impl AssetTokenContract {
             .checked_add(amount)
             .unwrap_or_else(|| panic_with_error!(env, Error::Overflow));
 
-        env.storage()
-            .persistent()
-            .set(&DataKey::Balance(from.clone()), &(from_balance - amount));
-        env.storage()
-            .persistent()
-            .set(&DataKey::Balance(to.clone()), &new_to_balance);
+        stock_split::set_balance(&env, &from.clone(), from_balance - amount);
+        stock_split::set_balance(&env, &to.clone(), to_balance + amount);
 
         env.events()
             .publish((symbol_short!("transfer"), from, to), amount);
@@ -202,12 +204,7 @@ impl AssetTokenContract {
             .set(&DataKey::TotalSupply, &new_total);
 
         let to_balance = Self::balance(env.clone(), to.clone());
-        let new_to_balance = to_balance
-            .checked_add(amount)
-            .unwrap_or_else(|| panic_with_error!(env, Error::Overflow));
-        env.storage()
-            .persistent()
-            .set(&DataKey::Balance(to.clone()), &new_to_balance);
+        stock_split::set_balance(&env, &to.clone(), to_balance + amount);
 
         env.events().publish((symbol_short!("mint"), to), amount);
     }
@@ -223,9 +220,7 @@ impl AssetTokenContract {
         if from_balance < amount {
             panic_with_error!(env, Error::InsufficientBalance);
         }
-        env.storage()
-            .persistent()
-            .set(&DataKey::Balance(from.clone()), &(from_balance - amount));
+        stock_split::set_balance(&env, &from.clone(), from_balance - amount);
 
         let total_supply: i128 = env
             .storage()
@@ -246,10 +241,25 @@ impl AssetTokenContract {
     }
 
     pub fn balance(env: Env, id: Address) -> i128 {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Balance(id))
-            .unwrap_or(0)
+        stock_split::effective_balance(&env, &id)
+    }
+
+    /// Issue #90 - execute a forward (`num > den`) or reverse (`num < den`)
+    /// split. O(1): only a global multiplier changes; holder balances are
+    /// settled lazily on next read/write. Admin-authenticated.
+    pub fn execute_share_split(env: Env, admin: Address, ratio_numerator: u32, ratio_denominator: u32) {
+        Self::require_admin(&env, &admin);
+        stock_split::execute(&env, ratio_numerator, ratio_denominator);
+    }
+
+    /// Issue #90 - cumulative split multiplier as `(numerator, denominator)`.
+    pub fn split_multiplier(env: Env) -> (u128, u128) {
+        stock_split::multiplier(&env)
+    }
+
+    /// Issue #90 - number of splits executed so far.
+    pub fn split_count(env: Env) -> u32 {
+        stock_split::split_count(&env)
     }
 
     pub fn total_supply(env: Env) -> i128 {
@@ -367,9 +377,7 @@ impl AssetTokenContract {
         if from_balance < amount {
             panic_with_error!(env, Error::InsufficientBalance);
         }
-        env.storage()
-            .persistent()
-            .set(&DataKey::Balance(from.clone()), &(from_balance - amount));
+        stock_split::set_balance(&env, &from.clone(), from_balance - amount);
 
         env.events()
             .publish((symbol_short!("clawback"), from), amount);

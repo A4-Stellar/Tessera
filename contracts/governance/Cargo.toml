@@ -1,7 +1,10 @@
 [package]
-name = "debt-token"
+name = "tessera-governance"
 version = "0.1.0"
 edition = "2021"
+license = "Apache-2.0"
+publish = false
+description = "Tessera m-of-n board resolution engine for high-privilege contract calls (issue #92)."
 
 [lib]
 crate-type = ["cdylib", "rlib"]

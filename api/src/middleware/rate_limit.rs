@@ -82,21 +82,21 @@ impl RateLimiter for RedisRateLimiter {
 }
 
 pub struct MemoryRateLimiter {
-    limiter: tower_governor::governor::RateLimiter<
+    limiter: governor::RateLimiter<
         String,
-        tower_governor::governor::state::keyed::DefaultKeyedStateStore<String>,
-        tower_governor::governor::clock::DefaultClock,
+        governor::state::keyed::DefaultKeyedStateStore<String>,
+        governor::clock::DefaultClock,
     >,
 }
 
 impl MemoryRateLimiter {
     pub fn new(per_second: u64, burst: u32) -> Self {
-        use tower_governor::governor::Quota;
+        use governor::Quota;
         use std::num::NonZeroU32;
         let quota = Quota::per_second(NonZeroU32::new(per_second as u32).unwrap())
             .allow_burst(NonZeroU32::new(burst).unwrap());
         Self {
-            limiter: tower_governor::governor::RateLimiter::keyed(quota),
+            limiter: governor::RateLimiter::keyed(quota),
         }
     }
 }
@@ -104,6 +104,7 @@ impl MemoryRateLimiter {
 #[async_trait]
 impl RateLimiter for MemoryRateLimiter {
     async fn check(&self, key: &str, _limit: u64, _window: u64) -> Result<(bool, Option<u64>), String> {
+        use governor::clock::Clock as _;
         match self.limiter.check_key(&key.to_string()) {
             Ok(_) => Ok((true, None)),
             Err(e) => {

@@ -46,6 +46,12 @@ Production-grade Terraform modules for deploying **Tessera API** (`tessera-api`)
 ```
 infrastructure/
 ├── README.md
+├── cloudflare/                 # Cloudflare Workers edge shield (DDoS/rate-limit/JWT/cache)
+│   ├── worker.js               # module worker: validation, rate limiting, edge JWT, SWR cache
+│   ├── wrangler.toml           # bindings (RATE_LIMIT KV) and per-environment vars
+│   ├── deploy.sh               # KV bootstrap + tests + `wrangler deploy`
+│   ├── package.json
+│   └── test/worker.test.js     # node:test unit suite (no dependencies)
 └── terraform/
     ├── versions.tf               # Global Terraform and provider requirements
     ├── modules/
@@ -72,6 +78,30 @@ infrastructure/
         ├── dev/                  # Development environment (single NAT, cost-optimized)
         └── prod/                 # Production environment (multi-AZ HA, WAF, autoscaling)
 ```
+
+---
+
+## 🛡️ Cloudflare Edge Security Worker
+
+`infrastructure/cloudflare/` contains a self-contained **Cloudflare Worker** that
+runs in front of the API and enforces, at the edge:
+
+- request header/method validation (allow-list forwarding + required headers),
+- per-IP rate limiting with a sliding-window counter in Workers KV,
+- JWT signature verification with WebCrypto (`HS*` secret or `RS*`/`ES*` JWKS),
+- SQLi / path-traversal / scanner heuristics, and
+- stale-while-revalidate caching for `GET /stats` and `GET /assets`.
+
+Deploy it with `wrangler`:
+
+```bash
+cd infrastructure/cloudflare
+export CLOUDFLARE_API_TOKEN=...
+./deploy.sh            # creates the RATE_LIMIT KV namespace on first run, then deploys
+```
+
+See [`cloudflare/README.md`](cloudflare/README.md) for the full binding reference,
+local development (`npm run dev`), and the unit-test suite (`npm test`).
 
 ---
 
