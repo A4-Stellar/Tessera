@@ -12,6 +12,7 @@
 //! [`POLL_INTERVAL`] rather than panicking, so the API always keeps serving
 //! the last good snapshot.
 
+pub mod archive;
 pub mod diagnostics;
 pub mod nav_calculator;
 pub mod price_feed;

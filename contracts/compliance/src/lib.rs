@@ -457,7 +457,11 @@ impl ComplianceContract {
     // ---- internal ----
 
     fn require_admin(env: &Env, admin: &Address) {
-        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| panic_with_error!(env, Error::NotInitialized));
         admin.require_auth();
         if admin != &stored_admin {
             panic_with_error!(env, Error::Unauthorized);

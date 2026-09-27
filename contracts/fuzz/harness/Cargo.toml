@@ -1,0 +1,19 @@
+# Standalone package: intentionally not a member of the `contracts` workspace
+# (see `exclude = ["fuzz"]` in contracts/Cargo.toml).
+[workspace]
+
+[package]
+name = "tessera-fuzz-harness"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+description = "Shared deterministic input cursor and panic-oracle for the Tessera contract fuzz targets."
+
+[dependencies]
+# `testutils` must be on for the *whole* graph: this harness registers every
+# contract natively from the outside, and `#[contract]` only emits the
+# `ContractFunctionSet` impl when soroban-sdk is built with `testutils`. Cargo
+# unifies features across the graph, so this also switches it on for the
+# contract crates themselves.
+soroban-sdk = { version = "25.0.0", features = ["testutils"] }

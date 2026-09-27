@@ -1,0 +1,121 @@
+# Standalone package: intentionally not a member of the `contracts` workspace
+# (see `exclude = ["fuzz"]` in contracts/Cargo.toml). `cargo fuzz` requires its
+# own package root, and `libfuzzer-sys` only builds on nightly.
+[workspace]
+
+[package]
+name = "tessera-fuzz"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+description = "libFuzzer targets for the Tessera Soroban contract suite."
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+tessera-fuzz-harness = { path = "harness" }
+
+# `testutils` on the shared graph: `#[contract]` only emits the
+# `ContractFunctionSet` impl (which is what makes `env.register(Contract, ())`
+# work) when soroban-sdk is compiled with this feature.
+soroban-sdk = { version = "25.0.0", features = ["testutils"] }
+tessera-asset-token = { path = "../asset-token" }
+tessera-cap-table = { path = "../cap-table" }
+tessera-common = { path = "../common" }
+tessera-compliance = { path = "../compliance" }
+tessera-dividend = { path = "../dividend" }
+tessera-registry = { path = "../registry" }
+bridge = { path = "../bridge" }
+debt-token = { path = "../debt-token" }
+vaults = { path = "../vaults" }
+
+# libFuzzer drives these binaries directly, so no harness/bench/test runtimes.
+[[bin]]
+name = "asset_token"
+path = "fuzz_targets/asset_token.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "transfer_extremes"
+path = "fuzz_targets/transfer_extremes.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "compliance"
+path = "fuzz_targets/compliance.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dividend"
+path = "fuzz_targets/dividend.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tax_withholding"
+path = "fuzz_targets/tax_withholding.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "registry"
+path = "fuzz_targets/registry.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cap_table"
+path = "fuzz_targets/cap_table.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "debt_token"
+path = "fuzz_targets/debt_token.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "bridge"
+path = "fuzz_targets/bridge.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "vaults"
+path = "fuzz_targets/vaults.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cross_contract_invariants"
+path = "fuzz_targets/cross_contract_invariants.rs"
+test = false
+doc = false
+bench = false
+
+# The single most important knob for an arithmetic-overflow fuzzer: overflow
+# must *panic*, which is what makes it observable as a WASM trap. cargo-fuzz
+# also passes `-C debug-assertions` via RUSTFLAGS, but pinning it here means
+# the behaviour does not depend on the cargo-fuzz version in use.
+[profile.release]
+debug = 1
+debug-assertions = true
+overflow-checks = true
+incremental = false

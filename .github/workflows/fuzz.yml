@@ -1,0 +1,146 @@
+name: Fuzz
+
+# Fuzzing runs on a schedule rather than on every commit: the interesting bugs
+# here are arithmetic and state-machine corner cases that need billions of
+# executions, and a PR-triggered libFuzzer run would either be too short to find
+# anything or too slow to be worth gating on.
+#
+# Two entry points:
+#
+#   * `schedule`   - 30 minutes per target, every night. This is the run that
+#                    actually finds things. Corpus is cached between runs, so
+#                    coverage accumulates over days rather than restarting.
+#   * `pull_request` - a 60-second smoke run of every target, purely to catch a
+#                    target that no longer compiles or that now panics on its
+#                    own seed corpus. It is a regression gate, not a search.
+on:
+  schedule:
+    # 03:17 UTC. Deliberately not on the hour: the top of the hour is when every
+    # other scheduled workflow on GitHub Actions wants to start.
+    - cron: "17 3 * * *"
+  pull_request:
+    paths:
+      - "contracts/**"
+      - ".github/workflows/fuzz.yml"
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Run a single target instead of the whole matrix"
+        required: false
+        type: string
+      seconds:
+        description: "Seconds per target (default 1800)"
+        required: false
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  # A minimized crash is useless if it only reproduces with debug info, but
+  # full symbols in every target costs a lot of disk across 11 builds.
+  RUST_BACKTRACE: "1"
+  # The full target list, as JSON so it can feed `fromJSON` in the matrix below.
+  # A `workflow_dispatch` run narrows this to the single requested target.
+  ALL_TARGETS: >-
+    ["asset_token","transfer_extremes","compliance","registry","dividend",
+     "tax_withholding","cap_table","debt_token","bridge","vaults",
+     "cross_contract_invariants"]
+
+jobs:
+  proptests:
+    name: Property tests (stable)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.81.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            contracts/fuzz/proptests -> target
+      # Property tests are cheap, deterministic, and shrink to a readable
+      # counterexample, so they run on every PR rather than nightly. If one of
+      # these fails it is almost certainly a real bug, not a flaky input.
+      - name: Run proptest suite
+        working-directory: contracts/fuzz/proptests
+        run: cargo test --release -- --nocapture
+
+  fuzz:
+    name: Fuzz ${{ matrix.target }}
+    needs: proptests
+    # Scheduled runs get the full half hour per target. PR runs get one minute:
+    # enough to prove the target builds and runs, not enough to be useful as a
+    # search. Running the property tests first means an obvious invariant
+    # violation is reported with a shrunk counterexample instead of a 60-second
+    # libFuzzer crash.
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(inputs.target && format('["{0}"]', inputs.target) || env.ALL_TARGETS) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          # `llvm-tools-preview` gives `cargo-fuzz` the `llvm-cov`/`llvm-profdata`
+          # pair it shells out to when collecting coverage for `-print_final_stats`.
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            contracts/fuzz -> target
+          key: fuzz
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      # The corpus is what makes tonight's run worth more than last night's.
+      # Without it every run re-derives the same coverage from scratch, and 30
+      # minutes buys roughly what the first run already bought.
+      - name: Restore corpus
+        uses: actions/cache@v4
+        with:
+          path: contracts/fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: |
+            fuzz-corpus-${{ matrix.target }}-
+      - name: Save corpus
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: contracts/fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+
+      # A build failure here is the most common reason this job goes red on a
+      # PR, and it is worth naming separately from a fuzz finding.
+      - name: Build the target
+        working-directory: contracts/fuzz
+        run: cargo fuzz build ${{ matrix.target }}
+
+      - name: Fuzz
+        working-directory: contracts/fuzz
+        env:
+          # `-max_total_time` is what actually bounds the run; cargo-fuzz does
+          # not stop on its own. `-rss_limit_mb` catches a runaway allocation
+          # before the runner OOMs, which would otherwise be reported as an
+          # infrastructure failure rather than as a finding.
+          FUZZ_SECONDS: ${{ inputs.seconds || (github.event_name == 'pull_request' && '60' || '1800') }}
+        run: |
+          cargo fuzz run "${{ matrix.target }}" \
+            -- -max_total_time="${{ env.FUZZ_SECONDS }}" \
+                   -rss_limit_mb=2560 \
+                   -timeout=25 \
+                   -print_final_stats=1
+
+      - name: Upload the crash artifact
+        # A minimized crash is worthless if it lives only on the runner's
+        # ephemeral disk, so it is uploaded even on an otherwise-failed run.
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crash-${{ matrix.target }}
+          path: contracts/fuzz/artifacts/${{ matrix.target }}
+          if-no-files-found: ignore
+          retention-days: 14
