@@ -4,10 +4,13 @@ import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const docsDir = path.join(__dirname, '../app/docs');
+const contentDir = path.join(__dirname, '../content/en/docs');
 const publicDir = path.join(__dirname, '../public');
 
 function getMdxFiles(dir, fileList = []) {
+  if (!fs.existsSync(dir)) {
+    return fileList;
+  }
   const files = fs.readdirSync(dir);
   for (const file of files) {
     const stat = fs.statSync(path.join(dir, file));
@@ -20,7 +23,7 @@ function getMdxFiles(dir, fileList = []) {
   return fileList;
 }
 
-const files = getMdxFiles(docsDir);
+const files = getMdxFiles(contentDir);
 
 const documents = files.map((file, id) => {
   const content = fs.readFileSync(file, 'utf-8');
@@ -40,8 +43,8 @@ const documents = files.map((file, id) => {
     headers.push(match[1]);
   }
 
-  const relativePath = path.relative(docsDir, file);
-  let route = '/docs/' + relativePath.replace(/\\/g, '/').replace(/\/page\.mdx$/, '').replace(/\.mdx$/, '');
+  const relativePath = path.relative(contentDir, file);
+  let route = '/docs/' + relativePath.replace(/\\/g, '/').replace(/\.mdx$/, '');
   if (route.endsWith('/page')) route = route.replace(/\/page$/, '');
 
   return {

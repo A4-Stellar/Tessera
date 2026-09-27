@@ -1,0 +1,257 @@
+export const metadata = {
+  title: "Premiers Pas",
+  description: "Qu'est-ce que le Stellar RWA Toolkit, comment fonctionne la tokenisation d'actifs et comment l'exécuter.",
+  canonical: "/docs/getting-started",
+};
+
+# Premiers Pas
+
+Le **Stellar RWA Toolkit** est un système de bout en bout pour tokeniser des actifs du monde réel (RWA, Real World Assets) — immobilier, factures, matières premières — sur Stellar en utilisant des smart contracts Soroban, avec une **conformité appliquée on-chain**.
+
+Il se compose de trois parties, chacune dans son propre dépôt :
+
+- **Contrats** — quatre contrats Soroban : `asset-token`, `compliance`, `registry`, `dividend`.
+- **API** — un service Rust/Axum qui indexe toute l'activité des actifs tokenisés et la sert via REST.
+- **Web app** — une interface Next.js pour les émetteurs et les investisseurs.
+
+## Ce que signifie « tokeniser un actif du monde réel »
+
+Un actif du monde réel — disons un loft de 5 000 000 $ à Manhattan — est représenté on-chain comme un token fongible. Chaque token est une quote-part fractionnaire de l'actif sous-jacent. Contrairement à un token ordinaire, un token RWA possède des **portes de conformité** : seules les adresses ayant passé le KYC et figurant sur une liste d'autorisation peuvent le détenir ou le recevoir.
+
+Cette porte n'est pas une politique assise dans une base de données — elle est appliquée par le contrat lui-même. À chaque transfert, le contrat asset-token effectue un appel cross-contract vers le contrat compliance pour vérifier à la fois l'expéditeur et le destinataire. Si l'un des deux échoue, le transfert est annulé.
+
+<CalloutBox variant="compliance" title="Pourquoi c'est important">
+Les lois sur les valeurs mobilières dans la plupart des juridictions limitent qui peut détenir un actif réglementé. Appliquer cette restriction **dans le contrat** — plutôt que dans une application qui peut être contournée — est ce qui rend un token apte à représenter un actif du monde réel réglementé. Voir le [Guide de Conformité](/docs/compliance-guide).
+</CalloutBox>
+
+## Comment les pièces s'assemblent
+
+```
+                          ┌───────────────┐
+    émetteur / investisseur ──▶ │  Web app      │ ──▶ Freighter ──▶ Contrats Soroban
+                          └───────────────┘                       │
+                                                                  │ événements + état
+                          ┌───────────────┐   interroge Soroban RPC   │
+    analystes / bots  ──▶  │  REST API     │ ◀─────────────────────┘
+                          └───────────────┘
+```
+
+- La **web app** signe et soumet les transactions via le portefeuille de l'utilisateur.
+- L'**API** ne fait que lire : elle indexe l'état on-chain toutes les 10 secondes et ne détient jamais de clé ni ne signe rien.
+
+## Prérequis
+
+- Extension navigateur [Freighter](https://freighter.app) (pour la web app)
+- Node.js 18+ (web app et docs)
+- Rust 1.75+ (API et contrats)
+- Le [Stellar CLI](https://developers.stellar.org/docs/tools/cli) (pour déployer les contrats)
+
+## Démarrage Rapide
+
+Le moyen le plus rapide de voir l'API en action est de l'exécuter localement contre les contrats déployés sur Testnet — sans portefeuille, sans signature, sans tokens requis.
+
+### 1. Cloner et démarrer l'API
+
+```bash
+git clone https://github.com/A4-Stellar/Tessera
+cd Tessera/api
+cp .env.example .env      # IDs de contrats Testnet et URL RPC pré-remplis
+cargo run
+# → listening on 0.0.0.0:8080
+```
+
+L'API est prête quand vous voyez `listening on 0.0.0.0:8080` dans le terminal. Elle commence immédiatement à interroger Soroban Testnet ; le premier snapshot est disponible en ~10 secondes.
+
+### 2. Interroger les endpoints en direct
+
+Ouvrez un second terminal et exécutez ces commandes contre `http://localhost:8080` :
+
+**Vérifier la sonde de vie :**
+
+```bash
+curl http://localhost:8080/health
+```
+
+```json
+{"status":"ok"}
+```
+
+**Récupérer les statistiques de la plateforme :**
+
+```bash
+curl http://localhost:8080/stats
+```
+
+```json
+{
+  "total_assets": 1,
+  "active_assets": 1,
+  "tvl_cents": "500000000",
+  "tvl_usd": 5000000.0,
+  "total_holders": 1,
+  "total_distributions": 0,
+  "last_indexed_ledger": 3514152,
+  "last_updated": "2026-07-09T08:43:12.101772791+00:00"
+}
+```
+
+`tvl_cents` est une chaîne pour éviter la perte de précision en JavaScript ; divisez par 100 pour obtenir des dollars. `last_updated` est l'horodatage du sondage Soroban RPC réussi le plus récent.
+
+**Lister tous les actifs tokenisés :**
+
+```bash
+curl http://localhost:8080/assets
+```
+
+```json
+[
+  {
+    "id": 1,
+    "contract_id": "CBMCWLSQSWUTLUJFCNBHNBSXMUM3XU7NAQ5TSNERW4HA4ZZBYHLG4ECZ",
+    "name": "Manhattan Loft",
+    "symbol": "MLOFT",
+    "asset_type": "real_estate",
+    "decimals": 7,
+    "total_supply": "50000000000000",
+    "valuation_cents": "500000000",
+    "valuation_usd": 5000000.0,
+    "active": true
+  }
+]
+```
+
+**Récupérer l'actif d'exemple (id `1`) directement :**
+
+```bash
+curl http://localhost:8080/assets/1
+```
+
+```json
+{
+  "id": 1,
+  "contract_id": "CBMCWLSQSWUTLUJFCNBHNBSXMUM3XU7NAQ5TSNERW4HA4ZZBYHLG4ECZ",
+  "name": "Manhattan Loft",
+  "symbol": "MLOFT",
+  "asset_type": "real_estate",
+  "decimals": 7,
+  "total_supply": "50000000000000",
+  "valuation_cents": "500000000",
+  "valuation_usd": 5000000.0,
+  "active": true
+}
+```
+
+**Vérifier les détenteurs de tokens pour l'actif `1` :**
+
+```bash
+curl http://localhost:8080/assets/1/holders
+```
+
+```json
+[
+  {
+    "address": "GAIQGTOBTTLLDJ4SWGGESM7UWJ2DI4K3ZNHUSHPDKJL2IE5FKY3BSRAA",
+    "balance": "50000000000000",
+    "share_percent": 100.0
+  }
+]
+```
+
+**Vérifier le résumé de conformité pour l'actif `1` :**
+
+```bash
+curl http://localhost:8080/assets/1/compliance
+```
+
+```json
+{
+  "asset_id": 1,
+  "total_approved": 1,
+  "total_suspended": 0,
+  "total_expired": 0
+}
+```
+
+<CalloutBox variant="note">
+Vos valeurs `last_indexed_ledger` et `last_updated` différeront des exemples ci-dessus — elles reflètent la hauteur du ledger au moment où votre indexeur local s'est exécuté. Tout le reste devrait correspondre au déploiement d'exemple Testnet.
+</CalloutBox>
+
+### 3. Lancer le site de documentation
+
+```bash
+cd ../docs
+npm install
+npm run dev               # http://localhost:3000
+```
+
+### Variables d'environnement
+
+L'API lit les variables d'environnement suivantes :
+
+| Variable | Défaut | Description |
+|----------|---------|-------------|
+| `RWA_RPC_URL` | `https://soroban-testnet.stellar.org` | Endpoint RPC Soroban que l'indexeur interroge |
+| `RWA_CORS_ALLOWED_ORIGINS` | `http://localhost:3000` | Liste des origines navigateur autorisées, séparées par des virgules |
+| `RWA_RATE_LIMIT_PER_SECOND` | `5` | Requêtes soutenues autorisées par IP client par seconde |
+| `RWA_RATE_LIMIT_BURST` | `20` | Rafale maximale de requêtes par client |
+| `RWA_REQUEST_TIMEOUT_SECS` | `30` | Durée maximale de requête en secondes |
+| `RWA_MAX_BODY_BYTES` | `1048576` | Taille maximale du corps de requête en octets |
+| `RWA_REGISTRY_ID` | `CBX5SMLTXX6JP4HA5GQIO2V6QM7WCUGL2GZ6D4U773HMRI6RXISKPUR3` | ID du contrat registry déployé (Testnet) |
+| `RWA_DIVIDEND_ID` | `CAR4XY3CEBQWFOL27JEWFW34KXSIZA7RFKDQMEIV7ZU723RWY37I2SYX` | ID du contrat dividend déployé (Testnet) |
+| `RWA_READ_SOURCE` | `GAIQGTOBTTLLDJ4SWGGESM7UWJ2DI4K3ZNHUSHPDKJL2IE5FKY3BSRAA` | Compte financé utilisé comme source pour les simulations de lecture (doit exister sur le RPC) |
+| `RWA_METRICS_TOKEN` | _(aucun)_ | Jeton bearer requis par `/metrics` ; les requêtes sont refusées s'il n'est pas défini |
+| `PORT` | `8080` | Port du serveur HTTP |
+| `RUST_LOG` | `tessera_api=info,tower_http=warn` | Filtre de log (format tracing-subscriber) |
+
+Le fichier `.env.example` inclut les valeurs par défaut Testnet. Copiez-le et ajustez selon vos besoins pour votre réseau.
+
+### Exécution avec Docker
+
+Construire et exécuter l'API dans un conteneur :
+
+```bash
+cd Tessera/api
+docker build -t tessera-api .
+docker run -p 8080:8080 \
+  -e RWA_RPC_URL=https://soroban-testnet.stellar.org \
+  -e RWA_REGISTRY_ID=CBX5SMLTXX6JP4HA5GQIO2V6QM7WCUGL2GZ6D4U773HMRI6RXISKPUR3 \
+  -e RWA_DIVIDEND_ID=CAR4XY3CEBQWFOL27JEWFW34KXSIZA7RFKDQMEIV7ZU723RWY37I2SYX \
+  -e RWA_READ_SOURCE=GAIQGTOBTTLLDJ4SWGGESM7UWJ2DI4K3ZNHUSHPDKJL2IE5FKY3BSRAA \
+  -e PORT=8080 \
+  tessera-api
+```
+
+Ou utiliser un fichier `.env` :
+
+```bash
+docker run -p 8080:8080 --env-file .env stellar-rwa-api
+```
+
+Puis exécutez les mêmes commandes curl de l'étape 2 contre `http://localhost:8080`.
+
+## Guide du réseau
+
+Tout est déployé sur **Testnet**. La phrase de passe du réseau est :
+
+```
+Test SDF Network ; September 2015
+```
+
+Pointez Freighter vers Testnet et alimentez votre compte avec le [friendbot](https://friendbot.stellar.org) avant d'interagir.
+
+<CalloutBox variant="warning">
+Ces contrats sont déployés sur Testnet pour la démonstration. Ne les utilisez pas pour conserver de la valeur réelle. Un déploiement mainnet nécessite une revue complète de conformité valeurs mobilières et juridique.
+</CalloutBox>
+
+## Adresses des contrats déployés (Testnet)
+
+| Contrat    | ID du Contrat |
+|-------------|-------------|
+| compliance  | `CBUERYDM7DXTZLLKDBRJKUBPFJ7M4OSUN4T7XKUARU345RLXNAIQD2IU` |
+| asset-token | `CBMCWLSQSWUTLUJFCNBHNBSXMUM3XU7NAQ5TSNERW4HA4ZZBYHLG4ECZ` |
+| registry    | `CBX5SMLTXX6JP4HA5GQIO2V6QM7WCUGL2GZ6D4U773HMRI6RXISKPUR3` |
+| dividend    | `CAR4XY3CEBQWFOL27JEWFW34KXSIZA7RFKDQMEIV7ZU723RWY37I2SYX` |
+
+Le compte admin / émetteur pour le déploiement d'exemple est `GAIQGTOBTTLLDJ4SWGGESM7UWJ2DI4K3ZNHUSHPDKJL2IE5FKY3BSRAA`, et l'actif d'exemple est **Manhattan Loft** (`MLOFT`), un actif `real_estate` évalué à 5 000 000 $.
+
+Poursuivez vers le [Guide de Conformité](/docs/compliance-guide) — le concept qui fait de ceci une plateforme RWA plutôt qu'une simple usine à tokens.

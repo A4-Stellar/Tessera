@@ -2,17 +2,24 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { NAV } from "./nav";
+import { getNav } from "./nav";
 import { Search } from "./Search";
+import { getLocaleFromPath } from "@/lib/i18n";
+
+interface SidebarProps {
+  onNavigate?: () => void;
+}
 
 /** Left-hand documentation navigation with active-page highlighting. */
-export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
+export function Sidebar({ onNavigate }: SidebarProps) {
   const pathname = usePathname();
+  const locale = getLocaleFromPath(pathname) || "en";
+  const nav = getNav(locale);
 
   return (
     <nav className="space-y-7 text-sm" aria-label="Documentation sidebar">
       <Search />
-      {NAV.map((section) => (
+      {nav.map((section) => (
         <div key={section.title}>
           <p className="mb-2 px-3 text-xs font-semibold uppercase tracking-wide text-base-300">
             {section.title}

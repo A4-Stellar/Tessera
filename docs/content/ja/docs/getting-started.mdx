@@ -1,0 +1,257 @@
+export const metadata = {
+  title: "はじめに",
+  description: "Stellar RWA Toolkitとは、アセットトークン化の仕組み、実行方法について説明します。",
+  canonical: "/docs/getting-started",
+};
+
+# はじめに
+
+**Stellar RWA Toolkit** は、実世界資産（RWA：不動産、請求書、商品など）を Stellar 上で Soroban スマートコントラクトを使用してトークン化するためのエンドツーエンド システムです。**コンプライアンスがオンチェーンで強制**されます。
+
+3 つのパートで構成され、それぞれ独立したリポジトリにあります：
+
+- **コントラクト** — 4 つの Soroban コントラクト：`asset-token`、`compliance`、`registry`、`dividend`。
+- **API** — すべてのトークン化資産アクティビティをインデックスし、REST 経由で提供する Rust/Axum サービス。
+- **Web アプリ** — 発行者と投資家向けの Next.js フロントエンド。
+
+## 「実世界資産のトークン化」の意味
+
+実世界資産（例：マンハッタンの 500 万ドルのロフト）が、オンチェーンで代替可能なトークンとして表現されます。各トークンは基礎資産に対する持分を表します。通常のトークンとは異なり、RWA トークンは **コンプライアンスゲート** があります：KYC をパスし、許可リストに載っているアドレスのみが保有・受信できます。
+
+このゲートはデータベース内のポリシーではなく、コントラクト自体によって強制されます。すべての転送で、asset-token コントラクトが compliance コントラクトへクロスコントラクト呼び出しを行い、送信者と受信者の両方をチェック。どちらかが失敗すれば転送はリバートします。
+
+<CalloutBox variant="compliance" title="なぜこれが重要か">
+ほとんどの管轄区域の証券法は、規制対象資産を保有できる人を制限しています。その制限を **コントラクトで強制** すること（アプリで回避可能な実装ではなく）こそが、トークンを規制対象の実世界資産を表すのに適したものにします。[コンプライアンスガイド](/docs/compliance-guide)を参照してください。
+</CalloutBox>
+
+## コンポーネントの連携
+
+```
+                          ┌───────────────┐
+    発行者 / 投資家 ──▶ │  Web アプリ    │ ──▶ Freighter ──▶ Soroban コントラクト
+                          └───────────────┘                       │
+                                                                  │ イベント + 状態
+                          ┌───────────────┐   Soroban RPC をポーリング   │
+    アナリスト / ボット ──▶  │  REST API     │ ◀─────────────────────┘
+                          └───────────────┘
+```
+
+- **Web アプリ**はユーザーのウォレットを通じてトランザクションに署名・送信します。
+- **API** は読み取り専用：10 秒ごとにオンチェーン状態をインデックスし、キーを保持したり署名したりしません。
+
+## 前提条件
+
+- [Freighter](https://freighter.app) ブラウザ拡張機能（Web アプリ用）
+- Node.js 18+（Web アプリとドキュメント）
+- Rust 1.75+（API とコントラクト）
+- [Stellar CLI](https://developers.stellar.org/docs/tools/cli)（コントラクトのデプロイ用）
+
+## クイックスタート
+
+API をローカルで実行し、デプロイ済みの Testnet コントラクトに接続するのが最速です — ウォレット不要、署名不要、トークン不要。
+
+### 1. クローンして API を起動
+
+```bash
+git clone https://github.com/A4-Stellar/Tessera
+cd Tessera/api
+cp .env.example .env      # Testnet コントラクト ID と RPC URL が事前設定済み
+cargo run
+# → listening on 0.0.0.0:8080
+```
+
+ターミナルに `listening on 0.0.0.0:8080` と表示されたら API の準備完了です。即座に Soroban Testnet のポーリングを開始し、最初のスナップショットは約 10 秒で利用可能になります。
+
+### 2. ライブエンドポイントを呼び出す
+
+別のターミナルを開き、以下のコマンドを `http://localhost:8080` に対して実行します：
+
+**ヘルスチェック：**
+
+```bash
+curl http://localhost:8080/health
+```
+
+```json
+{"status":"ok"}
+```
+
+**プラットフォーム全体の統計を取得：**
+
+```bash
+curl http://localhost:8080/stats
+```
+
+```json
+{
+  "total_assets": 1,
+  "active_assets": 1,
+  "tvl_cents": "500000000",
+  "tvl_usd": 5000000.0,
+  "total_holders": 1,
+  "total_distributions": 0,
+  "last_indexed_ledger": 3514152,
+  "last_updated": "2026-07-09T08:43:12.101772791+00:00"
+}
+```
+
+`tvl_cents` は JavaScript の精度損失を避けるため文字列です。100 で割るとドルになります。`last_updated` は最新の成功した Soroban RPC ポーリングの時刻です。
+
+**すべてのトークン化資産を一覧：**
+
+```bash
+curl http://localhost:8080/assets
+```
+
+```json
+[
+  {
+    "id": 1,
+    "contract_id": "CBMCWLSQSWUTLUJFCNBHNBSXMUM3XU7NAQ5TSNERW4HA4ZZBYHLG4ECZ",
+    "name": "Manhattan Loft",
+    "symbol": "MLOFT",
+    "asset_type": "real_estate",
+    "decimals": 7,
+    "total_supply": "50000000000000",
+    "valuation_cents": "500000000",
+    "valuation_usd": 5000000.0,
+    "active": true
+  }
+]
+```
+
+**サンプル資産（id `1`）を直接取得：**
+
+```bash
+curl http://localhost:8080/assets/1
+```
+
+```json
+{
+  "id": 1,
+  "contract_id": "CBMCWLSQSWUTLUJFCNBHNBSXMUM3XU7NAQ5TSNERW4HA4ZZBYHLG4ECZ",
+  "name": "Manhattan Loft",
+  "symbol": "MLOFT",
+  "asset_type": "real_estate",
+  "decimals": 7,
+  "total_supply": "50000000000000",
+  "valuation_cents": "500000000",
+  "valuation_usd": 5000000.0,
+  "active": true
+}
+```
+
+**資産 `1` のトークン保有者を確認：**
+
+```bash
+curl http://localhost:8080/assets/1/holders
+```
+
+```json
+[
+  {
+    "address": "GAIQGTOBTTLLDJ4SWGGESM7UWJ2DI4K3ZNHUSHPDKJL2IE5FKY3BSRAA",
+    "balance": "50000000000000",
+    "share_percent": 100.0
+  }
+]
+```
+
+**資産 `1` のコンプライアンスサマリーを確認：**
+
+```bash
+curl http://localhost:8080/assets/1/compliance
+```
+
+```json
+{
+  "asset_id": 1,
+  "total_approved": 1,
+  "total_suspended": 0,
+  "total_expired": 0
+}
+```
+
+<CalloutBox variant="note">
+`last_indexed_ledger` と `last_updated` の値は上記の例とは異なります — ローカル インデクサが実行された時点でのレジャー高を反映します。それ以外はサンプル Testnet デプロイと一致するはずです。
+</CalloutBox>
+
+### 3. ドキュメントサイトを実行
+
+```bash
+cd ../docs
+npm install
+npm run dev               # http://localhost:3000
+```
+
+### 環境変数
+
+API は以下の環境変数を読み取ります：
+
+| 変数 | デフォルト | 説明 |
+|----------|---------|-------------|
+| `RWA_RPC_URL` | `https://soroban-testnet.stellar.org` | インデクサがポーリングする Soroban RPC エンドポイント |
+| `RWA_CORS_ALLOWED_ORIGINS` | `http://localhost:3000` | カンマ区切りのブラウザオリジン許可リスト |
+| `RWA_RATE_LIMIT_PER_SECOND` | `5` | クライアント IP ごとの持続可能な秒間リクエスト数 |
+| `RWA_RATE_LIMIT_BURST` | `20` | クライアントごとの最大バーストリクエスト数 |
+| `RWA_REQUEST_TIMEOUT_SECS` | `30` | 最大リクエスト時間（秒） |
+| `RWA_MAX_BODY_BYTES` | `1048576` | 最大リクエストボディサイズ（バイト） |
+| `RWA_REGISTRY_ID` | `CBX5SMLTXX6JP4HA5GQIO2V6QM7WCUGL2GZ6D4U773HMRI6RXISKPUR3` | デプロイ済み registry コントラクト ID（Testnet） |
+| `RWA_DIVIDEND_ID` | `CAR4XY3CEBQWFOL27JEWFW34KXSIZA7RFKDQMEIV7ZU723RWY37I2SYX` | デプロイ済み dividend コントラクト ID（Testnet） |
+| `RWA_READ_SOURCE` | `GAIQGTOBTTLLDJ4SWGGESM7UWJ2DI4K3ZNHUSHPDKJL2IE5FKY3BSRAA` | 読み取りシミュレーション用の資金供給済みソースアカウント（RPC に存在する必要あり） |
+| `RWA_METRICS_TOKEN` | _(なし)_ | `/metrics` で必要なベアラートークン；未設定時はリクエスト拒否 |
+| `PORT` | `8080` | HTTP サーバーポート |
+| `RUST_LOG` | `tessera_api=info,tower_http=warn` | ログフィルター（tracing-subscriber 形式） |
+
+`.env.example` ファイルに Testnet デフォルトが含まれます。コピーしてネットワークに合わせて調整してください。
+
+### Docker で実行
+
+API をコンテナでビルド・実行：
+
+```bash
+cd Tessera/api
+docker build -t tessera-api .
+docker run -p 8080:8080 \
+  -e RWA_RPC_URL=https://soroban-testnet.stellar.org \
+  -e RWA_REGISTRY_ID=CBX5SMLTXX6JP4HA5GQIO2V6QM7WCUGL2GZ6D4U773HMRI6RXISKPUR3 \
+  -e RWA_DIVIDEND_ID=CAR4XY3CEBQWFOL27JEWFW34KXSIZA7RFKDQMEIV7ZU723RWY37I2SYX \
+  -e RWA_READ_SOURCE=GAIQGTOBTTLLDJ4SWGGESM7UWJ2DI4K3ZNHUSHPDKJL2IE5FKY3BSRAA \
+  -e PORT=8080 \
+  tessera-api
+```
+
+または `.env` ファイルを使用：
+
+```bash
+docker run -p 8080:8080 --env-file .env stellar-rwa-api
+```
+
+その後、ステップ 2 と同じ curl コマンドを `http://localhost:8080` に対して実行します。
+
+## ネットワークガイド
+
+すべて **Testnet** にデプロイされています。ネットワークパスフレーズ：
+
+```
+Test SDF Network ; September 2015
+```
+
+Freighter を Testnet に向け、[friendbot](https://friendbot.stellar.org) でアカウントに資金を供給してから操作してください。
+
+<CalloutBox variant="warning">
+これらのコントラクトはデモ用に Testnet にデプロイされています。実価値のカストディには使用しないでください。メインネットデプロイには、完全な証券コンプライアンスと法的レビューが必要です。
+</CalloutBox>
+
+## デプロイ済みコントラクトアドレス（Testnet）
+
+| コントラクト    | コントラクト ID |
+|-------------|-------------|
+| compliance  | `CBUERYDM7DXTZLLKDBRJKUBPFJ7M4OSUN4T7XKUARU345RLXNAIQD2IU` |
+| asset-token | `CBMCWLSQSWUTLUJFCNBHNBSXMUM3XU7NAQ5TSNERW4HA4ZZBYHLG4ECZ` |
+| registry    | `CBX5SMLTXX6JP4HA5GQIO2V6QM7WCUGL2GZ6D4U773HMRI6RXISKPUR3` |
+| dividend    | `CAR4XY3CEBQWFOL27JEWFW34KXSIZA7RFKDQMEIV7ZU723RWY37I2SYX` |
+
+サンプルデプロイの管理者 / 発行者アカウントは `GAIQGTOBTTLLDJ4SWGGESM7UWJ2DI4K3ZNHUSHPDKJL2IE5FKY3BSRAA` で、サンプル資産は **Manhattan Loft** (`MLOFT`)、`real_estate` タイプ、評価額 500 万ドルです。
+
+[コンプライアンスガイド](/docs/compliance-guide)に進みましょう — これが単なるトークンファクトリではなく RWA プラットフォームたる所以です。

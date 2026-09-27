@@ -2,15 +2,18 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { FLAT_NAV } from "./nav";
+import { getFlatNav } from "./nav";
+import { getLocaleFromPath } from "@/lib/i18n";
 
 /** Previous / next page links derived from the flattened nav order. */
 export function PrevNext() {
   const pathname = usePathname();
-  const idx = FLAT_NAV.findIndex((i) => i.href === pathname);
+  const locale = getLocaleFromPath(pathname) || "en";
+  const flatNav = getFlatNav(locale);
+  const idx = flatNav.findIndex((i) => i.href === pathname);
   if (idx === -1) return null;
-  const prev = idx > 0 ? FLAT_NAV[idx - 1] : null;
-  const next = idx < FLAT_NAV.length - 1 ? FLAT_NAV[idx + 1] : null;
+  const prev = idx > 0 ? flatNav[idx - 1] : null;
+  const next = idx < flatNav.length - 1 ? flatNav[idx + 1] : null;
 
   return (
     <nav aria-label="Page pagination" className="mt-16 grid grid-cols-1 gap-4 border-t border-white/5 pt-8 sm:grid-cols-2">
