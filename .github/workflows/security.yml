@@ -129,3 +129,30 @@ jobs:
         with:
           sarif_file: trivy-results.sarif
           category: trivy-container-scan
+
+  # Job 4: Static attack-surface scan (issue #139) — Soroban auth/storage
+  # checks + REST handler validation, reported as SARIF.
+  attack-surface:
+    name: Attack Surface Scan (SARIF)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run attack-surface scan
+        run: python scripts/security/attack_surface_scan.py --output attack-surface.sarif --text
+        # Exit code is non-zero on error-level findings; keep the SARIF
+        # upload running so results stay visible in the Security tab.
+        continue-on-error: true
+
+      - name: Upload Attack Surface SARIF Report to GitHub Security Tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: attack-surface.sarif
+          category: tessera-attack-surface-scan
