@@ -5,6 +5,7 @@ pub mod audit;
 pub mod compliance;
 pub mod dividends;
 pub mod events;
+pub mod export;
 pub mod holders;
 #[expect(
     dead_code,
@@ -128,6 +129,7 @@ pub fn router(state: AppState) -> Router {
         .route("/assets/:id/compliance", get(compliance::summary))
         .route("/assets/:id/dividends", get(dividends::list))
         .route("/assets/:id/distributions/:did", get(dividends::get_one))
+        .route("/assets/:id/export", get(export::export))
         .route("/holders/:address", get(holders::by_address))
         .route(
             "/holders/:address/compliance",
@@ -271,6 +273,7 @@ async fn index() -> Json<serde_json::Value> {
             "GET /v1/assets/:id/compliance",
             "GET /v1/assets/:id/dividends",
             "GET /v1/assets/:id/distributions/:did",
+            "GET /v1/assets/:id/export",
             "GET /v1/holders/:address",
             "GET /v1/holders/:address/compliance",
             "GET /v1/compliance/:address",
