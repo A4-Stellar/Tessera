@@ -46,6 +46,9 @@ Production-grade Terraform modules for deploying **Tessera API** (`tessera-api`)
 ```
 infrastructure/
 ├── README.md
+├── orchestrator/               # Rust cross-region PostgreSQL failover controller
+│   ├── src/failover.rs         # heartbeat, lag monitoring, promotion, DNS re-route
+│   └── README.md
 ├── cloudflare/                 # Cloudflare Workers edge shield (DDoS/rate-limit/JWT/cache)
 │   ├── worker.js               # module worker: validation, rate limiting, edge JWT, SWR cache
 │   ├── wrangler.toml           # bindings (RATE_LIMIT KV) and per-environment vars
