@@ -1,0 +1,191 @@
+name: Disaster Recovery Verification
+
+on:
+  schedule:
+    # Every Sunday at 02:00 UTC
+    - cron: "0 2 * * 0"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry-run mode (no destructive operations)"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "true"
+          - "false"
+      backup_provider:
+        description: "Backup provider (s3 or gcs)"
+        required: false
+        default: "s3"
+        type: choice
+        options:
+          - "s3"
+          - "gcs"
+      log_level:
+        description: "Log verbosity"
+        required: false
+        default: "info"
+        type: choice
+        options:
+          - "debug"
+          - "info"
+          - "warn"
+
+# Only allow one DR test to run at a time; cancel any in-progress run on new dispatch
+concurrency:
+  group: dr-test
+  cancel-in-progress: false
+
+jobs:
+  dr-verify:
+    name: DR Backup Restore & Integrity Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres_dr_ci
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # Restore target — the service container above
+      DB_RESTORE_HOST: localhost
+      DB_RESTORE_PORT: "5432"
+      DB_RESTORE_USER: postgres
+      PGPASSWORD: postgres_dr_ci
+
+      # Backup source — injected from repo secrets
+      BACKUP_PROVIDER: ${{ github.event.inputs.backup_provider || 's3' }}
+      BACKUP_BUCKET: ${{ secrets.DR_BACKUP_BUCKET }}
+      BACKUP_KEY_PREFIX: ${{ secrets.DR_BACKUP_KEY_PREFIX || 'backups/postgres' }}
+
+      # Encryption (optional)
+      ENCRYPTION_KEY_ARN: ${{ secrets.DR_ENCRYPTION_KEY_ARN }}
+      GPG_PASSPHRASE: ${{ secrets.DR_GPG_PASSPHRASE }}
+
+      # Notifications
+      SLACK_WEBHOOK_URL: ${{ secrets.DR_SLACK_WEBHOOK_URL }}
+      PAGERDUTY_ROUTING_KEY: ${{ secrets.DR_PAGERDUTY_ROUTING_KEY }}
+
+      # Behaviour flags
+      DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+      DR_LOG_LEVEL: ${{ github.event.inputs.log_level || 'info' }}
+      DR_REPORT_PATH: /tmp/dr_test_report.json
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------------
+      # Tool setup
+      # -----------------------------------------------------------------------
+      - name: Set up AWS CLI
+        if: env.BACKUP_PROVIDER == 's3'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.DR_AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.DR_AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.DR_AWS_REGION || 'us-east-1' }}
+
+      - name: Set up GCP credentials
+        if: env.BACKUP_PROVIDER == 'gcs'
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.DR_GCP_SA_KEY }}
+
+      - name: Install PostgreSQL client tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            postgresql-client-16 \
+            gnupg \
+            jq \
+            curl
+
+      - name: Verify required tools
+        run: |
+          psql --version
+          pg_restore --version
+          jq --version
+          sha256sum --version
+
+      # -----------------------------------------------------------------------
+      # Optional: download baseline record counts from S3/GCS
+      # -----------------------------------------------------------------------
+      - name: Download production baseline (S3)
+        if: env.BACKUP_PROVIDER == 's3' && secrets.DR_BACKUP_BUCKET != ''
+        run: |
+          aws s3 cp \
+            "s3://${{ secrets.DR_BACKUP_BUCKET }}/baselines/latest.json" \
+            /tmp/baseline.json || echo '{"tables":{}}' > /tmp/baseline.json
+        continue-on-error: true
+
+      - name: Download production baseline (GCS)
+        if: env.BACKUP_PROVIDER == 'gcs' && secrets.DR_BACKUP_BUCKET != ''
+        run: |
+          gsutil cp \
+            "gs://${{ secrets.DR_BACKUP_BUCKET }}/baselines/latest.json" \
+            /tmp/baseline.json || echo '{"tables":{}}' > /tmp/baseline.json
+        continue-on-error: true
+
+      # -----------------------------------------------------------------------
+      # Run the DR pipeline
+      # -----------------------------------------------------------------------
+      - name: Run DR test pipeline
+        run: |
+          chmod +x infrastructure/scripts/dr_test.sh
+          PRODUCTION_BASELINE=/tmp/baseline.json \
+          infrastructure/scripts/dr_test.sh
+
+      # -----------------------------------------------------------------------
+      # Publish results
+      # -----------------------------------------------------------------------
+      - name: Display DR report summary
+        if: always()
+        run: |
+          if [[ -f /tmp/dr_test_report.json ]]; then
+            echo "=== DR Test Report ==="
+            jq . /tmp/dr_test_report.json
+            echo ""
+            echo "Overall: $(jq -r .result.overall /tmp/dr_test_report.json)"
+            echo "Total duration: $(jq -r .timing.total_duration_seconds /tmp/dr_test_report.json)s"
+          else
+            echo "No report file found at /tmp/dr_test_report.json"
+          fi
+
+      - name: Upload DR report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dr-test-report-${{ github.run_number }}
+          path: /tmp/dr_test_report.json
+          retention-days: 90
+
+      - name: Job summary
+        if: always()
+        run: |
+          if [[ -f /tmp/dr_test_report.json ]]; then
+            OVERALL=$(jq -r .result.overall /tmp/dr_test_report.json)
+            DURATION=$(jq -r .timing.total_duration_seconds /tmp/dr_test_report.json)
+            WARNINGS=$(jq -r .result.warnings /tmp/dr_test_report.json)
+            echo "## Disaster Recovery Test Result" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+            echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| **Overall** | ${OVERALL} |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Total Duration** | ${DURATION}s |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Warnings** | ${WARNINGS} |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Snapshot** | $(jq -r .backup.snapshot /tmp/dr_test_report.json) |" >> $GITHUB_STEP_SUMMARY
+            echo "| **SHA-256** | $(jq -r .backup.sha256 /tmp/dr_test_report.json) |" >> $GITHUB_STEP_SUMMARY
+          fi
