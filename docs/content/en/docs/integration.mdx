@@ -58,11 +58,54 @@ export async function getAssets(): Promise<Asset[]> {
   return res.json();
 }
 
-// Amounts are strings (i128) — parse with BigInt and format by decimals.
 export function displaySupply(a: Asset): string {
   const raw = BigInt(a.total_supply);
   const base = 10n ** BigInt(a.decimals);
   return (Number(raw) / Number(base)).toLocaleString();
+}
+```
+
+### Python client
+
+```python
+from tessera_sdk import TesseraClient
+
+client = TesseraClient("http://localhost:8080")
+
+async def get_assets():
+    assets = await client.get_assets()
+    for asset in assets:
+        print(f"{asset.name}: {asset.total_supply} supply")
+    return assets
+```
+
+### Go client
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	"github.com/A4-Stellar/tessera-sdk-go"
+)
+
+func main() {
+	client, err := tessera.NewClient("http://localhost:8080")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer client.Close()
+
+	assets, err := client.GetAssets(context.Background())
+	if err != nil {
+		log.Fatal(err)
+	}
+	for _, asset := range assets {
+		fmt.Printf("Asset: %s (ID: %d)\n", asset.Name, asset.ID)
+	}
 }
 ```
 
