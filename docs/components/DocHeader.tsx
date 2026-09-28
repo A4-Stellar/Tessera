@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useState, useEffect, useRef } from "react";
 import { Sidebar } from "./Sidebar";
+import { LanguageSwitcher } from "./LanguageSwitcher";
 
 const REPO_URL = "https://github.com/A4-Stellar/Tessera";
 
@@ -92,7 +93,8 @@ export function DocHeader() {
             </Link>
           </div>
 
-          <div className="flex items-center gap-1 text-sm">
+          <div className="flex items-center gap-2 text-sm">
+            <LanguageSwitcher />
             <Link href="/docs/getting-started" className="hidden rounded-lg px-3 py-2 text-base-200/90 hover:text-base-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 sm:block">
               Docs
             </Link>
