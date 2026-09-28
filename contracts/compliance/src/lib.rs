@@ -13,7 +13,9 @@ use soroban_sdk::{
 };
 
 mod attestation;
+mod oracle_verifier;
 pub use attestation::{IdentityAttestation, RevocationProof};
+pub use oracle_verifier::{OracleAttestation, OracleConfig, OracleSignature};
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -52,6 +54,12 @@ pub enum Error {
     HookNotRegistered = 8,
     InvalidAttestation = 9,
     IssuerNotRegistered = 10,
+    OracleAlreadyConfigured = 11,
+    InvalidOracleConfig = 12,
+    OracleAlreadyRegistered = 13,
+    OracleNotRegistered = 14,
+    InvalidOracleStake = 15,
+    InvalidOracleThreshold = 16,
 }
 
 #[derive(Clone)]
@@ -70,6 +78,18 @@ pub(crate) enum DataKey {
     RevocationRoot(Address),
     AttestationMode,
     Attestation(Address),
+    OracleMode,
+    OracleToken,
+    OracleSlashRecipient,
+    OracleThreshold,
+    OracleMinStake,
+    OracleSlashBps,
+    OracleKey(Address),
+    OracleStake(Address),
+    OracleList,
+    OracleVote(Address, Address),
+    OracleNonce(Address, Address),
+    OracleRecord(Address),
 }
 
 #[contract]
@@ -183,6 +203,9 @@ impl ComplianceContract {
     }
 
     pub fn is_allowed(env: Env, address: Address) -> bool {
+        if oracle_verifier::oracle_mode_enabled(&env) {
+            return oracle_verifier::verify(&env, &address);
+        }
         if attestation::issuer_mode_enabled(&env) {
             return attestation::verify(&env, &address);
         }
@@ -265,8 +288,84 @@ impl ComplianceContract {
             .extend_ttl(&key, 100_000, 120_000);
     }
 
+    /// Configure the bonded oracle set. The admin supplies the token used for
+    /// oracle bonds and the destination for slashed stake.
+    pub fn configure_oracles(
+        env: Env,
+        admin: Address,
+        staking_token: Address,
+        slash_recipient: Address,
+        threshold: u32,
+        minimum_stake: i128,
+        slash_bps: u32,
+    ) {
+        Self::require_not_paused(&env);
+        Self::require_admin(&env, &admin);
+        oracle_verifier::configure(
+            &env,
+            staking_token,
+            slash_recipient,
+            threshold,
+            minimum_stake,
+            slash_bps,
+        );
+    }
+
+    /// Register an oracle after it authorizes depositing its bond.
+    pub fn register_oracle(
+        env: Env,
+        oracle: Address,
+        public_key: BytesN<32>,
+        stake_amount: i128,
+    ) {
+        Self::require_not_paused(&env);
+        oracle_verifier::register(&env, oracle, public_key, stake_amount);
+    }
+
+    /// Add more bond to an oracle whose stake has fallen below the minimum.
+    pub fn restake_oracle(env: Env, oracle: Address, stake_amount: i128) {
+        Self::require_not_paused(&env);
+        oracle_verifier::restake(&env, oracle, stake_amount);
+    }
+
+    /// Remove an oracle and return its remaining bond. Admin-authenticated.
+    pub fn remove_oracle(env: Env, admin: Address, oracle: Address) {
+        Self::require_not_paused(&env);
+        Self::require_admin(&env, &admin);
+        oracle_verifier::remove(&env, oracle);
+    }
+
+    /// Change the M in the configured M-of-N oracle quorum.
+    pub fn set_oracle_threshold(env: Env, admin: Address, threshold: u32) {
+        Self::require_not_paused(&env);
+        Self::require_admin(&env, &admin);
+        oracle_verifier::set_threshold(&env, threshold);
+    }
+
+    /// Submit individually signed KYC/AML votes. Returns true only when the
+    /// M-of-N quorum is reached and the new record is committed.
+    pub fn submit_oracle_attestation(
+        env: Env,
+        attestation: OracleAttestation,
+        signatures: Vec<OracleSignature>,
+    ) -> bool {
+        Self::require_not_paused(&env);
+        oracle_verifier::submit(&env, attestation, signatures)
+    }
+
+    /// Get the latest KYC/AML result accepted by the configured oracle quorum.
+    pub fn get_oracle_record(env: Env, investor: Address) -> Option<KycRecord> {
+        oracle_verifier::get_record(&env, &investor)
+    }
+
+    /// Public oracle configuration and registered provider count.
+    pub fn get_oracle_config(env: Env) -> Option<OracleConfig> {
+        oracle_verifier::get_config(&env)
+    }
+
     pub fn get_record(env: Env, address: Address) -> Option<KycRecord> {
-        env.storage().persistent().get(&DataKey::Record(address))
+        let oracle_record = oracle_verifier::get_record(&env, &address);
+        oracle_record.or_else(|| env.storage().persistent().get(&DataKey::Record(address)))
     }
 
     pub fn get_allowlist(env: Env) -> Vec<Address> {
