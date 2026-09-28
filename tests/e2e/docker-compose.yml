@@ -1,0 +1,100 @@
+# Docker Compose for Tessera E2E test environment
+# Spins up: Stellar quickstart (local Soroban RPC), tessera-api, and PostgreSQL
+#
+# Usage:
+#   docker compose up -d --wait   # start and wait for healthchecks
+#   docker compose down -v        # tear down and remove volumes
+version: "3.9"
+
+networks:
+  tessera-e2e:
+    driver: bridge
+
+volumes:
+  pg_e2e_data:
+  stellar_data:
+
+services:
+  # --------------------------------------------------------------------------
+  # Stellar quickstart — local Soroban RPC node
+  # Exposes the Stellar Horizon API on :8000 and Soroban RPC on :8000/soroban/rpc
+  # --------------------------------------------------------------------------
+  stellar-node:
+    image: stellar/quickstart:testing
+    platform: linux/amd64
+    environment:
+      NETWORK: local
+      ENABLE_SOROBAN_RPC: "true"
+      PROTOCOL_VERSION: "21"
+    ports:
+      - "8000:8000"
+    networks:
+      - tessera-e2e
+    volumes:
+      - stellar_data:/opt/stellar
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          curl -sf http://localhost:8000/friendbot 2>/dev/null | grep -q '"fee_charged"'
+          || curl -sf http://localhost:8000 | grep -q '"horizon_version"'
+      interval: 10s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
+
+  # --------------------------------------------------------------------------
+  # PostgreSQL — tessera-api database backend
+  # --------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: tessera
+      POSTGRES_PASSWORD: tessera_e2e_pass
+      POSTGRES_DB: tessera_e2e
+    ports:
+      - "5433:5432"
+    networks:
+      - tessera-e2e
+    volumes:
+      - pg_e2e_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tessera -d tessera_e2e"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # --------------------------------------------------------------------------
+  # tessera-api — the Rust/Axum indexer under test
+  # --------------------------------------------------------------------------
+  tessera-api:
+    build:
+      context: ../../api
+      dockerfile: Dockerfile
+    environment:
+      PORT: "8080"
+      DATABASE_URL: postgres://tessera:tessera_e2e_pass@postgres:5432/tessera_e2e
+      SOROBAN_RPC_URL: http://stellar-node:8000/soroban/rpc
+      NETWORK_PASSPHRASE: "Test SDF Network ; September 2015"
+      # Testnet contract IDs (replaced by deployed local contracts in full E2E)
+      REGISTRY_CONTRACT_ID: CBX5SMLTXX6JP4HA5GQIO2V6QM7WCUGL2GZ6D4U773HMRI6RXISKPUR3
+      COMPLIANCE_CONTRACT_ID: CBUERYDM7DXTZLLKDBRJKUBPFJ7M4OSUN4T7XKUARU345RLXNAIQD2IU
+      DIVIDEND_CONTRACT_ID: CAR4XY3CEBQWFOL27JEWFW34KXSIZA7RFKDQMEIV7ZU723RWY37I2SYX
+      RUST_LOG: tessera_api=info,tower_http=warn
+    ports:
+      - "8080:8080"
+    networks:
+      - tessera-e2e
+    depends_on:
+      postgres:
+        condition: service_healthy
+      stellar-node:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health | grep -q 'ok\\|healthy'"]
+      interval: 10s
+      timeout: 10s
+      retries: 15
+      start_period: 30s
+    restart: on-failure

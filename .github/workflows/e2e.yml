@@ -1,0 +1,93 @@
+name: E2E System Integration Tests
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - "tests/e2e/**"
+      - "api/**"
+      - "contracts/**"
+      - ".github/workflows/e2e.yml"
+  pull_request:
+    paths:
+      - "tests/e2e/**"
+      - "api/**"
+      - "contracts/**"
+  workflow_dispatch:
+    inputs:
+      run_full_e2e:
+        description: "Run full Docker-based E2E suite"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "true"
+          - "false"
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e-unit:
+    name: E2E Unit Tests (no Docker)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tests/e2e
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "tests/e2e -> target"
+
+      - name: Run unit tests (no live environment needed)
+        run: cargo test --test system_suite -- unit:: --test-threads=1
+        env:
+          RUST_LOG: debug
+
+  e2e-full:
+    name: E2E Full Workflow (Docker)
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.event.inputs.run_full_e2e == 'true'
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "tests/e2e -> target"
+
+      - name: Start E2E environment
+        working-directory: tests/e2e
+        run: docker compose up --detach --wait --timeout 120
+
+      - name: Run full E2E suite
+        working-directory: tests/e2e
+        run: >-
+          RUN_E2E=true E2E_MANAGE_DOCKER=false
+          cargo test --test system_suite -- --test-threads=1 --include-ignored
+        env:
+          TESSERA_API_URL: http://localhost:8080
+          SOROBAN_RPC_URL: http://localhost:8000/soroban/rpc
+          RUST_LOG: debug
+
+      - name: Collect API logs on failure
+        if: failure()
+        working-directory: tests/e2e
+        run: docker compose logs tessera-api
+
+      - name: Tear down
+        if: always()
+        working-directory: tests/e2e
+        run: docker compose down --volumes --remove-orphans

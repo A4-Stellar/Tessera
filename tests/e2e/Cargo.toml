@@ -1,0 +1,37 @@
+[package]
+name = "tessera-e2e"
+version = "0.1.0"
+edition = "2021"
+description = "End-to-end integration tests for the full Tessera RWA stack."
+license = "Apache-2.0"
+publish = false
+
+# This is a test-only crate. Running:
+#   cargo test --manifest-path tests/e2e/Cargo.toml -- --test-threads=1
+# will spin up Docker Compose, run the full RWA workflow, and tear down.
+[[test]]
+name = "system_suite"
+path = "system_suite.rs"
+
+[dev-dependencies]
+# Async runtime
+tokio = { version = "1.37", features = ["full"] }
+
+# HTTP client for API assertions
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# JSON handling
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+
+# Test timing / retry helpers
+tokio-retry = { version = "0.3" }
+
+# UUID for unique test run identifiers
+uuid = { version = "1", features = ["v4"] }
+
+# Stellar address encoding validation
+stellar-strkey = { version = "0.0.8" }
+
+# Pretty test output
+pretty_assertions = { version = "1" }
