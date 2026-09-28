@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Suspense } from "react";
 import "./globals.css";
 import { DocHeader } from "@/components/DocHeader";
 import { SITE_URL } from "@/lib/site";
@@ -42,7 +43,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         >
           Skip to main content
         </a>
-        <DocHeader />
+        <Suspense fallback={<header className="sticky top-0 z-40 border-b border-white/5 bg-base-950/80 backdrop-blur-xl h-16" />}>
+          <DocHeader />
+        </Suspense>
         {children}
       </body>
     </html>
