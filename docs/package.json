@@ -10,6 +10,7 @@
     "lint": "eslint . --ext .tsx,.ts",
     "lint:a11y": "eslint . --ext .tsx,.ts",
     "check:mdx-samples": "node scripts/check-mdx-code-samples.mjs",
+    "generate:sdk-examples": "node scripts/generate-sdk-examples.mjs",
     "test": "jest",
     "test:a11y": "jest --testPathPattern=a11y",
     "test:a11y:e2e": "playwright test"
