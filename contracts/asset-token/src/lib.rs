@@ -1,6 +1,9 @@
 //! Asset-token contract — good-faith reconstruction of the deployed testnet
 //! Includes issue #40: Automated Share Buyback & Capital Reduction module
 //! (`buyback.rs`).
+//! Includes issue #153: Automated Asset Token Redemption and Liquidation Pool
+//! (`redemption_pool.rs`) — sale proceeds pool, pro-rata redemption and the
+//! permanent transfer freeze once the asset is `Liquidated`.
 //! contract at `CBMCWLSQSWUTLUJFCNBHNBSXMUM3XU7NAQ5TSNERW4HA4ZZBYHLG4ECZ`,
 //! built from `docs/app/docs/contracts/asset-token/page.mdx` and
 //! cross-checked against the `RawMetadata` shape `api/src/indexer/mod.rs`
@@ -9,7 +12,11 @@
 //! reconstruction caveat.
 #![no_std]
 
+/// Issue #153 — Automated Asset Token Redemption and Liquidation Pool.
+pub mod redemption_pool;
 pub mod stock_split;
+
+pub use redemption_pool::{AssetStatus, RedemptionError};
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, Address,
@@ -36,6 +43,11 @@ pub struct AssetMetadata {
 #[repr(u32)]
 pub enum Error {
     AlreadyInitialized = 1,
+    /// Returned by every admin-gated entry point when the contract has not
+    /// been initialized yet (code `2` was the one gap in the original
+    /// numbering; the `NotInitialized` reference in `require_admin` predates
+    /// this enum gaining a matching variant).
+    NotInitialized = 2,
     Unauthorized = 3,
     InsufficientBalance = 4,
     InvalidAmount = 5,
@@ -49,6 +61,9 @@ pub enum Error {
     Locked = 10,
     /// Issue #90: split ratio is zero, or the cumulative multiplier overflows.
     InvalidSplitRatio = 11,
+    /// Issue #153: the asset has been liquidated; secondary-market transfers
+    /// are permanently disabled.
+    AssetLiquidated = 12,
 }
 
 #[derive(Clone)]
@@ -138,6 +153,9 @@ impl AssetTokenContract {
     pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
         from.require_auth();
         Self::require_not_paused(&env);
+        // Issue #153: once the asset is liquidated the secondary market is
+        // closed forever — see `redemption_pool::ensure_transferable`.
+        redemption_pool::ensure_transferable(&env);
         Self::require_not_locked(&env, &from);
         if amount <= 0 {
             panic_with_error!(env, Error::InvalidAmount);
@@ -383,6 +401,61 @@ impl AssetTokenContract {
 
         env.events()
             .publish((symbol_short!("clawback"), from), amount);
+    }
+
+    // ---- Issue #153: liquidation redemption pool ----
+
+    /// Issue #153 — open the liquidation redemption pool. Admin-authenticated.
+    ///
+    /// Flips the asset status to [`AssetStatus::Liquidated`], permanently
+    /// freezes secondary-market transfers, snapshots the current total supply
+    /// as the pro-rata denominator and records the SEP-0041
+    /// `stablecoin_contract` that will fund the pool. Callable exactly once.
+    pub fn start_liquidation(env: Env, admin: Address, stablecoin_contract: Address) {
+        Self::require_admin(&env, &admin);
+        redemption_pool::start_liquidation(&env, stablecoin_contract);
+    }
+
+    /// Issue #153 — deposit `stablecoin_amount` of sale proceeds into the
+    /// redemption pool. Admin-authenticated and repeatable, so an issuer can
+    /// fund the pool in several tranches. Reverts unless the asset is
+    /// already liquidated.
+    pub fn deposit_liquidation_proceeds(env: Env, admin: Address, stablecoin_amount: i128) {
+        Self::require_admin(&env, &admin);
+        redemption_pool::deposit_proceeds(&env, &admin, stablecoin_amount);
+    }
+
+    /// Issue #153 — burn `amount` asset tokens and pay the caller their
+    /// pro-rata share of the deposited proceeds, denominated in the
+    /// liquidation stablecoin. Holder-authenticated. Returns the payout.
+    pub fn redeem_liquidation_proceeds(env: Env, holder: Address, amount: i128) -> i128 {
+        redemption_pool::redeem(&env, &holder, amount)
+    }
+
+    /// Issue #153 — whether the asset has been marked `Liquidated`.
+    pub fn is_liquidated(env: Env) -> bool {
+        redemption_pool::is_liquidated(&env)
+    }
+
+    /// Issue #153 — `(proceeds deposited, proceeds claimed)`.
+    pub fn liquidation_proceeds(env: Env) -> (i128, i128) {
+        redemption_pool::proceeds(&env)
+    }
+
+    /// Issue #153 — total supply snapshotted when liquidation started.
+    pub fn liquidation_snapshot_supply(env: Env) -> i128 {
+        redemption_pool::snapshot_supply(&env)
+    }
+
+    /// Issue #153 — stablecoin payout `holder` would receive today by
+    /// redeeming their whole remaining balance.
+    pub fn liquidation_claimable(env: Env, holder: Address) -> i128 {
+        redemption_pool::claimable(&env, &holder)
+    }
+
+    /// Issue #153 — tokens `holder` has already burned through redemption.
+    pub fn redeemed_tokens(env: Env, holder: Address) -> i128 {
+        redemption_pool::redeemed_tokens(&env, &holder)
     }
 
     /// Issue #11 — migrate this contract to a new WASM build without losing
