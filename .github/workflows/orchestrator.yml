@@ -1,0 +1,32 @@
+name: Orchestrator
+
+on:
+  push:
+    paths:
+      - "infrastructure/orchestrator/**"
+      - ".github/workflows/orchestrator.yml"
+  pull_request:
+    paths:
+      - "infrastructure/orchestrator/**"
+  workflow_dispatch: {}
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infrastructure/orchestrator
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: infrastructure/orchestrator
+      - name: Test
+        run: cargo test --locked
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+      - name: Format check
+        run: cargo fmt --check
