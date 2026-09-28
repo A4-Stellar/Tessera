@@ -11,6 +11,7 @@
 #![no_std]
 
 pub mod circuit_breaker;
+pub mod post_quantum;
 
 use soroban_sdk::{symbol_short, BytesN, Env, Symbol};
 
