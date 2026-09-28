@@ -17,6 +17,7 @@ import { ApiPlayground } from "../../components/ApiPlayground";
 jest.mock("next/navigation", () => ({
   useRouter: () => ({ push: jest.fn() }),
   usePathname: () => "/docs/getting-started",
+  useSearchParams: () => new URLSearchParams(),
 }));
 
 describe("Automated Accessibility (a11y) WCAG 2.1 AA Audits", () => {
