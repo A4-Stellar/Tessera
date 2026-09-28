@@ -10,7 +10,6 @@
 //! `O(log n)`-sized proof instead of an on-chain enumeration.
 #![no_std]
 
-use soroban_sdk::xdr::ToXdr;
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short,
     xdr::ToXdr, Address, Bytes, BytesN, Env, Vec,
