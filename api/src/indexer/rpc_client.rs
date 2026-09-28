@@ -48,6 +48,35 @@ pub(crate) struct ReadOutcome {
     pub diagnostics: Vec<crate::models::DiagnosticEventRecord>,
 }
 
+/// One page of ledger headers returned by `getLedgers`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LedgerPage {
+    /// Sequence numbers in the requested window, ascending and de-duplicated.
+    pub sequences: Vec<u32>,
+    /// Head ledger the node reported for the page.
+    pub latest_ledger: u32,
+}
+
+#[derive(Deserialize)]
+struct GetLedgersEnvelope {
+    result: Option<GetLedgersResult>,
+    error: Option<RpcError>,
+}
+
+#[derive(Deserialize)]
+struct GetLedgersResult {
+    #[serde(default)]
+    ledgers: Vec<GetLedgersEntry>,
+    #[serde(rename = "latestLedger", default)]
+    latest_ledger: u32,
+}
+
+#[derive(Deserialize)]
+struct GetLedgersEntry {
+    #[serde(default)]
+    sequence: u32,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CircuitState {
     Closed,
@@ -221,6 +250,121 @@ impl RpcClient {
                 }
             }
         }
+    }
+
+    /// Fetch a page of ledger headers starting at `start_ledger`.
+    ///
+    /// Where [`RpcClient::read`] runs a contract view through
+    /// `simulateTransaction`, this drives the RPC's `getLedgers` pagination so
+    /// the gap healer can pull missing ledgers straight from the archive/RPC
+    /// nodes. Endpoint selection and the circuit breaker are shared, so a
+    /// flapping archive node is skipped exactly like a flapping read node.
+    pub async fn ledgers(&self, start_ledger: u32, limit: u32) -> Result<LedgerPage, IndexError> {
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let idx = self.select_endpoint();
+            let url = {
+                let endpoints = self.endpoints.lock().unwrap();
+                endpoints[idx].url.clone()
+            };
+            let started = Instant::now();
+            match self.ledgers_once_inner(&url, start_ledger, limit).await {
+                Ok(page) => {
+                    let latency = started.elapsed();
+                    metrics::histogram!("soroban_rpc_get_ledgers_duration_seconds")
+                        .record(latency.as_secs_f64());
+                    self.record_success(idx, latency, page.latest_ledger);
+                    return Ok(page);
+                }
+                Err(e) => {
+                    metrics::counter!(
+                        "rwa_rpc_failures_total",
+                        "classification" => classify_rpc_error(&e),
+                    )
+                    .increment(1);
+                    self.record_failure(idx);
+                    if attempt < MAX_READ_ATTEMPTS && e.is_transient() {
+                        let delay = retry_delay(attempt);
+                        tracing::warn!(
+                            start_ledger,
+                            limit,
+                            attempt,
+                            url,
+                            delay_ms = delay.as_millis() as u64,
+                            error = %e,
+                            "transient getLedgers error; retrying"
+                        );
+                        tokio::time::sleep(delay).await;
+                    } else {
+                        return Err(e);
+                    }
+                }
+            }
+        }
+    }
+
+    async fn ledgers_once_inner(
+        &self,
+        url: &str,
+        start_ledger: u32,
+        limit: u32,
+    ) -> Result<LedgerPage, IndexError> {
+        let body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "getLedgers",
+            "params": {
+                "startLedger": start_ledger,
+                "pagination": { "limit": limit },
+            },
+        });
+
+        let resp = self.http.post(url).json(&body).send().await?;
+        let status = resp.status();
+        if status == StatusCode::TOO_MANY_REQUESTS || status == StatusCode::SERVICE_UNAVAILABLE {
+            let headers = resp.headers().clone();
+            let body = resp.text().await.unwrap_or_default();
+            let retry_after = headers
+                .get(RETRY_AFTER)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.parse::<u64>().ok())
+                .map(Duration::from_secs);
+            return Err(IndexError::RateLimited {
+                status: status.as_u16(),
+                retry_after,
+                body,
+            });
+        }
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(IndexError::HttpStatus {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        let envelope: GetLedgersEnvelope = resp.json().await?;
+        if let Some(err) = envelope.error {
+            return Err(IndexError::Rpc(err.message));
+        }
+        let result = envelope
+            .result
+            .ok_or_else(|| IndexError::Rpc("empty getLedgers result".into()))?;
+
+        let mut sequences: Vec<u32> = result
+            .ledgers
+            .into_iter()
+            .map(|entry| entry.sequence)
+            .filter(|sequence| *sequence > 0)
+            .collect();
+        sequences.sort_unstable();
+        sequences.dedup();
+
+        Ok(LedgerPage {
+            sequences,
+            latest_ledger: result.latest_ledger,
+        })
     }
 
     async fn read_once_inner(

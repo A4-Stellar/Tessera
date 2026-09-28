@@ -18,6 +18,7 @@
 )]
 pub mod archive;
 pub mod diagnostics;
+pub mod gap_healer;
 pub mod nav_calculator;
 pub mod price_feed;
 pub mod replay;
@@ -566,7 +567,11 @@ fn normalize_status(v: &serde_json::Value) -> String {
 type DividendCache = HashMap<String, (Instant, Vec<Distribution>, Option<String>)>;
 
 pub struct Indexer {
-    rpc: rpc_client::RpcClient,
+    rpc: Arc<rpc_client::RpcClient>,
+    /// Issue #156: detects and heals ledger-sequence gaps without pausing the
+    /// real-time refresh loop. Shares the RPC client (and therefore its
+    /// endpoint health/circuit breaker) with the read path.
+    gap_healer: gap_healer::GapHealer,
     state: AppState,
     dividend_cache: Mutex<DividendCache>,
     /// Issue #6: best-effort historical fiat-equivalent pricing for
@@ -579,8 +584,16 @@ pub struct Indexer {
 impl Indexer {
     pub fn new(state: AppState) -> Self {
         let cfg = &state.config;
+        let rpc = Arc::new(rpc_client::RpcClient::new(
+            cfg.rpc_urls.clone(),
+            cfg.read_source.clone(),
+        ));
         Indexer {
-            rpc: rpc_client::RpcClient::new(cfg.rpc_urls.clone(), cfg.read_source.clone()),
+            gap_healer: gap_healer::GapHealer::new(
+                Arc::clone(&rpc),
+                gap_healer::GapHealerConfig::from_env(),
+            ),
+            rpc,
             state,
             dividend_cache: Mutex::new(HashMap::new()),
             price_feed: price_feed::PriceFeedClient::new(price_feed::PriceFeedConfig::from_env()),
@@ -664,6 +677,11 @@ impl Indexer {
             .read(&cfg.registry_id, "get_all_assets", vec![])
             .await?;
         let latest_ledger = entries_read.latest_ledger;
+        // Issue #156: feed the head ledger to the gap healer. Detection is
+        // synchronous and I/O-free; a scheduled backfill runs in a detached
+        // task, so this refresh cycle is never blocked. The gap (if any) is
+        // also logged and counted by `observe_ledger` itself.
+        let _ = self.gap_healer.observe_ledger(latest_ledger);
         let raw_entries: Vec<RawAssetEntry> = serde_json::from_value(entries_read.value)?;
 
         // Grab the previous snapshot so we can carry forward per-asset
