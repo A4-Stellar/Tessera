@@ -321,7 +321,7 @@ pub fn check_budget_feasibility(env: &Env, level: SecurityLevel) -> Result<(), M
     // env.budget().cpu_instruction_count() returns the instructions consumed
     // so far in this invocation. The hard cap is 10^8; we check if enough
     // headroom remains.
-    let used_cpu = env.budget().cpu_instruction_count() as u64;
+    let used_cpu = env.budget().cpu_instruction_cost() as u64;
     let total_cap: u64 = 100_000_000; // 10^8 Soroban CPU unit cap
 
     if used_cpu + required_cpu > total_cap {
@@ -373,15 +373,15 @@ pub fn measure_budget(env: &Env, level: SecurityLevel, message_len: u32) -> MlDs
         msg_buf.push_back(0u8);
     }
 
-    let cpu_before = env.budget().cpu_instruction_count() as u64;
-    let mem_before = env.budget().memory_bytes_used() as u64;
+    let cpu_before = env.budget().cpu_instruction_cost() as u64;
+    let mem_before = env.budget().memory_bytes_cost() as u64;
 
     // Run the verification (expected to return VerificationFailed for zero inputs)
     let verification_passed = verify_ml_dsa_signature_inner(env, &pk_buf, &msg_buf, &sig_buf, level)
         .unwrap_or(false);
 
-    let cpu_after = env.budget().cpu_instruction_count() as u64;
-    let mem_after = env.budget().memory_bytes_used() as u64;
+    let cpu_after = env.budget().cpu_instruction_cost() as u64;
+    let mem_after = env.budget().memory_bytes_cost() as u64;
 
     let measurement = MlDsaBudgetMeasurement {
         security_level: level,

@@ -10,6 +10,7 @@
 #![no_std]
 
 pub mod stock_split;
+pub mod rent_dispute;
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, Address,
@@ -401,7 +402,7 @@ impl AssetTokenContract {
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .unwrap_or_else(|| panic_with_error!(env, Error::NotInitialized));
+            .unwrap_or_else(|| panic_with_error!(env, Error::Unauthorized));
         admin.require_auth();
         if admin != &stored_admin {
             panic_with_error!(env, Error::Unauthorized);
