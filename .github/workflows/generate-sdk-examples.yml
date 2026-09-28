@@ -1,0 +1,82 @@
+name: SDK Example Generation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/content/**/*.mdx'
+      - 'docs/scripts/generate-sdk-examples.mjs'
+  pull_request:
+    paths:
+      - 'docs/content/**/*.mdx'
+      - 'docs/scripts/generate-sdk-examples.mjs'
+  workflow_dispatch:
+
+jobs:
+  generate-and-test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        language: [typescript, python, go]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        if: matrix.language == 'typescript'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Python
+        if: matrix.language == 'python'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Setup Go
+        if: matrix.language == 'go'
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Install dependencies
+        run: |
+          cd docs && npm ci
+
+      - name: Generate SDK examples
+        run: |
+          node docs/scripts/generate-sdk-examples.mjs
+
+      - name: Run TypeScript tests
+        if: matrix.language == 'typescript'
+        run: |
+          cd sdk/typescript && npm ci && npm test -- --run
+
+      - name: Run Python tests
+        if: matrix.language == 'python'
+        run: |
+          cd sdk/python && pip install -e ".[test]" && pytest tests/generated/ -v
+
+      - name: Run Go tests
+        if: matrix.language == 'go'
+        run: |
+          cd sdk/tests/generated/go && go test -v ./...
+
+      - name: Start local testnet server
+        if: matrix.language == 'typescript'
+        run: |
+          cd api && cp .env.example .env && cargo run &
+          sleep 15
+
+      - name: Execute generated scripts against local testnet
+        if: matrix.language == 'typescript'
+        run: |
+          cd sdk/typescript && npm test -- --run --testNamePattern="local testnet"
+
+      - name: Upload generated examples
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-sdk-examples-${{ matrix.language }}
+          path: sdk/tests/generated/${{ matrix.language }}/

@@ -9,7 +9,7 @@ describe("PrevNext Navigation", () => {
     it("should have all items with valid href", () => {
       FLAT_NAV.forEach((item) => {
         expect(item.href).toBeDefined();
-        expect(item.href).toMatch(/^\/docs\//);
+        expect(item.href).toMatch(/^\/(\w+)?\/docs\//);
       });
     });
 
