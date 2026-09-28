@@ -6,6 +6,7 @@
 //! indistinguishable from a genuine bug, or silently corrupted the ledger.
 #![no_std]
 pub mod interest_rate;
+pub mod refinancing;
 
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Symbol};
 
@@ -31,6 +32,14 @@ pub enum DataKey {
     SeniorOwed,
     MezzanineOwed,
     EquityOwed,
+    /// Issue #147: a refinancing token series, by id.
+    TokenSeries(u64),
+    /// Issue #147: a holder's share balance in a series.
+    SeriesShares(u64, Address),
+    /// Issue #147: a published offer, keyed by `(old_token_id, new_token_id)`.
+    Refinancing(u64, u64),
+    /// Issue #147: cumulative old shares a holder converted under one offer.
+    Converted(u64, u64, Address),
 }
 
 /// Declared errors.
@@ -50,6 +59,24 @@ pub enum Error {
     InvalidAmount = 4,
     /// Accruing would push a tranche past the `i128` ceiling.
     Overflow = 5,
+    /// Issue #147: refinancing referenced a token id that was never
+    /// registered as a series (or whose series has been deactivated).
+    TokenSeriesNotRegistered = 6,
+    /// Issue #147: a token series id can only be registered once.
+    TokenSeriesAlreadyRegistered = 7,
+    /// Issue #147: no refinancing offer exists for this `(old, new)` pair.
+    RefinancingNotFound = 8,
+    /// Issue #147: the conversion ratio is non-positive, or it would round a
+    /// conversion down to zero new shares.
+    InvalidConversionRatio = 9,
+    /// Issue #147: an offer's `expiration` is not in the future.
+    InvalidExpiration = 10,
+    /// Issue #147: the offer's `expiration` has been reached.
+    RefinancingExpired = 11,
+    /// Issue #147: the holder does not own enough of the old series.
+    InsufficientShares = 12,
+    /// Issue #147: the holder is not allowlisted for one of the two series.
+    NotAllowlisted = 13,
 }
 
 #[contract]
@@ -222,5 +249,85 @@ impl DebtTokenAmortization {
     pub fn trigger_default(env: Env) {
         env.events()
             .publish((Symbol::new(&env, "default_triggered"),), ());
+    }
+
+    // ---- issue #147: multi-token debt refinancing / bond conversion ----
+
+    /// Register a `Debt`/`Equity` series that can take part in refinancing,
+    /// naming the compliance contract that gates transfers of that series.
+    /// Admin-authenticated; a series id can only be registered once.
+    pub fn register_refinancing_series(
+        env: Env,
+        admin: Address,
+        token_id: u64,
+        issuer: Address,
+        class: refinancing::TokenClass,
+        compliance: Address,
+    ) {
+        refinancing::register_series(&env, admin, token_id, issuer, class, compliance);
+    }
+
+    /// Issue `amount` shares of a registered series to `holder`, subject to
+    /// that series' compliance allowlist. Admin-authenticated.
+    pub fn mint_refinancing_shares(
+        env: Env,
+        admin: Address,
+        token_id: u64,
+        holder: Address,
+        amount: i128,
+    ) {
+        refinancing::mint_shares(&env, admin, token_id, holder, amount);
+    }
+
+    /// Publish a refinancing offer that converts `old_token_id` into
+    /// `new_token_id` at `conversion_ratio` (WAD, `1e18` == 1:1) until
+    /// `expiration`. Authorized by the old series' issuer.
+    pub fn initiate_refinancing(
+        env: Env,
+        old_token_id: u64,
+        new_token_id: u64,
+        conversion_ratio: i128,
+        expiration: u64,
+    ) -> refinancing::RefinancingOffer {
+        refinancing::initiate(&env, old_token_id, new_token_id, conversion_ratio, expiration)
+    }
+
+    /// Burn `amount` old shares from `holder` and mint the equivalent new
+    /// shares, atomically, in one call; returns the number of new shares
+    /// minted. Reverts unless the offer is live and the holder is allowlisted
+    /// on both the old and the new series.
+    pub fn execute_refinancing(
+        env: Env,
+        holder: Address,
+        old_token_id: u64,
+        new_token_id: u64,
+        amount: i128,
+    ) -> i128 {
+        refinancing::convert(&env, holder, old_token_id, new_token_id, amount)
+    }
+
+    pub fn token_series(env: Env, token_id: u64) -> refinancing::TokenSeries {
+        refinancing::series(&env, token_id)
+    }
+
+    pub fn series_shares(env: Env, token_id: u64, holder: Address) -> i128 {
+        refinancing::shares(&env, token_id, holder)
+    }
+
+    pub fn refinancing_offer(
+        env: Env,
+        old_token_id: u64,
+        new_token_id: u64,
+    ) -> refinancing::RefinancingOffer {
+        refinancing::offer(&env, old_token_id, new_token_id)
+    }
+
+    pub fn converted_shares(
+        env: Env,
+        old_token_id: u64,
+        new_token_id: u64,
+        holder: Address,
+    ) -> i128 {
+        refinancing::converted(&env, old_token_id, new_token_id, holder)
     }
 }
