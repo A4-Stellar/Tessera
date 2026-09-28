@@ -8,6 +8,10 @@ use axum::{
 };
 use async_graphql_axum::{GraphQLRequest, GraphQLResponse, GraphQLSubscription};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+
+mod subscriptions;
+pub use subscriptions::{create_subscription_manager, SubscriptionManager, SubscriptionEvent};
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Asset {
@@ -106,7 +110,6 @@ pub struct QueryRoot;
 #[Object]
 impl QueryRoot {
     async fn asset(&self, _ctx: &Context<'_>, id: String) -> FieldResult<Asset> {
-        // Stub implementation
         Ok(Asset {
             id,
             name: "Tokenized Real Estate Fund".to_string(),
@@ -115,7 +118,6 @@ impl QueryRoot {
     }
 
     async fn assets(&self, _ctx: &Context<'_>, filter: Option<String>) -> FieldResult<Vec<Asset>> {
-        // Stub implementation
         Ok(vec![Asset {
             id: "ASSET123".to_string(),
             name: "Tokenized Bond".to_string(),
@@ -124,7 +126,6 @@ impl QueryRoot {
     }
 
     async fn holder(&self, _ctx: &Context<'_>, address: String) -> FieldResult<Holder> {
-        // Stub implementation
         Ok(Holder {
             address,
             balance: 100.5,
@@ -132,7 +133,6 @@ impl QueryRoot {
     }
 
     async fn compliance_summary(&self, _ctx: &Context<'_>, id: String) -> FieldResult<ComplianceSummary> {
-        // Stub implementation
         Ok(ComplianceSummary {
             asset_id: id,
             allowlist_count: 42,
@@ -140,16 +140,72 @@ impl QueryRoot {
     }
 }
 
-pub struct SubscriptionRoot;
+pub struct SubscriptionRoot {
+    manager: Arc<SubscriptionManager>,
+}
+
+impl SubscriptionRoot {
+    pub fn new(manager: Arc<SubscriptionManager>) -> Self {
+        Self { manager }
+    }
+}
 
 #[Subscription]
 impl SubscriptionRoot {
     async fn asset_transfers(&self, _ctx: &Context<'_>) -> impl Stream<Item = AssetTransfer> {
-        stream::empty() // Stub for real-time subscription
+        let manager = self.manager.clone();
+        let mut rx = manager.subscribe();
+
+        stream! {
+            loop {
+                match rx.recv().await {
+                    Ok(SubscriptionEvent::AssetTransfer(event)) => {
+                        yield event;
+                    }
+                    Ok(SubscriptionEvent::Heartbeat { .. }) => {
+                        continue;
+                    }
+                    Ok(SubscriptionEvent::DividendEvent(_)) => {
+                        continue;
+                    }
+                    Err(broadcast::error::RecvError::Closed) => {
+                        debug!("Asset transfers subscription channel closed");
+                        break;
+                    }
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        warn!("Asset transfers subscription lagged by {} messages", n);
+                    }
+                }
+            }
+        }
     }
 
     async fn dividend_events(&self, _ctx: &Context<'_>) -> impl Stream<Item = DividendEvent> {
-        stream::empty() // Stub for real-time subscription
+        let manager = self.manager.clone();
+        let mut rx = manager.subscribe();
+
+        stream! {
+            loop {
+                match rx.recv().await {
+                    Ok(SubscriptionEvent::DividendEvent(event)) => {
+                        yield event;
+                    }
+                    Ok(SubscriptionEvent::Heartbeat { .. }) => {
+                        continue;
+                    }
+                    Ok(SubscriptionEvent::AssetTransfer(_)) => {
+                        continue;
+                    }
+                    Err(broadcast::error::RecvError::Closed) => {
+                        debug!("Dividend events subscription channel closed");
+                        break;
+                    }
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        warn!("Dividend events subscription lagged by {} messages", n);
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -168,8 +224,9 @@ async fn graphiql() -> axum::response::Html<String> {
     )
 }
 
-pub fn create_graphql_router() -> Router {
-    let schema = Schema::build(QueryRoot, EmptyMutation, SubscriptionRoot).finish();
+pub fn create_graphql_router(subscription_manager: Arc<SubscriptionManager>) -> Router {
+    let subscription_root = SubscriptionRoot::new(subscription_manager.clone());
+    let schema = Schema::build(QueryRoot, EmptyMutation, subscription_root).finish();
 
     Router::new()
         .route("/graphql", get(graphiql).post(graphql_handler))

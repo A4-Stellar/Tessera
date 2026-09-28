@@ -2,26 +2,46 @@
 
 {{package_description}}
 
-## Configuration
+Asset type: {{asset_type_label}}
+Compliance model: {{compliance_model_label}}
+Dividend strategy: {{dividend_strategy_label}}
 
-- Asset type: {{asset_type_label}}
-- Compliance model: {{compliance_model_label}}
-- Dividend strategy: {{dividend_strategy_label}}
-- Soroban SDK: `25.0.0`
-- Rust toolchain: `1.81.0`
+## Building
 
-## Development
+```bash
+cargo build --target wasm32-unknown-unknown --release
+```
 
-Run the native contract tests with:
+## Testing
 
 ```bash
 cargo test
 ```
 
-Build a release WebAssembly contract with:
+## Contract Interface
 
-```bash
-cargo build --release --target wasm32-unknown-unknown
-```
+The contract implements the following interface:
 
-The generated crate has no workspace or path dependencies outside this directory. Replace the example compliance and distribution logic with the controls required by the asset before deployment.
+- `initialize(admin, name, symbol, total_supply)` - Initialize the contract
+- `details()` - Get asset details
+- `asset_type()` - Get asset type
+- `compliance_model()` - Get compliance model
+- `dividend_strategy()` - Get dividend strategy
+- `total_supply()` - Get total supply
+- `balance(holder)` - Get holder balance
+- `is_compliant(holder)` - Check holder compliance status
+- `set_compliance(admin, holder, allowed)` - Set holder compliance (admin only)
+- `transfer(from, to, amount)` - Transfer tokens
+- `create_distribution(admin, amount)` - Create dividend distribution (admin only)
+- `distribution(distribution_id)` - Get distribution details
+- `dividend_preview(distribution_id, holder)` - Preview dividend for holder
+- `claim_dividend(distribution_id, holder)` - Claim dividend
+- `version()` - Get contract version
+
+## Configuration Constants
+
+The following constants are embedded at compile time:
+
+- `ASSET_TYPE` = "{{asset_type}}"
+- `COMPLIANCE_MODEL` = "{{compliance_model}}"
+- `DIVIDEND_STRATEGY` = "{{dividend_strategy}}"

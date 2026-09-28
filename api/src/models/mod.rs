@@ -196,6 +196,21 @@ pub struct ApiErrorBody {
     pub message: String,
 }
 
+/// GraphQL-specific types
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+pub struct AssetTransfer {
+    pub asset_id: String,
+    pub from: String,
+    pub to: String,
+    pub amount: f64,
+}
+
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+pub struct DividendEvent {
+    pub asset_id: String,
+    pub amount_per_share: f64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
