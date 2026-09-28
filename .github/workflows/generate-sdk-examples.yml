@@ -67,8 +67,7 @@ jobs:
       - name: Start local testnet server
         if: matrix.language == 'typescript'
         run: |
-          cd api && cp .env.example .env &
-          cargo run &
+          cd api && cp .env.example .env && cargo run &
           sleep 15
 
       - name: Execute generated scripts against local testnet
