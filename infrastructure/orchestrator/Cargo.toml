@@ -1,0 +1,34 @@
+[package]
+name = "tessera-orchestrator"
+version = "0.1.0"
+edition = "2021"
+description = "Cross-region PostgreSQL failover controller for Tessera: heartbeat and replication-lag monitoring, zero-data-loss replica promotion and DNS re-routing."
+license = "Apache-2.0"
+
+# Standalone crate, like services/mpc-signer: it is deployed next to the
+# databases, not bundled with the API, so it is not a member of any workspace.
+[workspace]
+
+[dependencies]
+async-trait = "0.1"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+futures = "0.3"
+hex = "0.4"
+hmac = "0.12"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "tls-rustls-ring-webpki", "postgres"] }
+thiserror = "1"
+tokio = { version = "1", features = ["full"] }
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full", "test-util"] }
+
+[[bin]]
+name = "tessera-orchestrator"
+path = "src/main.rs"

@@ -1,0 +1,40 @@
+# tessera-orchestrator example configuration.
+# Run: ORCHESTRATOR_CONFIG=orchestrator.toml tessera-orchestrator
+
+[policy]
+heartbeat_interval_ms = 2000
+probe_timeout_ms = 1500
+failure_threshold = 3            # ~6s to declare the primary dead
+promotion_deadline_ms = 30000    # detection -> writable new primary
+max_data_loss_bytes = 0          # zero data loss
+require_synchronous_candidate = true
+require_witness_quorum = true
+upstream_silence_threshold_ms = 5000
+lag_alert_bytes = 16777216
+
+[primary]
+name = "tessera-use1"
+region = "us-east-1"
+endpoint = "tessera-use1.db.internal.tessera.example"
+dsn_env = "TESSERA_DB_USE1_URL"
+
+# `name` must match the standby's application_name in primary_conninfo.
+[[replicas]]
+name = "tessera-euw1"
+region = "eu-west-1"
+endpoint = "tessera-euw1.db.internal.tessera.example"
+dsn_env = "TESSERA_DB_EUW1_URL"
+
+[dns]
+provider = "route53"
+hosted_zone_id = "Z0123456789ABCDEFGHIJ"
+record_name = "db.tessera.example"
+ttl = 30
+
+# Cloudflare alternative:
+# [dns]
+# provider = "cloudflare"
+# zone_id = "..."
+# record_id = "..."
+# record_name = "db.tessera.example"
+# ttl = 60
