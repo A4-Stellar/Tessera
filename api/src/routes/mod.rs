@@ -6,6 +6,7 @@ pub mod compliance;
 pub mod dividends;
 pub mod events;
 pub mod export;
+pub mod governance;
 pub mod holders;
 #[expect(
     dead_code,
@@ -110,14 +111,9 @@ pub fn router(state: AppState) -> Router {
     let rate_limit_state = Arc::new(RateLimitState {
         limiter,
         limit: burst as u64,
-        window: (burst as u64).max(1) / per_second.max(1), // simple approximation for window if needed by Redis
+        window: (burst as u64).max(1) / per_second.max(1),
     });
 
-    // Snapshot-backed endpoints: cacheable and safe to answer with 304 when
-    // the client's ETag still matches the last indexed ledger.
-    //
-    // All data routes are nested under `/v1` so future breaking changes can
-    // be introduced as `/v2` without disturbing existing clients.
     let data_routes = Router::new()
         .route("/stats", get(stats::get))
         .route("/events", get(events::list))
@@ -145,6 +141,10 @@ pub fn router(state: AppState) -> Router {
         .route("/audit/entries/:sequence", get(audit::get_entry))
         .route("/audit/anchors", get(audit::list_anchors))
         .route("/audit/anchor", axum::routing::post(audit::publish_anchor))
+        // Governance routes
+        .route("/governance/:contract_address/proposals", get(governance::list_proposals))
+        .route("/governance/:contract_address/vote-weight/:address", get(governance::get_vote_weight))
+        .route("/governance/:contract_address/proposal/:id", get(governance::get_proposal))
         .layer(middleware::from_fn_with_state(state.clone(), cache_headers));
 
     Router::new()
@@ -154,9 +154,6 @@ pub fn router(state: AppState) -> Router {
         .route("/metrics", get(metrics))
         .nest("/v1", data_routes)
         .route("/v1/ws", get(crate::ws::handler))
-        // `route_layer` (rather than `layer`) so the middleware runs after
-        // route matching and can read `MatchedPath` from the request
-        // extensions for a low-cardinality route label.
         .route_layer(middleware::from_fn(track_request_metrics))
         .with_state(state)
         .layer(TimeoutLayer::new(Duration::from_secs(env_value(
@@ -172,19 +169,12 @@ pub fn router(state: AppState) -> Router {
             rate_limit_middleware,
         ))
         .layer(cors)
-        // Outermost: scrub PII from every JSON/text response (issue #103).
         .layer(middleware::from_fn(
             crate::middleware::pii_scrubber::pii_scrub_middleware,
         ))
 }
 
 /// Issue #7: per-route Prometheus request counts and latencies.
-///
-/// Records `rwa_http_requests_total{method,route,status}` and
-/// `rwa_http_request_duration_seconds{method,route}` for every request. The
-/// route label uses the matched Axum path pattern (e.g. `/v1/assets/:id`)
-/// rather than the raw URI, so it stays low-cardinality even though asset
-/// IDs and addresses vary per request.
 async fn track_request_metrics(req: Request<Body>, next: Next) -> Response {
     let method = req.method().clone();
     let route = req
@@ -215,12 +205,6 @@ async fn track_request_metrics(req: Request<Body>, next: Next) -> Response {
     response
 }
 
-/// Attach `Cache-Control` and `ETag` to snapshot-backed responses, and answer
-/// `If-None-Match` with `304 Not Modified` when the snapshot hasn't advanced.
-///
-/// The snapshot only changes once per [`POLL_INTERVAL`], so the ETag is
-/// derived from `last_indexed_ledger`: two requests against the same indexed
-/// ledger are guaranteed to have identical bodies.
 async fn cache_headers(State(state): State<AppState>, req: Request<Body>, next: Next) -> Response {
     let ledger = state.last_indexed_ledger();
     let etag = format!("\"ledger-{ledger}\"");
@@ -255,7 +239,6 @@ fn insert_cache_headers(headers: &mut HeaderMap, etag: &str) {
     }
 }
 
-/// Root — a small self-describing index of the available endpoints.
 async fn index() -> Json<serde_json::Value> {
     Json(json!({
         "name": "Stellar RWA API",
@@ -278,6 +261,9 @@ async fn index() -> Json<serde_json::Value> {
             "GET /v1/holders/:address/compliance",
             "GET /v1/compliance/:address",
             "GET /v1/security/anomalies",
+            "GET /v1/governance/:contract_address/proposals",
+            "GET /v1/governance/:contract_address/vote-weight/:address",
+            "GET /v1/governance/:contract_address/proposal/:id",
             "GET /health",
             "GET /metrics"
         ],
@@ -285,10 +271,6 @@ async fn index() -> Json<serde_json::Value> {
     }))
 }
 
-/// Machine-readable version endpoint.
-///
-/// Returns the crate version from `Cargo.toml` and the API release label so
-/// clients can negotiate compatibility without parsing the root index body.
 async fn version() -> Json<serde_json::Value> {
     Json(json!({
         "version": env!("CARGO_PKG_VERSION"),
@@ -296,7 +278,6 @@ async fn version() -> Json<serde_json::Value> {
     }))
 }
 
-/// Liveness probe.
 async fn health(State(state): State<AppState>) -> Response {
     let updated = state
         .snapshot()
@@ -327,8 +308,6 @@ async fn health(State(state): State<AppState>) -> Response {
         .into_response()
 }
 
-/// Prometheus scrape endpoint: indexer refresh latency, failure counts, last
-/// success timestamp, and per-asset read errors.
 async fn metrics(headers: HeaderMap, State(state): State<AppState>) -> Response {
     let supplied = headers
         .get(header::AUTHORIZATION)
@@ -367,10 +346,6 @@ mod tests {
     use super::router;
 
     async fn assert_json_content_type(app: Router, uri: &str, status: StatusCode) {
-        // This is the only test that exercises the full `router()`, rate
-        // limiter included. The governor keys on the peer IP, which `serve`
-        // supplies via into_make_service_with_connect_info; without it here
-        // the extractor fails and every route answers 500.
         let mut request = Request::builder().uri(uri).body(Body::empty()).unwrap();
         request
             .extensions_mut()
