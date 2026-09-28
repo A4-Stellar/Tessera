@@ -8,7 +8,7 @@ export const metadata = {
 
 Maintains the KYC allowlist and jurisdiction rules that gate who may hold or
 transfer a tokenized asset. The asset-token contract calls
-[`is_allowed`](#is-allowed) on every transfer (for both sender and recipient) and
+[`is_allowed`](#is_allowed) on every transfer (for both sender and recipient) and
 on every mint (for the recipient).
 
 Time is expressed in **ledger sequence numbers** (`u32`), not wall-clock dates. An

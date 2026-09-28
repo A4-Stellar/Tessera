@@ -1,6 +1,7 @@
 # Rust
 /api/target
 /cli/target
+/infrastructure/orchestrator/target
 
 # Node
 node_modules

@@ -5,11 +5,12 @@
   "description": "Documentation site for Tessera — contracts, API and web app.",
   "scripts": {
     "dev": "next dev",
-    "build": "node scripts/build-search-index.mjs && next build",
+    "build": "node scripts/check-mdx-links.mjs --skip-external && node scripts/build-search-index.mjs && next build",
     "start": "next start",
     "lint": "eslint . --ext .tsx,.ts",
     "lint:a11y": "eslint . --ext .tsx,.ts",
     "check:mdx-samples": "node scripts/check-mdx-code-samples.mjs",
+    "check:mdx-links": "node scripts/check-mdx-links.mjs",
     "generate:sdk-examples": "node scripts/generate-sdk-examples.mjs",
     "test": "jest",
     "test:a11y": "jest --testPathPattern=a11y",
