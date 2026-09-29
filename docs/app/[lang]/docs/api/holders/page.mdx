@@ -72,3 +72,31 @@ and renders holder concentration and jurisdiction breakdowns as donut charts,
 with an accessible data table underneath.
 
 <CapTableVisualizer assetId={1} />
+
+---
+
+<ApiEndpoint method="GET" path="/v1/holders/:address/portfolio" description="Automated Asset Portfolio Performance & Return Tracking API (issue #162)." />
+
+Computes historical portfolio performance metrics (Time-Weighted Return, Net Present Value, Internal Rate of Return) for an investor account address across all tokenized real-world assets.
+
+**Path parameters**
+
+| Name | Type | Notes |
+|------|------|-------|
+| `address` | string | Investor account public key |
+
+**Query parameters** (all optional)
+
+| Name | Type | Notes |
+|------|------|-------|
+| `start_date` | string | RFC3339 timestamp filter for evaluation window. |
+| `end_date` | string | RFC3339 timestamp filter for evaluation window. |
+| `discount_rate` | number | Annualized discount rate for NPV (default: `0.05` for 5%). |
+
+**Response schema**
+
+- `summary`: Aggregate portfolio market valuation, total assets held, cash inflows/outflows, and net invested capital.
+- `holdings`: Per-asset token balances, share percentages, implied unit prices, and market values in USD.
+- `dividends`: Historical dividend payouts received by the investor.
+- `performance`: Time-Weighted Return (TWR) taking into account cash inflows and outflows, Net Present Value (NPV), and annualized Internal Rate of Return (IRR).
+- `time_series`: Chronological valuation and cash flow points formatted for chart rendering.

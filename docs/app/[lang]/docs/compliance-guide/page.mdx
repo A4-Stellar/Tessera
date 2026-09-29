@@ -1,3 +1,5 @@
+import ComplianceMatrix from "@/components/ComplianceMatrix";
+
 export const metadata = {
   title: "Compliance Guide",
   description: "The core of an RWA platform — allowlists, transfer gating, jurisdictions, KYC expiry.",
@@ -106,6 +108,8 @@ still work.
 The API's [`/assets/:id/compliance`](/docs/api/compliance) endpoint surfaces the
 jurisdiction distribution (as counts) so issuers can audit their geographic
 exposure before making such a change.
+
+<ComplianceMatrix />
 
 ## KYC expiry and suspension
 
