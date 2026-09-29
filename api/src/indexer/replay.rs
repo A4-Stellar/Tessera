@@ -34,7 +34,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 
 use async_trait::async_trait;
@@ -42,6 +42,7 @@ use serde::{Deserialize, Serialize};
 use stellar_xdr::curr as xdr;
 use stellar_xdr::curr::{Limits, ReadXdr};
 
+use super::dlq::DeadLetterQueue;
 use super::{scval_to_json, AppState, Config};
 use crate::models::Event;
 
@@ -64,16 +65,20 @@ pub enum ReplayError {
     Decode(String),
     #[error("store error: {0}")]
     Store(String),
+    #[error("dead-letter quarantine failed: {0}")]
+    Quarantine(String),
 }
 
 impl ReplayError {
+    /// A failed quarantine is retried like a transient RPC error: the window
+    /// is re-fetched and the quarantine upsert is idempotent.
     fn is_transient(&self) -> bool {
         matches!(
             self,
             ReplayError::Rpc {
                 transient: true,
                 ..
-            }
+            } | ReplayError::Quarantine(_)
         )
     }
 }
@@ -475,6 +480,9 @@ pub trait EventSource: Send + Sync {
 pub struct RpcEventSource {
     http: reqwest::Client,
     urls: Vec<String>,
+    /// Quarantine for events that fail to decode (issue #163). Without it an
+    /// undecodable event fails the window.
+    dlq: Option<Arc<DeadLetterQueue>>,
 }
 
 #[derive(Deserialize)]
@@ -508,13 +516,14 @@ pub struct RawEvent {
 }
 
 impl RpcEventSource {
-    pub fn new(urls: Vec<String>) -> Self {
+    pub fn new(urls: Vec<String>, dlq: Option<Arc<DeadLetterQueue>>) -> Self {
         RpcEventSource {
             http: reqwest::Client::builder()
                 .timeout(Duration::from_secs(30))
                 .build()
                 .unwrap_or_default(),
             urls,
+            dlq,
         }
     }
 
@@ -615,7 +624,16 @@ impl EventSource for RpcEventSource {
                     past_end = true;
                     continue;
                 }
-                out.push(decode_event(&raw)?);
+                match decode_event(&raw) {
+                    Ok(event) => out.push(event),
+                    Err(e) => match &self.dlq {
+                        Some(dlq) => dlq
+                            .quarantine(&raw, &e)
+                            .await
+                            .map_err(|db| ReplayError::Quarantine(db.to_string()))?,
+                        None => return Err(e),
+                    },
+                }
             }
             match page.cursor {
                 Some(c) if n as u32 >= PAGE_LIMIT && !past_end && cursor.as_deref() != Some(&c) => {
@@ -786,7 +804,15 @@ pub async fn run_cli(args: &[String], config: &Config) -> i32 {
             return 2;
         }
     };
-    let src = RpcEventSource::new(config.rpc_urls.clone());
+    let dlq = match crate::db::DbRouter::from_env() {
+        Ok(Some(db)) => super::dlq::DeadLetterQueue::open(db.primary().clone()).await,
+        Ok(None) => None,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return 2;
+        }
+    };
+    let src = RpcEventSource::new(config.rpc_urls.clone(), dlq);
     let store = FileEventStore::from_env();
     match run_replay(&parsed, &src, &store, BASE_BACKOFF).await {
         Ok((shadow, report)) => {

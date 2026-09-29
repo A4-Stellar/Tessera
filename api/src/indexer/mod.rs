@@ -18,8 +18,10 @@
 )]
 pub mod archive;
 pub mod diagnostics;
+pub mod dlq;
 pub mod nav_calculator;
 pub mod price_feed;
+pub mod pulsar_producer;
 pub mod replay;
 pub mod rpc_client;
 pub mod stream_processor;
@@ -34,6 +36,7 @@ use serde::Deserialize;
 use stellar_xdr::curr as xdr;
 use stellar_xdr::curr::{Limits, WriteXdr};
 
+use crate::cluster::leader_election::NodeRole;
 use crate::models::{
     Asset, ComplianceSummary, Distribution, Event, Holder, JurisdictionCount, Stats,
 };
@@ -221,6 +224,12 @@ pub struct AppState {
     pub anomalies: Arc<crate::services::anomaly_detector::AnomalyDetector>,
     /// Real-time event stream processor (issue #96).
     pub stream_processor: Arc<stream_processor::StreamProcessor>,
+    /// Sliding 24h transfer-volume windows for velocity analytics (issue #160).
+    pub velocity: Arc<crate::analytics::velocity::VelocityTracker>,
+    /// Quarantine for unparseable events; `None` without a database (issue #163).
+    pub dlq: Option<Arc<dlq::DeadLetterQueue>>,
+    /// Leader-election role; standalone nodes are always leader (issue #159).
+    pub node_role: tokio::sync::watch::Receiver<NodeRole>,
 }
 
 impl AppState {
@@ -232,6 +241,9 @@ impl AppState {
             audit: Arc::new(crate::audit::AuditLog::new()),
             anomalies: Arc::new(crate::services::anomaly_detector::AnomalyDetector::default()),
             stream_processor: Arc::new(stream_processor::StreamProcessor::new()),
+            velocity: Arc::default(),
+            dlq: None,
+            node_role: tokio::sync::watch::channel(NodeRole::Leader).1,
         }
     }
 
@@ -592,14 +604,31 @@ impl Indexer {
     /// `main.rs`), at which point the loop halts rather than starting
     /// another refresh cycle.
     pub async fn run(self, mut shutdown: tokio::sync::watch::Receiver<bool>) {
+        let mut role = self.state.node_role.clone();
         loop {
             if *shutdown.borrow() {
                 tracing::info!("shutdown signal received; stopping indexer poll loop");
                 return;
             }
 
+            // Issue #159: standby nodes wait here and start polling the
+            // moment they are elected.
+            if *role.borrow_and_update() != NodeRole::Leader {
+                tokio::select! {
+                    _ = role.changed() => {}
+                    _ = shutdown.changed() => {}
+                }
+                continue;
+            }
+
             let started = Instant::now();
-            let result = self.refresh().await;
+            // A demoted leader abandons the cycle. `refresh` only reads and
+            // swaps the snapshot in one step at the end, so dropping it
+            // midway keeps the last good snapshot.
+            let result = tokio::select! {
+                result = self.refresh() => result,
+                _ = demoted(&mut role) => continue,
+            };
             let elapsed = started.elapsed();
             metrics::histogram!("rwa_indexer_refresh_duration_seconds")
                 .record(elapsed.as_secs_f64());
@@ -874,6 +903,7 @@ impl Indexer {
             .cloned()
             .collect();
         self.state.anomalies.observe_events(&fresh);
+        self.state.velocity.observe(&fresh, chrono::Utc::now());
         self.state.stream_processor.ingest_events(&events, &assets).await;
 
         let count = assets.len();
@@ -1058,6 +1088,14 @@ impl Indexer {
             (Instant::now(), result.clone(), error.clone()),
         );
         Ok((result, error))
+    }
+}
+
+/// Resolves once this node stops being leader; never for a standalone node,
+/// whose role sender is dropped at startup.
+async fn demoted(role: &mut tokio::sync::watch::Receiver<NodeRole>) {
+    if role.wait_for(|r| *r != NodeRole::Leader).await.is_err() {
+        std::future::pending::<()>().await;
     }
 }
 

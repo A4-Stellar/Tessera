@@ -13,7 +13,7 @@ members = [
     "vesting",
     "amm",
     "confidential-token",
-    "nft-deed",
+    "index-token",
 ]
 # `fuzz/` is a self-contained sub-tree of three independent packages:
 #
