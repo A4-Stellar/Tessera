@@ -1,0 +1,40 @@
+[package]
+name = "tessera-sdk"
+version = "0.1.0"
+edition = "2021"
+description = "Asynchronous, strongly-typed Rust client library for the Tessera API"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/tessera/tessera"
+homepage = "https://github.com/tessera/tessera"
+documentation = "https://docs.rs/tessera-sdk"
+readme = "README.md"
+keywords = ["tessera", "stellar", "rwa", "api-client", "blockchain"]
+categories = ["api-bindings", "asynchronous", "web-programming"]
+authors = ["Tessera Contributors"]
+rust-version = "1.75"
+
+[dependencies]
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "rustls-tls",
+] }
+tokio = { version = "1", features = ["time", "macros", "rt"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+url = "2"
+async-trait = "0.1"
+tracing = "0.1"
+bytes = "1"
+futures = "0.3"
+rand = "0.9"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+mockito = "1"
+httpmock = "0.7"
+
+[features]
+default = ["rustls-tls"]
+rustls-tls = ["reqwest/rustls-tls"]
+native-tls = ["reqwest/native-tls"]
