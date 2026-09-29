@@ -8,6 +8,7 @@ pub mod dlq;
 pub mod events;
 pub mod export;
 pub mod holders;
+pub mod portfolio;
 #[expect(
     dead_code,
     reason = "The search placeholder is not part of the active API router."
@@ -146,6 +147,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/holders/:address/compliance",
             get(holders::by_address_compliance),
+        )
+        .route(
+            "/holders/:address/portfolio",
+            get(portfolio::get_portfolio),
         )
         .route("/compliance/:address", get(compliance::for_address))
         .route("/security/anomalies", get(security::list))
@@ -290,6 +295,7 @@ async fn index() -> Json<serde_json::Value> {
             "GET /v1/assets/:id/export",
             "GET /v1/holders/:address",
             "GET /v1/holders/:address/compliance",
+            "GET /v1/holders/:address/portfolio",
             "GET /v1/compliance/:address",
             "GET /v1/security/anomalies",
             "GET /health",
