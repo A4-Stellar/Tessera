@@ -116,6 +116,11 @@ impl DividendContract {
             .persistent()
             .set(&DataKey::Distribution(id), &dist);
 
+        // Issue #144: record the compound-yield accrual epoch. Yield itself
+        // is opt-in per distribution via `set_distribution_yield` +
+        // `fund_yield`; this only anchors the clock.
+        compound_yield::on_distribution_created(&env, id);
+
         let mut all_ids: Vec<u64> = env.storage().instance().get(&DataKey::AllIds).unwrap();
         all_ids.push_back(id);
         env.storage().instance().set(&DataKey::AllIds, &all_ids);
@@ -165,6 +170,51 @@ impl DividendContract {
         share.min(remaining.max(0))
     }
 
+    // ---- issue #144: compound yield on unclaimed dividends ----
+
+    /// Set the annual compound-yield rate for a distribution (WAD, 18
+    /// decimals; `1e18` = 100%/year). `0` disables yield. Yield payouts are
+    /// funded separately via `fund_yield`, never out of the base escrow.
+    pub fn set_distribution_yield(env: Env, admin: Address, distribution_id: u64, rate: i128) {
+        Self::require_admin(&env, &admin);
+        if Self::get_distribution_opt(&env, distribution_id).is_none() {
+            panic_with_error!(env, Error::DistributionNotFound);
+        }
+        compound_yield::set_rate(&env, distribution_id, rate);
+        env.events().publish(
+            (symbol_short!("yieldrate"),),
+            (distribution_id, rate),
+        );
+    }
+
+    /// Deposit extra `payment_token` (from `admin`) earmarked for yield
+    /// payouts on a distribution. Base shareholders are never paid yield
+    /// out of the base escrow.
+    pub fn fund_yield(env: Env, admin: Address, distribution_id: u64, amount: i128) {
+        Self::require_admin(&env, &admin);
+        if amount <= 0 {
+            panic_with_error!(env, Error::InvalidAmount);
+        }
+        let dist = Self::get_distribution_opt(&env, distribution_id)
+            .unwrap_or_else(|| panic_with_error!(env, Error::DistributionNotFound));
+        Self::token_transfer(
+            &env,
+            &dist.payment_token,
+            &admin,
+            &env.current_contract_address(),
+            amount,
+        );
+        compound_yield::fund(&env, distribution_id, amount);
+        env.events().publish(
+            (symbol_short!("yfund"),),
+            (distribution_id, amount),
+        );
+    }
+
+    /// Fold the compound interest on the holder's current base share into
+    /// their accrual slot and pay base share + any payable yield.
+    /// Shares already claimed are ineligible for further accrual (the slot
+    /// is cleared as the yield is paid).
     pub fn claim(env: Env, distribution_id: u64, holder: Address) {
         Self::require_not_paused(&env);
         holder.require_auth();
@@ -184,6 +234,12 @@ impl DividendContract {
         if amount <= 0 {
             panic_with_error!(env, Error::NothingToClaim);
         }
+
+        // Issue #144: accrue compound yield on this holder's base share
+        // before paying it, then pay any yield the yield budget can cover
+        // (the base escrow is never touched for yield).
+        compound_yield::accrue_for(&env, distribution_id, &holder, amount);
+        let yield_amount = compound_yield::take_accrued(&env, distribution_id, &holder);
 
         if drip::is_enabled(&env, &holder) {
             let amm: Address = env
@@ -215,6 +271,16 @@ impl DividendContract {
             );
         }
 
+        if yield_amount > 0 {
+            Self::token_transfer(
+                &env,
+                &dist.payment_token,
+                &env.current_contract_address(),
+                &holder,
+                yield_amount,
+            );
+        }
+
         env.storage().persistent().set(&claimed_key, &true);
         dist.distributed = dist.distributed.saturating_add(amount);
         if dist.distributed >= dist.total_amount {
@@ -224,8 +290,63 @@ impl DividendContract {
             .persistent()
             .set(&DataKey::Distribution(distribution_id), &dist);
 
-        env.events()
-            .publish((symbol_short!("claim"), holder), (distribution_id, amount));
+        env.events().publish(
+            (symbol_short!("claim"), holder),
+            (distribution_id, amount + yield_amount),
+        );
+    }
+
+    /// Claim previously accrued (but unpaid) yield without re-claiming the
+    /// base share — for when the budget could not cover the full accrual at
+    /// claim time, or a later top-up arrives.
+    pub fn claim_yield(env: Env, distribution_id: u64, holder: Address) {
+        Self::require_not_paused(&env);
+        holder.require_auth();
+        let dist = Self::get_distribution_opt(&env, distribution_id)
+            .unwrap_or_else(|| panic_with_error!(env, Error::DistributionNotFound));
+        let yield_amount = compound_yield::take_accrued(&env, distribution_id, &holder);
+        if yield_amount <= 0 {
+            panic_with_error!(env, Error::NothingToClaim);
+        }
+        Self::token_transfer(
+            &env,
+            &dist.payment_token,
+            &env.current_contract_address(),
+            &holder,
+            yield_amount,
+        );
+        env.events().publish(
+            (symbol_short!("yldclaim"), holder),
+            (distribution_id, yield_amount),
+        );
+    }
+
+    /// Read-only: yield accrued in the holder's slot (materialized by past
+    /// claims), plus a live estimate on their current base share.
+    pub fn get_yield_info(env: Env, distribution_id: u64, holder: Address) -> i128 {
+        let accrued = compound_yield::accrued_view(&env, distribution_id, &holder);
+        if let Some(dist) = Self::get_distribution_opt(&env, distribution_id) {
+            if !env
+                .storage()
+                .persistent()
+                .has(&DataKey::Claimed(distribution_id, holder.clone()))
+            {
+                let balance: i128 =
+                    Self::token_balance(&env, &dist.asset_token, &holder);
+                let total_supply: i128 =
+                    Self::token_total_supply(&env, &dist.asset_token);
+                if balance > 0 && total_supply > 0 {
+                    let share = dist.total_amount.saturating_mul(balance) / total_supply;
+                    return accrued + compound_yield::estimate_yield(
+                        &env,
+                        distribution_id,
+                        &holder,
+                        share.min(dist.total_amount.saturating_sub(dist.distributed).max(0)),
+                    );
+                }
+            }
+        }
+        accrued
     }
 
     /// Opt in or out of receiving dividend claims as an AMM purchase of the
