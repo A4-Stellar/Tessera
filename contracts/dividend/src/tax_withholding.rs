@@ -1,7 +1,11 @@
 // tax_withholding.rs
 use soroban_sdk::{
-    contract, contractimpl, contracttype, Address, BytesN, Env, IntoVal, Symbol, Val, Vec,
+    contract, contracterror, contractimpl, contracttype, panic_with_error, Address, BytesN, Env,
+    IntoVal, Symbol, Val, Vec,
 };
+
+/// Maximum withholding rate, in basis points (10_000 = 100%).
+const MAX_RATE_BPS: u32 = 10_000;
 
 #[contracttype]
 #[derive(Clone)]
