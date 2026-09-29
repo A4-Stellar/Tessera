@@ -26,6 +26,8 @@ metrics = "0.24"
 metrics-exporter-prometheus = "0.16"
 rand = "0.9"
 url = "2"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "migrate", "chrono", "json"] }
+sha2 = "0.10"
 
 [dev-dependencies]
 insta = { version = "1", features = ["json"] }
