@@ -1,0 +1,24 @@
+[package]
+name = "tessera-confidential-token"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+description = "Tessera confidential RWA token: Pedersen-committed balances with on-chain Bulletproofs range proofs and compliance allowlist gating."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+# Exposes the reference prover (`prover` module) to off-chain tooling and
+# other crates' tests. It is never compiled into the contract WASM.
+testutils = ["soroban-sdk/testutils"]
+
+# Deliberately no `tessera-common` dependency: it currently only builds with
+# `soroban-sdk/testutils` enabled (`env.budget()` in post_quantum.rs), which
+# would stop this contract from building to WASM.
+[dependencies]
+soroban-sdk = { workspace = true }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
