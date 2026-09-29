@@ -97,12 +97,72 @@ async fn main() {
             let router = Arc::new(router);
             router.spawn_health_monitor(shutdown_rx.clone());
             // Issue #163: quarantine table behind `POST /v1/admin/dlq/retry`.
-            state.dlq = indexer::dlq::DeadLetterQueue::open(router.primary().clone()).await;
+            // If the table cannot be opened, fall back to the JSON store so
+            // undecodable events are still captured.
+            state.dlq = indexer::dlq::DeadLetterQueue::open(router.primary().clone())
+                .await
+                .map(|q| Arc::new(indexer::dlq::DlqSink::Database(q)))
+                .or_else(|| {
+                    tracing::warn!(
+                        "dead-letter queue unavailable; falling back to the JSON store"
+                    );
+                    Some(Arc::new(indexer::dlq::DlqSink::File(
+                        indexer::dlq::FileDlq::from_env(),
+                    )))
+                });
         }
-        Ok(None) => {}
+        Ok(None) => {
+            // No database configured: the JSON store keeps quarantine alive
+            // (issue #163) instead of failing windows on undecodable events.
+            state.dlq = Some(Arc::new(indexer::dlq::DlqSink::File(
+                indexer::dlq::FileDlq::from_env(),
+            )));
+        }
         Err(e) => {
             tracing::error!(error = %e, "database config validation failed; exiting");
             std::process::exit(1);
+        }
+    }
+
+    // Issue #156: background ledger gap healer. Opt-in via
+    // RWA_GAP_HEAL_RPC_URLS (archive RPC endpoints); unset keeps behavior
+    // unchanged. It backfills outage holes below the chain head using the
+    // same DLQ and event store as replay, and only acts while this node is
+    // the elected leader.
+    if let Ok(heal_urls) = std::env::var("RWA_GAP_HEAL_RPC_URLS") {
+        let urls: Vec<String> = heal_urls
+            .split(',')
+            .map(str::trim)
+            .filter(|u| !u.is_empty())
+            .map(String::from)
+            .collect();
+        if urls.is_empty() {
+            tracing::warn!("RWA_GAP_HEAL_RPC_URLS set but empty; gap healer disabled");
+        } else {
+            let interval = std::time::Duration::from_secs(
+                std::env::var("RWA_GAP_HEAL_INTERVAL_SECS")
+                    .ok()
+                    .and_then(|v| v.parse::<u64>().ok())
+                    .unwrap_or(300)
+                    .max(10),
+            );
+            let heal_head = std::env::var("RWA_GAP_HEAL_HEAD").is_ok_and(|v| v == "1");
+            let src = Arc::new(indexer::replay::RpcEventSource::new(
+                urls.clone(),
+                state.dlq.clone(),
+            ));
+            let healer = indexer::gap_healer::GapHealer::new(
+                src,
+                indexer::replay::FileEventStore::from_env(),
+            )
+            .with_heal_head(heal_head);
+            tokio::spawn(healer.run_forever(
+                urls,
+                interval,
+                shutdown_rx.clone(),
+                state.node_role.clone(),
+            ));
+            tracing::info!(interval_s = interval.as_secs(), heal_head, "ledger gap healer active");
         }
     }
 

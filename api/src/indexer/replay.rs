@@ -42,7 +42,7 @@ use serde::{Deserialize, Serialize};
 use stellar_xdr::curr as xdr;
 use stellar_xdr::curr::{Limits, ReadXdr};
 
-use super::dlq::DeadLetterQueue;
+use super::dlq::DlqSink;
 use super::{scval_to_json, AppState, Config};
 use crate::models::Event;
 
@@ -480,9 +480,11 @@ pub trait EventSource: Send + Sync {
 pub struct RpcEventSource {
     http: reqwest::Client,
     urls: Vec<String>,
-    /// Quarantine for events that fail to decode (issue #163). Without it an
-    /// undecodable event fails the window.
-    dlq: Option<Arc<DeadLetterQueue>>,
+    /// Quarantine for events that fail to decode (issue #163). The file
+    /// fallback keeps quarantine coverage in deployments without a database,
+    /// so an undecodable event can no longer fail the window for want of
+    /// Postgres.
+    dlq: Option<Arc<DlqSink>>,
 }
 
 #[derive(Deserialize)]
@@ -516,7 +518,7 @@ pub struct RawEvent {
 }
 
 impl RpcEventSource {
-    pub fn new(urls: Vec<String>, dlq: Option<Arc<DeadLetterQueue>>) -> Self {
+    pub fn new(urls: Vec<String>, dlq: Option<Arc<DlqSink>>) -> Self {
         RpcEventSource {
             http: reqwest::Client::builder()
                 .timeout(Duration::from_secs(30))
@@ -630,7 +632,7 @@ impl EventSource for RpcEventSource {
                         Some(dlq) => dlq
                             .quarantine(&raw, &e)
                             .await
-                            .map_err(|db| ReplayError::Quarantine(db.to_string()))?,
+                            .map_err(|db| ReplayError::Quarantine(db))?,
                         None => return Err(e),
                     },
                 }
@@ -698,7 +700,7 @@ pub fn decode_event(raw: &RawEvent) -> Result<Event, ReplayError> {
 // Orchestration
 // ---------------------------------------------------------------------------
 
-async fn fetch_with_retry(
+pub(crate) async fn fetch_with_retry(
     src: &dyn EventSource,
     start: u32,
     end: u32,
@@ -789,6 +791,9 @@ pub async fn run_replay(
             total = r.total_after,
             "shadow merged atomically"
         );
+        // Issue #156: record the covered range so the gap healer can detect
+        // outage holes below this window. Best-effort bookkeeping.
+        super::gap_healer::record_covered(&args.contracts, args.start_ledger, args.end_ledger.saturating_add(1));
         let _ = fs::remove_file(&ckpt);
         Some(r)
     };
@@ -804,9 +809,15 @@ pub async fn run_cli(args: &[String], config: &Config) -> i32 {
             return 2;
         }
     };
+    // Prefer the Postgres backend; fall back to the JSON-file store when no
+    // database is configured, so quarantine coverage never depends on one.
     let dlq = match crate::db::DbRouter::from_env() {
-        Ok(Some(db)) => super::dlq::DeadLetterQueue::open(db.primary().clone()).await,
-        Ok(None) => None,
+        Ok(Some(db)) => super::dlq::DeadLetterQueue::open(db.primary().clone())
+            .await
+            .map(|q| Arc::new(super::dlq::DlqSink::Database(q))),
+        Ok(None) => Some(Arc::new(super::dlq::DlqSink::File(
+            super::dlq::FileDlq::from_env(),
+        ))),
         Err(e) => {
             eprintln!("error: {e}");
             return 2;
@@ -1022,9 +1033,22 @@ mod tests {
         }
     }
 
+    /// Point the coverage store (issue #156) at a per-test temp dir so
+    /// parallel `run_replay` tests neither pollute `./data/` nor contend on
+    /// one lock file. Keep the returned guard alive for the whole test: it
+    /// serializes env access across parallel tests.
+    fn coverage_env(dir: &Path) -> std::sync::MutexGuard<'static, ()> {
+        let guard = COVERAGE_ENV_LOCK.lock().unwrap();
+        std::env::set_var("RWA_COVERAGE_STORE", dir.join("coverage.json"));
+        guard
+    }
+
+    static COVERAGE_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[tokio::test]
     async fn replays_in_windows_and_merges_atomically() {
         let dir = tmpdir("ok");
+        let _coverage = coverage_env(&dir);
         let store = FileEventStore::new(dir.join("events.json"));
         // Pre-existing data: one in-scope stale event, one outside the range.
         store
@@ -1066,6 +1090,7 @@ mod tests {
     #[tokio::test]
     async fn transient_errors_are_retried() {
         let dir = tmpdir("retry");
+        let _coverage = coverage_env(&dir);
         let store = FileEventStore::new(dir.join("events.json"));
         let src = FakeSource {
             calls: AtomicU32::new(0),
@@ -1082,6 +1107,7 @@ mod tests {
     #[tokio::test]
     async fn failure_leaves_store_untouched_and_resumes_from_checkpoint() {
         let dir = tmpdir("resume");
+        let _coverage = coverage_env(&dir);
         let path = dir.join("events.json");
         let store = FileEventStore::new(&path);
         store
@@ -1141,6 +1167,7 @@ mod tests {
     #[tokio::test]
     async fn dry_run_does_not_merge() {
         let dir = tmpdir("dry");
+        let _coverage = coverage_env(&dir);
         let store = FileEventStore::new(dir.join("events.json"));
         let mut a = args(1, 4, 2);
         a.dry_run = true;
