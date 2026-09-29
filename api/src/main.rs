@@ -85,7 +85,12 @@ async fn main() {
 
     // Issue #95: probe read replicas for availability and replication lag.
     match db::DbRouter::from_env() {
-        Ok(Some(router)) => Arc::new(router).spawn_health_monitor(shutdown_rx.clone()),
+        Ok(Some(router)) => {
+            // Issue #163: give the DLQ the primary pool so quarantined events
+            // are mirrored into the `failed_events` table (migration 0003).
+            indexer::dlq::init_db_pool(router.primary().clone());
+            Arc::new(router).spawn_health_monitor(shutdown_rx.clone());
+        }
         Ok(None) => {}
         Err(e) => {
             tracing::error!(error = %e, "database config validation failed; exiting");

@@ -4,6 +4,7 @@ pub mod assets;
 pub mod audit;
 pub mod compliance;
 pub mod dividends;
+pub mod dlq;
 pub mod events;
 pub mod export;
 pub mod holders;
@@ -65,6 +66,11 @@ fn env_value<T: std::str::FromStr>(name: &str, default: T) -> T {
 pub enum ApiError {
     NotFound(String),
     BadRequest(String),
+    /// Bearer-token auth failed (admin endpoints).
+    Unauthorized(String),
+    /// A dependency is down or misconfigured (e.g. admin endpoints disabled,
+    /// DLQ store unreadable). Never leaks internals beyond the message.
+    ServiceUnavailable(String),
 }
 
 impl IntoResponse for ApiError {
@@ -72,6 +78,10 @@ impl IntoResponse for ApiError {
         let (status, error, message) = match self {
             ApiError::NotFound(msg) => (StatusCode::NOT_FOUND, "not_found", msg),
             ApiError::BadRequest(msg) => (StatusCode::BAD_REQUEST, "bad_request", msg),
+            ApiError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, "unauthorized", msg),
+            ApiError::ServiceUnavailable(msg) => {
+                (StatusCode::SERVICE_UNAVAILABLE, "service_unavailable", msg)
+            }
         };
         (
             status,
@@ -147,12 +157,20 @@ pub fn router(state: AppState) -> Router {
         .route("/audit/anchor", axum::routing::post(audit::publish_anchor))
         .layer(middleware::from_fn_with_state(state.clone(), cache_headers));
 
+    // Issue #163 admin endpoints, bearer-gated in routes::dlq. Kept out of
+    // `data_routes` so they do not inherit the snapshot ETag/Cache-Control
+    // middleware: the DLQ can change independently of the indexed ledger and
+    // must never be answered with a stale 304.
+    let admin_routes = Router::new()
+        .route("/admin/dlq", get(dlq::list))
+        .route("/admin/dlq/retry", axum::routing::post(dlq::retry));
+
     Router::new()
         .route("/", get(index))
         .route("/version", get(version))
         .route("/health", get(health))
         .route("/metrics", get(metrics))
-        .nest("/v1", data_routes)
+        .nest("/v1", data_routes.merge(admin_routes))
         .route("/v1/ws", get(crate::ws::handler))
         // `route_layer` (rather than `layer`) so the middleware runs after
         // route matching and can read `MatchedPath` from the request

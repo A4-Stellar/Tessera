@@ -13,6 +13,9 @@
 //!    running API serves or stores is touched while replay is in flight. After
 //!    every window the shadow is checkpointed to disk (atomic rename), so an
 //!    interrupted replay resumes where it stopped instead of starting over.
+//!    An event whose payload fails to decode is quarantined to the
+//!    dead-letter queue ([`super::dlq`], issue #163) and the window keeps
+//!    processing — one corrupt event can no longer abort a whole replay.
 //! 3. Only when the *whole* range succeeded is the shadow merged into the main
 //!    event store in a single atomic step ([`FileEventStore::merge`]: write a
 //!    temp file, fsync, rename over the store, guarded by a lock file). A
@@ -42,6 +45,7 @@ use serde::{Deserialize, Serialize};
 use stellar_xdr::curr as xdr;
 use stellar_xdr::curr::{Limits, ReadXdr};
 
+use super::dlq;
 use super::{scval_to_json, AppState, Config};
 use crate::models::Event;
 
@@ -493,7 +497,7 @@ struct GetEventsResult {
     #[serde(default)]
     cursor: Option<String>,
 }
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub struct RawEvent {
     pub id: String,
     pub ledger: u32,
@@ -615,7 +619,9 @@ impl EventSource for RpcEventSource {
                     past_end = true;
                     continue;
                 }
-                out.push(decode_event(&raw)?);
+                if let Some(event) = decode_or_quarantine(&raw).await {
+                    out.push(event);
+                }
             }
             match page.cursor {
                 Some(c) if n as u32 >= PAGE_LIMIT && !past_end && cursor.as_deref() != Some(&c) => {
@@ -628,7 +634,23 @@ impl EventSource for RpcEventSource {
     }
 }
 
-fn fnv1a(s: &str) -> u64 {
+/// Decode one fetched event, quarantining it to the DLQ (issue #163) when it
+/// cannot be decoded. Returns `None` for an undecodable event — which is
+/// logged, persisted and *skipped*, never aborts the window: the rest of the
+/// window still lands.
+async fn decode_or_quarantine(raw: &RawEvent) -> Option<Event> {
+    match decode_event(raw) {
+        Ok(event) => Some(event),
+        Err(e) => {
+            dlq::quarantine_failed_decode(raw, e).await;
+            None
+        }
+    }
+}
+
+/// FNV-1a of a string; the stable event-id scheme shared with the DLQ
+/// (issue #163), which must produce identical ids for retried events.
+pub(crate) fn fnv1a(s: &str) -> u64 {
     let mut h: u64 = 0xcbf29ce484222325;
     for b in s.bytes() {
         h ^= b as u64;

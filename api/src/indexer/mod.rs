@@ -18,6 +18,7 @@
 )]
 pub mod archive;
 pub mod diagnostics;
+pub mod dlq;
 pub mod nav_calculator;
 pub mod price_feed;
 pub mod replay;
