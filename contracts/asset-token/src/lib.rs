@@ -495,7 +495,7 @@ impl AssetTokenContract {
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .unwrap_or_else(|| panic_with_error!(env, Error::NotInitialized));
+            .unwrap_or_else(|| panic_with_error!(env, Error::Unauthorized));
         admin.require_auth();
         if admin != &stored_admin {
             panic_with_error!(env, Error::Unauthorized);

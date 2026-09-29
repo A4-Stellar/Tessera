@@ -43,6 +43,7 @@ tessera-asset-token = { path = "asset-token" }
 tessera-cap-table = { path = "cap-table" }
 tessera-compliance = { path = "compliance" }
 tessera-dividend = { path = "dividend" }
+tessera-nft-deed = { path = "nft-deed" }
 tessera-registry = { path = "registry" }
 bridge = { path = "bridge" }
 vaults = { path = "vaults" }
