@@ -137,6 +137,42 @@
       "gridPos": { "h": 8, "w": 6, "x": 6, "y": 32 },
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "targets": [{ "expr": "sum(rate(rwa_indexer_refresh_total{outcome=\"success\"}[15m]))" }]
+    },
+    {
+      "id": 11,
+      "title": "Ledger gap healing rate by source",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 40 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Ledgers recovered by the gap healer (issue #156) versus backfills that failed and stayed pending.",
+      "targets": [
+        {
+          "expr": "sum by (source) (rate(tessera_healed_ledgers_total[5m]))",
+          "legendFormat": "healed {{source}}"
+        },
+        {
+          "expr": "sum by (source) (rate(tessera_heal_failures_total[5m]))",
+          "legendFormat": "failed {{source}}"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "title": "Ledger gaps detected",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 40 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Sequence gaps flagged by the indexer; outage-sized gaps also warrant a full snapshot rebuild.",
+      "targets": [
+        {
+          "expr": "sum(rate(tessera_ledger_gaps_detected_total[15m]))",
+          "legendFormat": "gaps detected"
+        },
+        {
+          "expr": "sum(rate(tessera_ledger_gap_outage_total[15m]))",
+          "legendFormat": "outage-sized gaps"
+        }
+      ]
     }
   ],
   "templating": {
