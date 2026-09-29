@@ -700,7 +700,7 @@ pub fn decode_event(raw: &RawEvent) -> Result<Event, ReplayError> {
 // Orchestration
 // ---------------------------------------------------------------------------
 
-async fn fetch_with_retry(
+pub(crate) async fn fetch_with_retry(
     src: &dyn EventSource,
     start: u32,
     end: u32,
@@ -791,6 +791,9 @@ pub async fn run_replay(
             total = r.total_after,
             "shadow merged atomically"
         );
+        // Issue #156: record the covered range so the gap healer can detect
+        // outage holes below this window. Best-effort bookkeeping.
+        super::gap_healer::record_covered(&args.contracts, args.start_ledger, args.end_ledger.saturating_add(1));
         let _ = fs::remove_file(&ckpt);
         Some(r)
     };
@@ -1030,9 +1033,22 @@ mod tests {
         }
     }
 
+    /// Point the coverage store (issue #156) at a per-test temp dir so
+    /// parallel `run_replay` tests neither pollute `./data/` nor contend on
+    /// one lock file. Keep the returned guard alive for the whole test: it
+    /// serializes env access across parallel tests.
+    fn coverage_env(dir: &Path) -> std::sync::MutexGuard<'static, ()> {
+        let guard = COVERAGE_ENV_LOCK.lock().unwrap();
+        std::env::set_var("RWA_COVERAGE_STORE", dir.join("coverage.json"));
+        guard
+    }
+
+    static COVERAGE_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[tokio::test]
     async fn replays_in_windows_and_merges_atomically() {
         let dir = tmpdir("ok");
+        let _coverage = coverage_env(&dir);
         let store = FileEventStore::new(dir.join("events.json"));
         // Pre-existing data: one in-scope stale event, one outside the range.
         store
@@ -1074,6 +1090,7 @@ mod tests {
     #[tokio::test]
     async fn transient_errors_are_retried() {
         let dir = tmpdir("retry");
+        let _coverage = coverage_env(&dir);
         let store = FileEventStore::new(dir.join("events.json"));
         let src = FakeSource {
             calls: AtomicU32::new(0),
@@ -1090,6 +1107,7 @@ mod tests {
     #[tokio::test]
     async fn failure_leaves_store_untouched_and_resumes_from_checkpoint() {
         let dir = tmpdir("resume");
+        let _coverage = coverage_env(&dir);
         let path = dir.join("events.json");
         let store = FileEventStore::new(&path);
         store
@@ -1149,6 +1167,7 @@ mod tests {
     #[tokio::test]
     async fn dry_run_does_not_merge() {
         let dir = tmpdir("dry");
+        let _coverage = coverage_env(&dir);
         let store = FileEventStore::new(dir.join("events.json"));
         let mut a = args(1, 4, 2);
         a.dry_run = true;
