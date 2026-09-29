@@ -7,6 +7,7 @@ use axum::{
 use serde::Deserialize;
 
 use super::ApiError;
+use crate::analytics::velocity::AssetAnalytics;
 use crate::indexer::AppState;
 
 const DEFAULT_PAGE_SIZE: usize = 50;
@@ -195,6 +196,26 @@ pub async fn analytics(
     Ok(Json(
         serde_json::to_value(&result).expect("analytics response serializes"),
     ))
+}
+
+/// Holder concentration (Gini, HHI) and 24h transaction velocity for an asset.
+///
+/// Backs `GET /assets/:id/analytics` (issue #160).
+pub async fn concentration_analytics(
+    State(state): State<AppState>,
+    Path(id): Path<u64>,
+) -> Result<Json<AssetAnalytics>, ApiError> {
+    let snap = state.snapshot();
+    let asset = snap
+        .asset(id)
+        .ok_or_else(|| ApiError::NotFound(format!("no asset with id {id}")))?;
+    let holders = snap.holders.get(&id).map_or(&[][..], Vec::as_slice);
+    Ok(Json(AssetAnalytics::compute(
+        asset,
+        holders,
+        &state.velocity,
+        chrono::Utc::now(),
+    )))
 }
 
 #[cfg(test)]
@@ -704,5 +725,44 @@ mod tests {
         assert_eq!(val["symbol"], "TKN1");
         assert!(val["current_window"].is_object());
         assert_eq!(val["current_window"]["window_duration"], "24h");
+    }
+
+    #[tokio::test]
+    async fn concentration_analytics_reports_metrics_and_404s_unknown_assets() {
+        let state = AppState::with_assets(vec![stub_asset(1, "real_estate", true)]);
+        let app = Router::new()
+            .route("/assets/:id/analytics", get(super::concentration_analytics))
+            .with_state(state);
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/assets/1/analytics")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let val: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(val["asset_id"], 1);
+        assert_eq!(val["holder_count"], 0);
+        assert!(val["gini_coefficient"].is_null());
+        assert_eq!(val["volume_24h"], "0");
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/assets/2/analytics")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 }
