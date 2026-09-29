@@ -4,6 +4,7 @@ pub mod assets;
 pub mod audit;
 pub mod compliance;
 pub mod dividends;
+pub mod dlq;
 pub mod events;
 pub mod export;
 pub mod holders;
@@ -43,6 +44,7 @@ use axum::{
 use serde_json::json;
 use tower_http::{cors::CorsLayer, limit::RequestBodyLimitLayer, timeout::TimeoutLayer};
 
+use crate::cluster::leader_election::NodeRole;
 use crate::indexer::{AppState, POLL_INTERVAL};
 use crate::models::ApiErrorBody;
 
@@ -65,6 +67,8 @@ fn env_value<T: std::str::FromStr>(name: &str, default: T) -> T {
 pub enum ApiError {
     NotFound(String),
     BadRequest(String),
+    Unauthorized(String),
+    Unavailable(String),
 }
 
 impl IntoResponse for ApiError {
@@ -72,6 +76,10 @@ impl IntoResponse for ApiError {
         let (status, error, message) = match self {
             ApiError::NotFound(msg) => (StatusCode::NOT_FOUND, "not_found", msg),
             ApiError::BadRequest(msg) => (StatusCode::BAD_REQUEST, "bad_request", msg),
+            ApiError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, "unauthorized", msg),
+            ApiError::Unavailable(msg) => {
+                (StatusCode::SERVICE_UNAVAILABLE, "service_unavailable", msg)
+            }
         };
         (
             status,
@@ -125,6 +133,10 @@ pub fn router(state: AppState) -> Router {
         .route("/assets/:id", get(assets::detail))
         .route("/assets/:id/events", get(assets::events))
         .route("/assets/:id/metrics/analytics", get(assets::analytics))
+        .route(
+            "/assets/:id/analytics",
+            get(assets::concentration_analytics),
+        )
         .route("/assets/:id/holders", get(holders::list))
         .route("/assets/:id/compliance", get(compliance::summary))
         .route("/assets/:id/dividends", get(dividends::list))
@@ -154,6 +166,7 @@ pub fn router(state: AppState) -> Router {
         .route("/metrics", get(metrics))
         .nest("/v1", data_routes)
         .route("/v1/ws", get(crate::ws::handler))
+        .route("/v1/admin/dlq/retry", axum::routing::post(dlq::retry))
         // `route_layer` (rather than `layer`) so the middleware runs after
         // route matching and can read `MatchedPath` from the request
         // extensions for a low-cardinality route label.
@@ -269,6 +282,7 @@ async fn index() -> Json<serde_json::Value> {
             "GET /v1/assets/:id",
             "GET /v1/assets/:id/events",
             "GET /v1/assets/:id/metrics/analytics",
+            "GET /v1/assets/:id/analytics",
             "GET /v1/assets/:id/holders",
             "GET /v1/assets/:id/compliance",
             "GET /v1/assets/:id/dividends",
@@ -296,8 +310,9 @@ async fn version() -> Json<serde_json::Value> {
     }))
 }
 
-/// Liveness probe.
+/// Liveness probe, reporting this node's leader-election role (issue #159).
 async fn health(State(state): State<AppState>) -> Response {
+    let role = *state.node_role.borrow();
     let updated = state
         .snapshot()
         .stats
@@ -310,7 +325,9 @@ async fn health(State(state): State<AppState>) -> Response {
             .max(0)
     });
     let max_age = (POLL_INTERVAL * 3).as_secs() as i64;
-    let healthy = age.is_some_and(|seconds| seconds <= max_age);
+    // Standby nodes do not poll, so their snapshot is expected to be stale:
+    // they are healthy while waiting to take over.
+    let healthy = role == NodeRole::Follower || age.is_some_and(|seconds| seconds <= max_age);
     let status = if healthy {
         StatusCode::OK
     } else {
@@ -320,6 +337,7 @@ async fn health(State(state): State<AppState>) -> Response {
         status,
         Json(json!({
             "status": if healthy { "ok" } else { "degraded" },
+            "role": role,
             "snapshot_age_seconds": age,
             "max_age_seconds": max_age,
         })),
@@ -402,5 +420,42 @@ mod tests {
         assert_json_content_type(app.clone(), "/v1/stats", StatusCode::OK).await;
         assert_json_content_type(app.clone(), "/v1/assets", StatusCode::OK).await;
         assert_json_content_type(app, "/v1/assets/99999", StatusCode::NOT_FOUND).await;
+    }
+
+    #[tokio::test]
+    async fn health_reports_node_role() {
+        use crate::cluster::leader_election::NodeRole;
+
+        async fn health(state: AppState) -> (StatusCode, serde_json::Value) {
+            let response = axum::Router::new()
+                .route("/health", axum::routing::get(super::health))
+                .with_state(state)
+                .oneshot(
+                    Request::builder()
+                        .uri("/health")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let status = response.status();
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            (status, serde_json::from_slice(&bytes).unwrap())
+        }
+
+        // A leader with no indexed snapshot yet is degraded.
+        let (status, body) = health(AppState::for_test_empty()).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body["role"], "leader");
+
+        // A standby does not poll, so its empty snapshot is expected.
+        let mut state = AppState::for_test_empty();
+        state.node_role = tokio::sync::watch::channel(NodeRole::Follower).1;
+        let (status, body) = health(state).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["role"], "follower");
+        assert_eq!(body["status"], "ok");
     }
 }
