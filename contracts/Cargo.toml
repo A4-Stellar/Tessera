@@ -13,6 +13,7 @@ members = [
     "vesting",
     "amm",
     "confidential-token",
+    "index-token",
 ]
 # `fuzz/` is a self-contained sub-tree of three independent packages:
 #
