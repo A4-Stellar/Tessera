@@ -13,8 +13,10 @@ use soroban_sdk::{
 };
 
 mod attestation;
+mod verifiable_credentials;
 mod oracle_verifier;
 pub use attestation::{IdentityAttestation, RevocationProof};
+pub use verifiable_credentials::VerifiableCredential;
 pub use oracle_verifier::{OracleAttestation, OracleConfig, OracleSignature};
 
 #[contracttype]
@@ -221,6 +223,11 @@ impl ComplianceContract {
             return false;
         }
         !Self::is_jurisdiction_blocked(env.clone(), record.jurisdiction)
+    }
+
+    /// Verify a W3C-style credential transiently; no credential or claim is stored.
+    pub fn verify_verifiable_credential(env: Env, credential: VerifiableCredential) -> bool {
+        verifiable_credentials::verify(&env, &credential)
     }
 
     pub fn set_issuer(

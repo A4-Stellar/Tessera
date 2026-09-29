@@ -8,12 +8,14 @@
 //! transactions (dividends, rent, registry updates): the Stellar key stays
 //! inside AWS KMS and only a signature ever leaves it.
 
+mod analytics;
 pub mod audit;
 #[expect(
     dead_code,
     reason = "cache policy helpers are staged until response-cache integration"
 )]
 mod cache;
+mod cluster;
 #[cfg_attr(
     not(test),
     expect(
@@ -76,16 +78,27 @@ async fn main() {
     // handler is added, without a metric-name/dashboard-panel change.
     metrics::gauge!("active_websocket_connections").set(0.0);
 
-    let state = AppState::new(config, metrics_handle);
+    let mut state = AppState::new(config, metrics_handle);
 
     // Shared shutdown flag: flipped once by `shutdown_signal` and observed
     // by the indexer's poll loop so it stops issuing new refresh cycles
     // once the process is terminating, rather than racing shutdown.
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
+    // Issue #159: only the elected leader polls Soroban RPC.
+    state.node_role = cluster::leader_election::spawn(
+        cluster::leader_election::ElectionConfig::from_env(),
+        shutdown_rx.clone(),
+    );
+
     // Issue #95: probe read replicas for availability and replication lag.
     match db::DbRouter::from_env() {
-        Ok(Some(router)) => Arc::new(router).spawn_health_monitor(shutdown_rx.clone()),
+        Ok(Some(router)) => {
+            let router = Arc::new(router);
+            router.spawn_health_monitor(shutdown_rx.clone());
+            // Issue #163: quarantine table behind `POST /v1/admin/dlq/retry`.
+            state.dlq = indexer::dlq::DeadLetterQueue::open(router.primary().clone()).await;
+        }
         Ok(None) => {}
         Err(e) => {
             tracing::error!(error = %e, "database config validation failed; exiting");
