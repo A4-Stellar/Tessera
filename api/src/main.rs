@@ -97,9 +97,27 @@ async fn main() {
             let router = Arc::new(router);
             router.spawn_health_monitor(shutdown_rx.clone());
             // Issue #163: quarantine table behind `POST /v1/admin/dlq/retry`.
-            state.dlq = indexer::dlq::DeadLetterQueue::open(router.primary().clone()).await;
+            // If the table cannot be opened, fall back to the JSON store so
+            // undecodable events are still captured.
+            state.dlq = indexer::dlq::DeadLetterQueue::open(router.primary().clone())
+                .await
+                .map(|q| Arc::new(indexer::dlq::DlqSink::Database(q)))
+                .or_else(|| {
+                    tracing::warn!(
+                        "dead-letter queue unavailable; falling back to the JSON store"
+                    );
+                    Some(Arc::new(indexer::dlq::DlqSink::File(
+                        indexer::dlq::FileDlq::from_env(),
+                    )))
+                });
         }
-        Ok(None) => {}
+        Ok(None) => {
+            // No database configured: the JSON store keeps quarantine alive
+            // (issue #163) instead of failing windows on undecodable events.
+            state.dlq = Some(Arc::new(indexer::dlq::DlqSink::File(
+                indexer::dlq::FileDlq::from_env(),
+            )));
+        }
         Err(e) => {
             tracing::error!(error = %e, "database config validation failed; exiting");
             std::process::exit(1);

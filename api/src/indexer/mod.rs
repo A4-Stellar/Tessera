@@ -225,8 +225,11 @@ pub struct AppState {
     pub stream_processor: Arc<stream_processor::StreamProcessor>,
     /// Sliding 24h transfer-volume windows for velocity analytics (issue #160).
     pub velocity: Arc<crate::analytics::velocity::VelocityTracker>,
-    /// Quarantine for unparseable events; `None` without a database (issue #163).
-    pub dlq: Option<Arc<dlq::DeadLetterQueue>>,
+    /// Quarantine for unparseable events (issue #163): Postgres primary,
+    /// JSON-file fallback, so quarantine coverage never depends on a
+    /// database. `None` only when even the file store cannot be constructed
+    /// (never in practice).
+    pub dlq: Option<Arc<dlq::DlqSink>>,
     /// Leader-election role; standalone nodes are always leader (issue #159).
     pub node_role: tokio::sync::watch::Receiver<NodeRole>,
 }

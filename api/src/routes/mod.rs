@@ -166,6 +166,7 @@ pub fn router(state: AppState) -> Router {
         .route("/metrics", get(metrics))
         .nest("/v1", data_routes)
         .route("/v1/ws", get(crate::ws::handler))
+        .route("/v1/admin/dlq", axum::routing::get(dlq::list))
         .route("/v1/admin/dlq/retry", axum::routing::post(dlq::retry))
         // `route_layer` (rather than `layer`) so the middleware runs after
         // route matching and can read `MatchedPath` from the request
@@ -292,6 +293,8 @@ async fn index() -> Json<serde_json::Value> {
             "GET /v1/holders/:address/compliance",
             "GET /v1/compliance/:address",
             "GET /v1/security/anomalies",
+            "GET /v1/admin/dlq",
+            "POST /v1/admin/dlq/retry",
             "GET /health",
             "GET /metrics"
         ],

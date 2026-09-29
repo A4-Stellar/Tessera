@@ -42,7 +42,7 @@ use serde::{Deserialize, Serialize};
 use stellar_xdr::curr as xdr;
 use stellar_xdr::curr::{Limits, ReadXdr};
 
-use super::dlq::DeadLetterQueue;
+use super::dlq::DlqSink;
 use super::{scval_to_json, AppState, Config};
 use crate::models::Event;
 
@@ -480,9 +480,11 @@ pub trait EventSource: Send + Sync {
 pub struct RpcEventSource {
     http: reqwest::Client,
     urls: Vec<String>,
-    /// Quarantine for events that fail to decode (issue #163). Without it an
-    /// undecodable event fails the window.
-    dlq: Option<Arc<DeadLetterQueue>>,
+    /// Quarantine for events that fail to decode (issue #163). The file
+    /// fallback keeps quarantine coverage in deployments without a database,
+    /// so an undecodable event can no longer fail the window for want of
+    /// Postgres.
+    dlq: Option<Arc<DlqSink>>,
 }
 
 #[derive(Deserialize)]
@@ -516,7 +518,7 @@ pub struct RawEvent {
 }
 
 impl RpcEventSource {
-    pub fn new(urls: Vec<String>, dlq: Option<Arc<DeadLetterQueue>>) -> Self {
+    pub fn new(urls: Vec<String>, dlq: Option<Arc<DlqSink>>) -> Self {
         RpcEventSource {
             http: reqwest::Client::builder()
                 .timeout(Duration::from_secs(30))
@@ -630,7 +632,7 @@ impl EventSource for RpcEventSource {
                         Some(dlq) => dlq
                             .quarantine(&raw, &e)
                             .await
-                            .map_err(|db| ReplayError::Quarantine(db.to_string()))?,
+                            .map_err(|db| ReplayError::Quarantine(db))?,
                         None => return Err(e),
                     },
                 }
@@ -804,9 +806,15 @@ pub async fn run_cli(args: &[String], config: &Config) -> i32 {
             return 2;
         }
     };
+    // Prefer the Postgres backend; fall back to the JSON-file store when no
+    // database is configured, so quarantine coverage never depends on one.
     let dlq = match crate::db::DbRouter::from_env() {
-        Ok(Some(db)) => super::dlq::DeadLetterQueue::open(db.primary().clone()).await,
-        Ok(None) => None,
+        Ok(Some(db)) => super::dlq::DeadLetterQueue::open(db.primary().clone())
+            .await
+            .map(|q| Arc::new(super::dlq::DlqSink::Database(q))),
+        Ok(None) => Some(Arc::new(super::dlq::DlqSink::File(
+            super::dlq::FileDlq::from_env(),
+        ))),
         Err(e) => {
             eprintln!("error: {e}");
             return 2;
