@@ -13,7 +13,9 @@ import { SorobanIDE } from "@/components/SorobanIDE";
 import { IssuerWizard } from "@/components/IssuerWizard";
 import { WasmDisassembler } from "@/components/WasmDisassembler";
 import { GasVisualizer } from "@/components/GasVisualizer";
+import { ResourceBudgetVisualizer } from "@/components/ResourceBudgetVisualizer";
 import { ExemptionChecker } from "@/components/ExemptionChecker";
+import RegulatoryMatrix from "@/components/RegulatoryMatrix";
 
 /**
  * Global MDX component map. Custom components (CalloutBox, ApiEndpoint,
@@ -51,7 +53,9 @@ export function useMDXComponents(components: MDXComponents): MDXComponents {
     IssuerWizard,
     WasmDisassembler,
     GasVisualizer,
+    ResourceBudgetVisualizer,
     ExemptionChecker,
+    RegulatoryMatrix,
     ...components,
   };
 }

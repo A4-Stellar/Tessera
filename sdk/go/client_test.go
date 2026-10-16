@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -109,6 +111,7 @@ func TestClient_RateLimit_Retry(t *testing.T) {
 			_, _ = w.Write([]byte(`{"error":"rate_limited","message":"slow down"}`))
 			return
 		}
+
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(Stats{TotalAssets: 10})
 	}))
@@ -136,6 +139,39 @@ func TestClient_RateLimit_Retry(t *testing.T) {
 	}
 }
 
+func TestClient_RetryReplaysRequestBody(t *testing.T) {
+	var attempts int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read request body: %v", err)
+		}
+		if string(body) != `{"actor":"admin"}` {
+			t.Errorf("unexpected request body %q", body)
+		}
+		if atomic.AddInt32(&attempts, 1) == 1 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer ts.Close()
+
+	client, err := NewClient(WithBaseURL(ts.URL), WithMaxRetries(1), WithBackoff(time.Millisecond, time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.executeRequest(context.Background(), http.MethodPost, "/v1/audit/entries", nil,
+		strings.NewReader(`{"actor":"admin"}`))
+	if err != nil {
+		t.Fatalf("request failed after retry: %v", err)
+	}
+	if got := atomic.LoadInt32(&attempts); got != 2 {
+		t.Fatalf("expected two attempts, got %d", got)
+	}
+}
+
 func TestClient_GetHolderPortfolio_Success(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/holders/GADDR123/portfolio" {
@@ -145,10 +181,10 @@ func TestClient_GetHolderPortfolio_Success(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(HolderPortfolioResponse{
 			Address: "GADDR123",
 			Summary: PortfolioSummary{
-				TotalValuationUsd:     50000.0,
-				TotalAssetsHeld:       2,
-				TotalCashInflowsUsd:   40000.0,
-				NetInvestedCapitalUsd: 40000.0,
+				TotalValuationUsd:      50000.0,
+				TotalAssetsHeld:        2,
+				TotalCashInflowsUsd:    40000.0,
+				NetInvestedCapitalUsd:  40000.0,
 				TotalUnrealizedGainUsd: 10000.0,
 			},
 			Holdings: []PortfolioHoldingDetail{
