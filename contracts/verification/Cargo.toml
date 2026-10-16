@@ -1,0 +1,30 @@
+# Standalone package, for the same reason as `fuzz/proptests`: `proptest`
+# must run on stable and must not be pulled into the wasm-targeted workspace
+# build. `contracts/Cargo.toml` excludes it.
+[workspace]
+
+[package]
+name = "tessera-verification"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+description = "Formal state-invariant verification for the Tessera Soroban contract suite (issue #296)."
+
+[dependencies]
+soroban-sdk = { version = "25.0.0", features = ["testutils"] }
+proptest = "1"
+
+tessera-registry = { path = "../registry" }
+
+# Mirrors `fuzz/proptests`: these are invariant tests, so an optimization
+# that skips a bounds check could hide exactly the violation being asserted
+# against.
+[profile.test]
+opt-level = 0
+debug-assertions = true
+overflow-checks = true
+
+[profile.release]
+debug-assertions = true
+overflow-checks = true
