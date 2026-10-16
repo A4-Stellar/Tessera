@@ -3,6 +3,7 @@
 import { useState, type ReactNode } from "react";
 
 interface CodeBlockProps {
+  /** Code content rendered inside the block. */
   children: ReactNode;
   /** Optional filename / language label shown in the header bar. */
   title?: string;
