@@ -11,8 +11,11 @@ const VARIANTS: Record<Variant, { border: string; bg: string; icon: string; labe
 };
 
 interface CalloutBoxProps {
+  /** Visual style and default heading of the callout. */
   variant?: Variant;
+  /** Heading text; defaults to the variant's label (e.g. "Note"). */
   title?: string;
+  /** Callout body content. */
   children: ReactNode;
 }
 
