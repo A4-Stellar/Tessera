@@ -5,15 +5,25 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { EditorProps } from "@monaco-editor/react";
 
 export interface SorobanIDEProps {
+  /** HTTPS endpoint of the remote sandbox that compiles the Rust source; falls back to `NEXT_PUBLIC_SOROBAN_SANDBOX_URL`. */
   compilerEndpoint?: string;
+  /** Alias for `compilerEndpoint`. */
   sandboxEndpoint?: string;
+  /** Alias for `compilerEndpoint`. */
   sandboxUrl?: string;
+  /** Alias for `compilerEndpoint`. */
   compileEndpoint?: string;
+  /** Soroban RPC endpoint used to deploy the compiled contract; defaults to the public Testnet RPC. */
   rpcUrl?: string;
+  /** Alias for `rpcUrl`. */
   testnetRpcUrl?: string;
+  /** Network passphrase for signing; deployments are only allowed on Testnet. */
   networkPassphrase?: string;
+  /** Rust source loaded into the editor. */
   initialCode?: string;
+  /** Heading shown above the editor. */
   title?: string;
+  /** Extra CSS classes for the outer container. */
   className?: string;
 }
 

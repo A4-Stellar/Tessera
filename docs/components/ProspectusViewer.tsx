@@ -9,15 +9,25 @@ import type {
 } from "pdfjs-dist";
 
 export interface ProspectusViewerProps {
+  /** URL of the prospectus PDF; must be HTTPS (or HTTP on localhost). */
   src?: string;
+  /** Alias for `src`, used when `src` is not set. */
   pdfUrl?: string;
+  /** Alias for `src`, used when neither `src` nor `pdfUrl` is set. */
   url?: string;
+  /** Expected SHA-256 of the PDF (hex, optionally `sha256:`/`0x`-prefixed); the download is verified against it. */
   expectedHash?: string;
+  /** Alias for `expectedHash`, used when `expectedHash` is not set. */
   expectedSha256?: string;
+  /** Alias for `expectedHash` for a hash read from the on-chain asset record. */
   expectedOnChainHash?: string;
+  /** Heading shown above the viewer. */
   title?: string;
+  /** Extra CSS classes for the outer container. */
   className?: string;
+  /** Starting zoom factor, clamped between 0.5 and 3. */
   initialZoom?: number;
+  /** PDF.js worker script URL; defaults to the cdnjs build matching the bundled pdfjs-dist version. */
   workerSrc?: string;
 }
 
