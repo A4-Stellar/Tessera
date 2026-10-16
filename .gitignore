@@ -1,4 +1,6 @@
 # Rust
+target/
+**/target/
 /api/target
 /cli/target
 /infrastructure/orchestrator/target
