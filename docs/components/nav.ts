@@ -47,6 +47,7 @@ const baseNavSections = [
       { title: "Issuer Wizard", href: "/docs/web-app#issuer-wizard" },
       { title: "Prospectus Viewer", href: "/docs/prospectus-viewer" },
       { title: "Integration", href: "/docs/integration" },
+      { title: "Component Library", href: "/docs/components" },
     ],
   },
 ] as const;

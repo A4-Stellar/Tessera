@@ -10,8 +10,11 @@ const METHOD_STYLES: Record<Method, string> = {
 };
 
 interface ApiEndpointProps {
+  /** HTTP method badge shown before the path. */
   method?: Method;
+  /** Endpoint path, e.g. `/assets/:id/holders`. */
   path: string;
+  /** Optional one-line summary rendered under the path. */
   description?: ReactNode;
 }
 

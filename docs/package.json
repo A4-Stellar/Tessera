@@ -12,6 +12,8 @@
     "check:mdx-samples": "node scripts/check-mdx-code-samples.mjs",
     "check:mdx-links": "node scripts/check-mdx-links.mjs",
     "generate:sdk-examples": "node scripts/generate-sdk-examples.mjs",
+    "docs:components": "node scripts/extract-component-docs.mjs",
+    "check:component-docs": "node scripts/extract-component-docs.mjs --check",
     "test": "jest",
     "test:a11y": "jest --testPathPattern=a11y",
     "test:a11y:e2e": "playwright test"
@@ -34,6 +36,7 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "recharts": "^2.12.7",
+    "wasmparser": "^5.11.1",
     "zod": "^4.6.5"
   },
   "devDependencies": {
@@ -56,6 +59,7 @@
     "jest-axe": "^8.0.0",
     "jest-environment-jsdom": "^29.7.0",
     "postcss": "^8.4.38",
+    "react-docgen-typescript": "^2.4.0",
     "remark": "^15.0.1",
     "tailwindcss": "^3.4.6",
     "typescript": "^5.5.3",

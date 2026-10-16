@@ -209,6 +209,27 @@ A `transfer` will revert with <code>SenderNotCompliant (7)</code> or
 error up front.
 </CalloutBox>
 
+## Inspecting compiled contracts
+
+Upload a compiled Soroban contract (`.wasm`) to see the interface it exposes: the
+functions, types, errors and events declared in its `contractspecv0` section, its
+exported WASM functions, and every host function it imports, decoded to the
+host-function names Soroban defines. The WAT tab shows the full disassembly with
+instruction search. Everything runs in your browser; the file is never uploaded.
+
+<WasmDisassembler />
+
+## Resource budgets
+
+Soroban caps every transaction's CPU instructions, memory, ledger reads and
+writes, and event size through network configuration that validators can vote to
+change. The visualizer below reads the current limits from Soroban RPC and meters
+Tessera's core contract methods against them. The measurements come from running
+each release's compiled WASM in the soroban-sdk test host with authorization
+mocked, so production calls also pay for signature verification.
+
+<GasVisualizer rpcUrl="https://soroban-testnet.stellar.org" network="Testnet" />
+
 ## Contract addresses
 
 All Testnet contract ids are listed in [Getting Started](/docs/getting-started#deployed-contract-addresses-testnet).
