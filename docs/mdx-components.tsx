@@ -11,9 +11,9 @@ import { ProspectusViewer } from "@/components/ProspectusViewer";
 import { LazyProspectusViewer } from "@/components/LazyProspectusViewer";
 import { SorobanIDE } from "@/components/SorobanIDE";
 import { IssuerWizard } from "@/components/IssuerWizard";
-import { WaterfallVisualizer } from "@/components/WaterfallVisualizer";
-import { CapTableHeatmap } from "@/components/CapTableHeatmap";
-import { WasmDecompiler } from "@/components/WasmDecompiler";
+import { WasmDisassembler } from "@/components/WasmDisassembler";
+import { GasVisualizer } from "@/components/GasVisualizer";
+import { ExemptionChecker } from "@/components/ExemptionChecker";
 
 /**
  * Global MDX component map. Custom components (CalloutBox, ApiEndpoint,
@@ -49,9 +49,9 @@ export function useMDXComponents(components: MDXComponents): MDXComponents {
     LazyProspectusViewer,
     SorobanIDE,
     IssuerWizard,
-    WaterfallVisualizer,
-    CapTableHeatmap,
-    WasmDecompiler,
+    WasmDisassembler,
+    GasVisualizer,
+    ExemptionChecker,
     ...components,
   };
 }

@@ -27,7 +27,11 @@ members = [
 # `[workspace]` table so it is a root in its own right; listing all three
 # explicitly here as well keeps a path-pattern change from silently pulling
 # one of them in.
-exclude = ["fuzz", "fuzz/harness", "fuzz/proptests"]
+#
+# `verification/` is the same kind of standalone package, for the same
+# reason: its own `proptest` dependency and release-profile overrides must
+# not leak into (or be constrained by) the wasm-targeted workspace build.
+exclude = ["fuzz", "fuzz/harness", "fuzz/proptests", "verification"]
 
 [workspace.dependencies]
 soroban-sdk = "25.0.0"

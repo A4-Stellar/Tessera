@@ -149,6 +149,16 @@ ago fails the very next transfer — no cron, no lag.
 7. **Treat registry listing as self-attestation.** Anyone can register an asset;
    the *binding* control is the compliance contract, not the registry entry.
 
+## Choosing an offering exemption
+
+Tokenized real-world assets are almost always securities, so before the first
+mint the issuer needs to know which registration exemption, or which EU regime,
+the offering relies on. That choice decides who may be allowlisted and how long
+holders must be locked up. The checker below walks through the U.S. SEC and EU
+options and links each result to the contract setup it implies.
+
+<ExemptionChecker />
+
 ## Putting it together
 
 The compliance contract is small, but it is the reason this platform can represent
