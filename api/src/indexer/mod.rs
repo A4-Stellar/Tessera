@@ -27,6 +27,7 @@ pub mod dlq;
     )
 )]
 pub mod fork_detector;
+pub mod mmr_checkpoint;
 pub mod nav_calculator;
 pub mod price_feed;
 pub mod pulsar_producer;
@@ -238,6 +239,9 @@ pub struct AppState {
     pub dlq: Option<Arc<dlq::DeadLetterQueue>>,
     /// Leader-election role; standalone nodes are always leader (issue #159).
     pub node_role: tokio::sync::watch::Receiver<NodeRole>,
+    /// Append-only MMR of indexed-ledger checkpoints for light-client
+    /// proofs (issue #318).
+    pub mmr: Arc<std::sync::RwLock<mmr_checkpoint::MmrCheckpoints>>,
 }
 
 impl AppState {
@@ -252,6 +256,7 @@ impl AppState {
             velocity: Arc::default(),
             dlq: None,
             node_role: tokio::sync::watch::channel(NodeRole::Leader).1,
+            mmr: Arc::default(),
         }
     }
 
@@ -914,6 +919,8 @@ impl Indexer {
         self.state.velocity.observe(&fresh, chrono::Utc::now());
         self.state.stream_processor.ingest_events(&events, &assets).await;
 
+        self.checkpoint(latest_ledger, &holders_map).await;
+
         let count = assets.len();
         self.state.replace(Snapshot {
             assets,
@@ -925,6 +932,51 @@ impl Indexer {
             stats,
         });
         Ok(count)
+    }
+
+    /// Issue #318: append an MMR leaf committing to this refresh's ledger and
+    /// cap-table state. A failure here (e.g. the RPC cannot return the ledger
+    /// hash) is logged and skips this checkpoint; it never fails the refresh.
+    async fn checkpoint(&self, ledger: u32, holders: &HashMap<u64, Vec<Holder>>) {
+        if ledger == 0 {
+            return;
+        }
+        if self
+            .state
+            .mmr
+            .read()
+            .expect("mmr lock")
+            .checkpoint(ledger)
+            .is_some()
+        {
+            return;
+        }
+        let ledger_hash = match self.rpc.ledger_hash(ledger).await {
+            Ok(hash) => hash,
+            Err(e) => {
+                metrics::counter!("rwa_mmr_checkpoint_total", "outcome" => "failure").increment(1);
+                tracing::warn!(ledger, error = %e, "could not fetch ledger hash; skipping MMR checkpoint");
+                return;
+            }
+        };
+        let state = mmr_checkpoint::StateTree::from_holders(
+            holders.iter().map(|(id, list)| (*id, list.as_slice())),
+        );
+        let result = self
+            .state
+            .mmr
+            .write()
+            .expect("mmr lock")
+            .record(ledger, ledger_hash, state);
+        match result {
+            Ok(_) => {
+                metrics::counter!("rwa_mmr_checkpoint_total", "outcome" => "success").increment(1);
+            }
+            Err(e) => {
+                metrics::counter!("rwa_mmr_checkpoint_total", "outcome" => "failure").increment(1);
+                tracing::warn!(ledger, error = %e, "MMR checkpoint rejected");
+            }
+        }
     }
 
     /// Read the compliance allowlist for an asset and derive both the holder
