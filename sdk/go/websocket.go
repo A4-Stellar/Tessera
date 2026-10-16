@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 )
 
 // EventSubscription manages an active WebSocket connection listening for Tessera events.
@@ -87,7 +88,7 @@ func (c *Client) SubscribeEvents(ctx context.Context, topics ...string) (*EventS
 	}
 
 	// Perform RFC 6455 WebSocket Handshake
-	if err := performWebSocketHandshake(conn, u, c.config.AuthToken); err != nil {
+	if err := performWebSocketHandshake(ctx, conn, u, c.config.AuthToken); err != nil {
 		_ = conn.Close()
 		return nil, &NetworkError{Op: "ws_handshake", Err: err}
 	}
@@ -220,7 +221,14 @@ func dialWebSocket(ctx context.Context, u *url.URL) (net.Conn, error) {
 	return conn, nil
 }
 
-func performWebSocketHandshake(conn net.Conn, u *url.URL, authToken string) error {
+func performWebSocketHandshake(ctx context.Context, conn net.Conn, u *url.URL, authToken string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = conn.SetDeadline(deadline)
+		defer conn.SetDeadline(time.Time{})
+	}
 	nonce := make([]byte, 16)
 	if _, err := rand.Read(nonce); err != nil {
 		return err
@@ -246,7 +254,7 @@ func performWebSocketHandshake(conn net.Conn, u *url.URL, authToken string) erro
 	)
 
 	if authToken != "" {
-		req += fmt.Sprintf("Authorization: Bearer %s\r\n", authToken)
+		req += "Authorization: Bearer " + authToken + "\r\n"
 	}
 	req += "\r\n"
 
@@ -261,6 +269,7 @@ func performWebSocketHandshake(conn net.Conn, u *url.URL, authToken string) erro
 	}
 
 	if resp.StatusCode != http.StatusSwitchingProtocols {
+		_ = resp.Body.Close()
 		return fmt.Errorf("unexpected status code during websocket upgrade: %d", resp.StatusCode)
 	}
 

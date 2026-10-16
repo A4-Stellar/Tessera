@@ -163,6 +163,8 @@ jobs:
         run: npm ci
       - name: Validate MDX Code Samples
         run: npm run check:mdx-samples
+      - name: Type-check MDX TypeScript Samples
+        run: npm run check:mdx-types
       - name: Validate Component JSDoc & Generated Docs
         run: npm run check:component-docs
       - name: Run ESLint & Strict a11y Rules
