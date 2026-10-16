@@ -22,7 +22,7 @@ const customJestConfig = {
 module.exports = async () => {
   const config = await createJestConfig(customJestConfig)();
   config.transformIgnorePatterns = [
-    "/node_modules/(?!(uint8array-extras|@stellar|@exodus|@noble)/)",
+    "/node_modules/(?!(uint8array-extras|@stellar|@exodus|@noble|d3(-[a-z0-9]+)*|internmap|delaunator|robust-predicates)/)",
     "^.+\\.module\\.(css|sass|scss)$",
   ];
   return config;
