@@ -12,7 +12,12 @@ const ProspectusViewer = lazy(() =>
  * placeholder scrolls near the viewport (falls back to immediate mount when
  * IntersectionObserver is unavailable).
  */
-export function LazyProspectusViewer(props: ProspectusViewerProps & { rootMargin?: string }) {
+export function LazyProspectusViewer(
+  props: ProspectusViewerProps & {
+    /** IntersectionObserver margin around the viewport that triggers loading. */
+    rootMargin?: string;
+  }
+) {
   const { rootMargin = "200px", ...viewerProps } = props;
   const holderRef = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(false);
