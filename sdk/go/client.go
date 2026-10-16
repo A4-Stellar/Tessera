@@ -1,6 +1,7 @@
 package tessera
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -54,7 +55,12 @@ func NewClient(opts ...Option) (*Client, error) {
 func (c *Client) Config() ClientConfig {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.config
+	config := c.config
+	config.CustomHeaders = make(map[string]string, len(c.config.CustomHeaders))
+	for key, value := range c.config.CustomHeaders {
+		config.CustomHeaders[key] = value
+	}
+	return config
 }
 
 // executeRequest performs an HTTP request with context propagation, retries, and error handling.
@@ -64,6 +70,14 @@ func (c *Client) executeRequest(ctx context.Context, method, endpoint string, qu
 		fullURL = fmt.Sprintf("%s?%s", fullURL, query.Encode())
 	}
 
+	var bodyBytes []byte
+	if body != nil {
+		var err error
+		bodyBytes, err = io.ReadAll(body)
+		if err != nil {
+			return nil, &NetworkError{Op: "read_request_body", Err: err}
+		}
+	}
 	var lastErr error
 	backoff := c.config.InitialBackoff
 
@@ -73,7 +87,11 @@ func (c *Client) executeRequest(ctx context.Context, method, endpoint string, qu
 			return nil, err
 		}
 
-		req, err := http.NewRequestWithContext(ctx, method, fullURL, body)
+		var requestBody io.Reader
+		if bodyBytes != nil {
+			requestBody = bytes.NewReader(bodyBytes)
+		}
+		req, err := http.NewRequestWithContext(ctx, method, fullURL, requestBody)
 		if err != nil {
 			return nil, &NetworkError{Op: "create_request", Err: err}
 		}
@@ -81,6 +99,9 @@ func (c *Client) executeRequest(ctx context.Context, method, endpoint string, qu
 		// Inject standard headers
 		req.Header.Set("User-Agent", "tessera-go/0.1.0")
 		req.Header.Set("Accept", "application/json")
+		if bodyBytes != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
 		if c.config.AuthToken != "" {
 			req.Header.Set("Authorization", "Bearer "+c.config.AuthToken)
 		}
@@ -136,7 +157,7 @@ func (c *Client) executeRequest(ctx context.Context, method, endpoint string, qu
 		}
 
 		// Handle 5xx server errors for idempotent operations
-		if resp.StatusCode >= 500 && isIdempotent(method) && attempt < c.config.MaxRetries {
+		if resp.StatusCode >= 500 && isRetryableMethod(method) && attempt < c.config.MaxRetries {
 			lastErr = &APIError{
 				StatusCode: resp.StatusCode,
 				ErrorCode:  "server_error",
@@ -179,6 +200,10 @@ func isIdempotent(method string) bool {
 	return method == http.MethodGet || method == http.MethodHead || method == http.MethodOptions
 }
 
+func isRetryableMethod(method string) bool {
+	return isIdempotent(method)
+}
+
 func minDuration(a, b time.Duration) time.Duration {
 	if a < b {
 		return a
@@ -187,7 +212,14 @@ func minDuration(a, b time.Duration) time.Duration {
 }
 
 func addJitter(d time.Duration) time.Duration {
-	jitter := time.Duration(rand.Int63n(int64(d / 4)))
+	if d <= 0 {
+		return 0
+	}
+	quarter := int64(d / 4)
+	if quarter == 0 {
+		return d
+	}
+	jitter := time.Duration(rand.Int63n(quarter))
 	return d + jitter
 }
 
@@ -197,6 +229,11 @@ func parseRetryAfter(header string) time.Duration {
 	}
 	if seconds, err := strconv.Atoi(header); err == nil && seconds > 0 {
 		return time.Duration(seconds) * time.Second
+	}
+	if when, err := http.ParseTime(header); err == nil {
+		if delay := time.Until(when); delay > 0 {
+			return delay
+		}
 	}
 	return 0
 }
