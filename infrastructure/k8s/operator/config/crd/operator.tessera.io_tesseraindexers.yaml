@@ -1,0 +1,90 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: tesseraindexers.operator.tessera.io
+spec:
+  group: operator.tessera.io
+  names:
+    kind: TesseraIndexer
+    listKind: TesseraIndexerList
+    plural: tesseraindexers
+    singular: tesseraindexer
+    shortNames:
+      - tidx
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+        scale:
+          specReplicasPath: .spec.replicas
+          statusReplicasPath: .status.currentReplicas
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required:
+                - image
+                - replicas
+              properties:
+                replicas:
+                  type: integer
+                  minimum: 1
+                minReplicas:
+                  type: integer
+                  minimum: 1
+                maxReplicas:
+                  type: integer
+                  minimum: 1
+                image:
+                  type: string
+                environment:
+                  type: string
+                databaseSecretRef:
+                  type: string
+                databaseMigration:
+                  type: object
+                  properties:
+                    enabled:
+                      type: boolean
+                    migrationImage:
+                      type: string
+                    schemaHash:
+                      type: string
+                    databaseSecretRef:
+                      type: string
+                autoScaling:
+                  type: object
+                  properties:
+                    enabled:
+                      type: boolean
+                    targetCpuUtilizationPercentage:
+                      type: integer
+                      minimum: 1
+                      maximum: 100
+                    targetWebSocketConnectionsPerPod:
+                      type: integer
+                      minimum: 1
+                    scaleUpCooldownSeconds:
+                      type: integer
+                    scaleDownCooldownSeconds:
+                      type: integer
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                currentReplicas:
+                  type: integer
+                readyReplicas:
+                  type: integer
+                activeWebSocketConnections:
+                  type: integer
+                averageCpuUtilization:
+                  type: integer
+                lastMigrationHash:
+                  type: string
