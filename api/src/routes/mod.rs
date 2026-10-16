@@ -9,6 +9,7 @@ pub mod events;
 pub mod export;
 pub mod holders;
 pub mod portfolio;
+pub mod proofs;
 #[expect(
     dead_code,
     reason = "The search placeholder is not part of the active API router."
@@ -170,6 +171,9 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/audit/entries/:sequence", get(audit::get_entry))
         .route("/audit/anchors", get(audit::list_anchors))
+        // Issue #318: light-client MMR checkpoint proofs.
+        .route("/proofs/mmr", get(proofs::root))
+        .route("/proofs/mmr/:ledger_seq", get(proofs::proof))
         .route("/audit/anchor", axum::routing::post(audit::publish_anchor))
         .layer(middleware::from_fn_with_state(state.clone(), cache_headers));
 
@@ -311,6 +315,8 @@ async fn index() -> Json<serde_json::Value> {
             "GET /v1/holders/:address/portfolio",
             "GET /v1/compliance/:address",
             "GET /v1/security/anomalies",
+            "GET /v1/proofs/mmr",
+            "GET /v1/proofs/mmr/:ledger_seq?account=:address",
             "GET /health",
             "GET /metrics"
         ],

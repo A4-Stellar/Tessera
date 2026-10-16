@@ -38,8 +38,14 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use indexer::{AppState, Config, Indexer};
-use metrics_exporter_prometheus::PrometheusBuilder;
+use metrics_exporter_prometheus::{Matcher, PrometheusBuilder};
 use tokio::sync::watch;
+
+/// Latency buckets (seconds) for `rwa_http_request_duration_seconds`.
+/// `0.1` must stay: it is the boundary of the p99 < 100 ms SLO (issue #312).
+const HTTP_LATENCY_BUCKETS: &[f64] = &[
+    0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
+];
 
 #[tokio::main]
 async fn main() {
@@ -68,7 +74,16 @@ async fn main() {
         "starting stellar-rwa-api"
     );
 
+    // Issue #312: export request latency as a real histogram (not the
+    // default summary) so Prometheus can aggregate it across replicas and
+    // the SLO rules in `infrastructure/monitoring/` can count requests under
+    // the 100 ms latency objective via the `le="0.1"` bucket.
     let metrics_handle = PrometheusBuilder::new()
+        .set_buckets_for_metric(
+            Matcher::Full("rwa_http_request_duration_seconds".to_string()),
+            HTTP_LATENCY_BUCKETS,
+        )
+        .expect("static latency buckets are non-empty")
         .install_recorder()
         .expect("failed to install Prometheus recorder");
 

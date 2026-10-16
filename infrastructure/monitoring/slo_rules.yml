@@ -1,0 +1,466 @@
+# Tessera API SLOs and error-budget burn-rate alerts (issue #312).
+#
+# Keep the windows and burn-rate thresholds in sync with the table in
+# README.md. Validate with:
+#   promtool check rules slo_rules.yml
+#   promtool test rules tests/slo_rules_test.yml
+#
+# SLIs (both computed from the API's own Prometheus metrics, excluding the
+# /health and /metrics probe routes):
+#   availability  good = responses with a non-5xx status       objective 99.9 %
+#   latency       good = responses served in <= 100 ms          objective 99 %
+#                 (i.e. p99 < 100 ms; uses the le="0.1" bucket of
+#                 rwa_http_request_duration_seconds)
+#
+# Error budget = 1 - objective over a rolling 30-day window: 0.001 for
+# availability, 0.01 for latency (written as literals in the rules below).
+# Alerting follows the multi-window, multi-burn-rate scheme from the Google
+# SRE Workbook (ch. 5): a long window detects the burn, a short window (1/12
+# of it) makes the alert reset quickly once the burn stops.
+#
+#   severity  burn rate  long / short window  budget spent when it fires
+#   page      14.4x      1h  / 5m             2 %
+#   page      6x         6h  / 30m            5 %
+#   ticket    3x         1d  / 2h             10 %
+#   ticket    1x         3d  / 6h             10 %
+
+groups:
+  - name: tessera-api-slo-sli
+    interval: 30s
+    rules:
+      - record: tessera:api_availability:error_ratio_rate5m
+        expr: |
+          (
+            sum(rate(rwa_http_requests_total{route!~"/health|/metrics",status=~"5.."}[5m]))
+            /
+            sum(rate(rwa_http_requests_total{route!~"/health|/metrics"}[5m]))
+          ) or vector(0)
+        labels:
+          slo: availability
+      - record: tessera:api_availability:error_ratio_rate30m
+        expr: |
+          (
+            sum(rate(rwa_http_requests_total{route!~"/health|/metrics",status=~"5.."}[30m]))
+            /
+            sum(rate(rwa_http_requests_total{route!~"/health|/metrics"}[30m]))
+          ) or vector(0)
+        labels:
+          slo: availability
+      - record: tessera:api_availability:error_ratio_rate1h
+        expr: |
+          (
+            sum(rate(rwa_http_requests_total{route!~"/health|/metrics",status=~"5.."}[1h]))
+            /
+            sum(rate(rwa_http_requests_total{route!~"/health|/metrics"}[1h]))
+          ) or vector(0)
+        labels:
+          slo: availability
+      - record: tessera:api_availability:error_ratio_rate2h
+        expr: |
+          (
+            sum(rate(rwa_http_requests_total{route!~"/health|/metrics",status=~"5.."}[2h]))
+            /
+            sum(rate(rwa_http_requests_total{route!~"/health|/metrics"}[2h]))
+          ) or vector(0)
+        labels:
+          slo: availability
+      - record: tessera:api_availability:error_ratio_rate6h
+        expr: |
+          (
+            sum(rate(rwa_http_requests_total{route!~"/health|/metrics",status=~"5.."}[6h]))
+            /
+            sum(rate(rwa_http_requests_total{route!~"/health|/metrics"}[6h]))
+          ) or vector(0)
+        labels:
+          slo: availability
+      - record: tessera:api_availability:error_ratio_rate1d
+        expr: |
+          (
+            sum(rate(rwa_http_requests_total{route!~"/health|/metrics",status=~"5.."}[1d]))
+            /
+            sum(rate(rwa_http_requests_total{route!~"/health|/metrics"}[1d]))
+          ) or vector(0)
+        labels:
+          slo: availability
+      - record: tessera:api_availability:error_ratio_rate3d
+        expr: |
+          (
+            sum(rate(rwa_http_requests_total{route!~"/health|/metrics",status=~"5.."}[3d]))
+            /
+            sum(rate(rwa_http_requests_total{route!~"/health|/metrics"}[3d]))
+          ) or vector(0)
+        labels:
+          slo: availability
+      - record: tessera:api_availability:error_ratio_rate30d
+        expr: |
+          (
+            sum(rate(rwa_http_requests_total{route!~"/health|/metrics",status=~"5.."}[30d]))
+            /
+            sum(rate(rwa_http_requests_total{route!~"/health|/metrics"}[30d]))
+          ) or vector(0)
+        labels:
+          slo: availability
+      - record: tessera:api_latency:slow_ratio_rate5m
+        expr: |
+          (
+            1 - (
+              sum(rate(rwa_http_request_duration_seconds_bucket{route!~"/health|/metrics",le="0.1"}[5m]))
+              /
+              sum(rate(rwa_http_request_duration_seconds_count{route!~"/health|/metrics"}[5m]))
+            )
+          ) or vector(0)
+        labels:
+          slo: latency
+      - record: tessera:api_latency:slow_ratio_rate30m
+        expr: |
+          (
+            1 - (
+              sum(rate(rwa_http_request_duration_seconds_bucket{route!~"/health|/metrics",le="0.1"}[30m]))
+              /
+              sum(rate(rwa_http_request_duration_seconds_count{route!~"/health|/metrics"}[30m]))
+            )
+          ) or vector(0)
+        labels:
+          slo: latency
+      - record: tessera:api_latency:slow_ratio_rate1h
+        expr: |
+          (
+            1 - (
+              sum(rate(rwa_http_request_duration_seconds_bucket{route!~"/health|/metrics",le="0.1"}[1h]))
+              /
+              sum(rate(rwa_http_request_duration_seconds_count{route!~"/health|/metrics"}[1h]))
+            )
+          ) or vector(0)
+        labels:
+          slo: latency
+      - record: tessera:api_latency:slow_ratio_rate2h
+        expr: |
+          (
+            1 - (
+              sum(rate(rwa_http_request_duration_seconds_bucket{route!~"/health|/metrics",le="0.1"}[2h]))
+              /
+              sum(rate(rwa_http_request_duration_seconds_count{route!~"/health|/metrics"}[2h]))
+            )
+          ) or vector(0)
+        labels:
+          slo: latency
+      - record: tessera:api_latency:slow_ratio_rate6h
+        expr: |
+          (
+            1 - (
+              sum(rate(rwa_http_request_duration_seconds_bucket{route!~"/health|/metrics",le="0.1"}[6h]))
+              /
+              sum(rate(rwa_http_request_duration_seconds_count{route!~"/health|/metrics"}[6h]))
+            )
+          ) or vector(0)
+        labels:
+          slo: latency
+      - record: tessera:api_latency:slow_ratio_rate1d
+        expr: |
+          (
+            1 - (
+              sum(rate(rwa_http_request_duration_seconds_bucket{route!~"/health|/metrics",le="0.1"}[1d]))
+              /
+              sum(rate(rwa_http_request_duration_seconds_count{route!~"/health|/metrics"}[1d]))
+            )
+          ) or vector(0)
+        labels:
+          slo: latency
+      - record: tessera:api_latency:slow_ratio_rate3d
+        expr: |
+          (
+            1 - (
+              sum(rate(rwa_http_request_duration_seconds_bucket{route!~"/health|/metrics",le="0.1"}[3d]))
+              /
+              sum(rate(rwa_http_request_duration_seconds_count{route!~"/health|/metrics"}[3d]))
+            )
+          ) or vector(0)
+        labels:
+          slo: latency
+      - record: tessera:api_latency:slow_ratio_rate30d
+        expr: |
+          (
+            1 - (
+              sum(rate(rwa_http_request_duration_seconds_bucket{route!~"/health|/metrics",le="0.1"}[30d]))
+              /
+              sum(rate(rwa_http_request_duration_seconds_count{route!~"/health|/metrics"}[30d]))
+            )
+          ) or vector(0)
+        labels:
+          slo: latency
+      - record: tessera:api_latency:p99_seconds_rate5m
+        expr: |
+          histogram_quantile(0.99,
+            sum by (le) (rate(rwa_http_request_duration_seconds_bucket{route!~"/health|/metrics"}[5m])))
+      - record: tessera:api_requests:rate5m
+        expr: sum(rate(rwa_http_requests_total{route!~"/health|/metrics"}[5m]))
+
+  - name: tessera-api-slo-budget
+    interval: 1m
+    rules:
+      # Objectives as series so dashboards and alerts share one source.
+      - record: tessera:slo_objective:ratio
+        expr: vector(0.999)
+        labels:
+          slo: availability
+      - record: tessera:slo_objective:ratio
+        expr: vector(0.99)
+        labels:
+          slo: latency
+      # Fraction of the 30-day error budget still unspent (1 = untouched,
+      # 0 = exhausted, negative = SLO breached).
+      - record: tessera:error_budget:remaining_ratio
+        expr: 1 - (tessera:api_availability:error_ratio_rate30d / 0.001)
+        labels:
+          slo: availability
+      - record: tessera:error_budget:remaining_ratio
+        expr: 1 - (tessera:api_latency:slow_ratio_rate30d / 0.01)
+        labels:
+          slo: latency
+      - record: tessera:error_budget:burn_rate5m
+        expr: tessera:api_availability:error_ratio_rate5m / 0.001
+        labels:
+          slo: availability
+      - record: tessera:error_budget:burn_rate5m
+        expr: tessera:api_latency:slow_ratio_rate5m / 0.01
+        labels:
+          slo: latency
+      - record: tessera:error_budget:burn_rate30m
+        expr: tessera:api_availability:error_ratio_rate30m / 0.001
+        labels:
+          slo: availability
+      - record: tessera:error_budget:burn_rate30m
+        expr: tessera:api_latency:slow_ratio_rate30m / 0.01
+        labels:
+          slo: latency
+      - record: tessera:error_budget:burn_rate1h
+        expr: tessera:api_availability:error_ratio_rate1h / 0.001
+        labels:
+          slo: availability
+      - record: tessera:error_budget:burn_rate1h
+        expr: tessera:api_latency:slow_ratio_rate1h / 0.01
+        labels:
+          slo: latency
+      - record: tessera:error_budget:burn_rate2h
+        expr: tessera:api_availability:error_ratio_rate2h / 0.001
+        labels:
+          slo: availability
+      - record: tessera:error_budget:burn_rate2h
+        expr: tessera:api_latency:slow_ratio_rate2h / 0.01
+        labels:
+          slo: latency
+      - record: tessera:error_budget:burn_rate6h
+        expr: tessera:api_availability:error_ratio_rate6h / 0.001
+        labels:
+          slo: availability
+      - record: tessera:error_budget:burn_rate6h
+        expr: tessera:api_latency:slow_ratio_rate6h / 0.01
+        labels:
+          slo: latency
+      - record: tessera:error_budget:burn_rate1d
+        expr: tessera:api_availability:error_ratio_rate1d / 0.001
+        labels:
+          slo: availability
+      - record: tessera:error_budget:burn_rate1d
+        expr: tessera:api_latency:slow_ratio_rate1d / 0.01
+        labels:
+          slo: latency
+      - record: tessera:error_budget:burn_rate3d
+        expr: tessera:api_availability:error_ratio_rate3d / 0.001
+        labels:
+          slo: availability
+      - record: tessera:error_budget:burn_rate3d
+        expr: tessera:api_latency:slow_ratio_rate3d / 0.01
+        labels:
+          slo: latency
+
+  - name: tessera-api-slo-alerts
+    rules:
+      - alert: TesseraApiErrorBudgetFastBurn
+        expr: |
+          tessera:error_budget:burn_rate1h{slo="availability"} > 14.4
+          and
+          tessera:error_budget:burn_rate5m{slo="availability"} > 14.4
+        for: 2m
+        labels:
+          severity: page
+          slo: availability
+          burn_rate: "14.4"
+          window: 1h
+        annotations:
+          summary: "Tessera API availability (99.9%) SLO burning error budget at >14.4x"
+          description: >-
+            The availability error budget is burning at {{ $value | printf "%.1f" }}x
+            the sustainable rate over 1h (confirmed over 5m). At this
+            rate 2% of the 30-day budget is consumed within the window.
+          runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/infrastructure/monitoring/README.md#runbook
+      - alert: TesseraApiErrorBudgetFastBurn
+        expr: |
+          tessera:error_budget:burn_rate6h{slo="availability"} > 6
+          and
+          tessera:error_budget:burn_rate30m{slo="availability"} > 6
+        for: 2m
+        labels:
+          severity: page
+          slo: availability
+          burn_rate: "6"
+          window: 6h
+        annotations:
+          summary: "Tessera API availability (99.9%) SLO burning error budget at >6x"
+          description: >-
+            The availability error budget is burning at {{ $value | printf "%.1f" }}x
+            the sustainable rate over 6h (confirmed over 30m). At this
+            rate 5% of the 30-day budget is consumed within the window.
+          runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/infrastructure/monitoring/README.md#runbook
+      - alert: TesseraApiErrorBudgetSlowBurn
+        expr: |
+          tessera:error_budget:burn_rate1d{slo="availability"} > 3
+          and
+          tessera:error_budget:burn_rate2h{slo="availability"} > 3
+        for: 2m
+        labels:
+          severity: ticket
+          slo: availability
+          burn_rate: "3"
+          window: 1d
+        annotations:
+          summary: "Tessera API availability (99.9%) SLO burning error budget at >3x"
+          description: >-
+            The availability error budget is burning at {{ $value | printf "%.1f" }}x
+            the sustainable rate over 1d (confirmed over 2h). At this
+            rate 10% of the 30-day budget is consumed within the window.
+          runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/infrastructure/monitoring/README.md#runbook
+      - alert: TesseraApiErrorBudgetSlowBurn
+        expr: |
+          tessera:error_budget:burn_rate3d{slo="availability"} > 1
+          and
+          tessera:error_budget:burn_rate6h{slo="availability"} > 1
+        for: 2m
+        labels:
+          severity: ticket
+          slo: availability
+          burn_rate: "1"
+          window: 3d
+        annotations:
+          summary: "Tessera API availability (99.9%) SLO burning error budget at >1x"
+          description: >-
+            The availability error budget is burning at {{ $value | printf "%.1f" }}x
+            the sustainable rate over 3d (confirmed over 6h). At this
+            rate 10% of the 30-day budget is consumed within the window.
+          runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/infrastructure/monitoring/README.md#runbook
+      - alert: TesseraApiErrorBudgetLow
+        expr: tessera:error_budget:remaining_ratio{slo="availability"} < 0.25
+        for: 15m
+        labels:
+          severity: ticket
+          slo: availability
+        annotations:
+          summary: "Tessera API availability (99.9%) error budget below 25%"
+          description: >-
+            {{ $value | humanizePercentage }} of the 30-day availability error budget
+            remains. Freeze risky deploys until it recovers.
+          runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/infrastructure/monitoring/README.md#runbook
+      - alert: TesseraApiErrorBudgetExhausted
+        expr: tessera:error_budget:remaining_ratio{slo="availability"} <= 0
+        for: 5m
+        labels:
+          severity: page
+          slo: availability
+        annotations:
+          summary: "Tessera API availability (99.9%) error budget exhausted"
+          description: The 30-day availability SLO is currently breached.
+          runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/infrastructure/monitoring/README.md#runbook
+      - alert: TesseraApiErrorBudgetFastBurn
+        expr: |
+          tessera:error_budget:burn_rate1h{slo="latency"} > 14.4
+          and
+          tessera:error_budget:burn_rate5m{slo="latency"} > 14.4
+        for: 2m
+        labels:
+          severity: page
+          slo: latency
+          burn_rate: "14.4"
+          window: 1h
+        annotations:
+          summary: "Tessera API latency (p99 < 100 ms) SLO burning error budget at >14.4x"
+          description: >-
+            The latency error budget is burning at {{ $value | printf "%.1f" }}x
+            the sustainable rate over 1h (confirmed over 5m). At this
+            rate 2% of the 30-day budget is consumed within the window.
+          runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/infrastructure/monitoring/README.md#runbook
+      - alert: TesseraApiErrorBudgetFastBurn
+        expr: |
+          tessera:error_budget:burn_rate6h{slo="latency"} > 6
+          and
+          tessera:error_budget:burn_rate30m{slo="latency"} > 6
+        for: 2m
+        labels:
+          severity: page
+          slo: latency
+          burn_rate: "6"
+          window: 6h
+        annotations:
+          summary: "Tessera API latency (p99 < 100 ms) SLO burning error budget at >6x"
+          description: >-
+            The latency error budget is burning at {{ $value | printf "%.1f" }}x
+            the sustainable rate over 6h (confirmed over 30m). At this
+            rate 5% of the 30-day budget is consumed within the window.
+          runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/infrastructure/monitoring/README.md#runbook
+      - alert: TesseraApiErrorBudgetSlowBurn
+        expr: |
+          tessera:error_budget:burn_rate1d{slo="latency"} > 3
+          and
+          tessera:error_budget:burn_rate2h{slo="latency"} > 3
+        for: 2m
+        labels:
+          severity: ticket
+          slo: latency
+          burn_rate: "3"
+          window: 1d
+        annotations:
+          summary: "Tessera API latency (p99 < 100 ms) SLO burning error budget at >3x"
+          description: >-
+            The latency error budget is burning at {{ $value | printf "%.1f" }}x
+            the sustainable rate over 1d (confirmed over 2h). At this
+            rate 10% of the 30-day budget is consumed within the window.
+          runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/infrastructure/monitoring/README.md#runbook
+      - alert: TesseraApiErrorBudgetSlowBurn
+        expr: |
+          tessera:error_budget:burn_rate3d{slo="latency"} > 1
+          and
+          tessera:error_budget:burn_rate6h{slo="latency"} > 1
+        for: 2m
+        labels:
+          severity: ticket
+          slo: latency
+          burn_rate: "1"
+          window: 3d
+        annotations:
+          summary: "Tessera API latency (p99 < 100 ms) SLO burning error budget at >1x"
+          description: >-
+            The latency error budget is burning at {{ $value | printf "%.1f" }}x
+            the sustainable rate over 3d (confirmed over 6h). At this
+            rate 10% of the 30-day budget is consumed within the window.
+          runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/infrastructure/monitoring/README.md#runbook
+      - alert: TesseraApiErrorBudgetLow
+        expr: tessera:error_budget:remaining_ratio{slo="latency"} < 0.25
+        for: 15m
+        labels:
+          severity: ticket
+          slo: latency
+        annotations:
+          summary: "Tessera API latency (p99 < 100 ms) error budget below 25%"
+          description: >-
+            {{ $value | humanizePercentage }} of the 30-day latency error budget
+            remains. Freeze risky deploys until it recovers.
+          runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/infrastructure/monitoring/README.md#runbook
+      - alert: TesseraApiErrorBudgetExhausted
+        expr: tessera:error_budget:remaining_ratio{slo="latency"} <= 0
+        for: 5m
+        labels:
+          severity: page
+          slo: latency
+        annotations:
+          summary: "Tessera API latency (p99 < 100 ms) error budget exhausted"
+          description: The 30-day latency SLO is currently breached.
+          runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/infrastructure/monitoring/README.md#runbook

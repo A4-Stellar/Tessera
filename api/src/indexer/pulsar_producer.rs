@@ -220,11 +220,17 @@ impl PulsarCompression {
     /// compression is disabled.
     fn into_pulsar_compression(self) -> Option<Compression> {
         match self {
-            PulsarCompression::Lz4 => Some(Compression::Lz4(compression::Lz4 {
-                mode: compression::lz4::CompressionMode::Default,
-            })),
-            PulsarCompression::Snappy => Some(Compression::Snappy(compression::Snappy {})),
-            PulsarCompression::Zstd => Some(Compression::Zstd(compression::Zstd { level: 3 })),
+            // `CompressionLz4::default()` is lz4's default block mode; the
+            // `lz4` crate itself is not a direct dependency of this crate.
+            PulsarCompression::Lz4 => {
+                Some(Compression::Lz4(compression::CompressionLz4::default()))
+            }
+            PulsarCompression::Snappy => {
+                Some(Compression::Snappy(compression::CompressionSnappy {}))
+            }
+            PulsarCompression::Zstd => {
+                Some(Compression::Zstd(compression::CompressionZstd { level: 3 }))
+            }
             PulsarCompression::None => None,
         }
     }
@@ -730,8 +736,11 @@ mod tests {
         )
         .unwrap();
 
-        let json = serde_json::to_string(&event).expect("serialize");
-        let back: TesseraEvent = serde_json::from_str(&json).expect("deserialize");
+        // `TesseraEvent::topic` is `&'static str`, so the source string must
+        // outlive the test; leaking it is fine here.
+        let json: &'static str =
+            Box::leak(serde_json::to_string(&event).expect("serialize").into_boxed_str());
+        let back: TesseraEvent = serde_json::from_str(json).expect("deserialize");
 
         assert_eq!(back.dedup_key, "500:deadbeef00:2");
         assert_eq!(back.topic, TOPIC_TRANSFERS);
