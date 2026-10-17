@@ -1,0 +1,2 @@
+# BCC itself comes from the distro (python3-bpfcc / bcc-tools); it is not on PyPI.
+prometheus-client>=0.17,<1
