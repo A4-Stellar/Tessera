@@ -15,7 +15,9 @@ use soroban_sdk::{
 mod attestation;
 mod verifiable_credentials;
 mod oracle_verifier;
+mod revocation_accumulator;
 pub use attestation::{IdentityAttestation, RevocationProof};
+pub use revocation_accumulator::RevocationAccumulator;
 pub use verifiable_credentials::VerifiableCredential;
 pub use oracle_verifier::{OracleAttestation, OracleConfig, OracleSignature};
 
@@ -78,6 +80,8 @@ pub(crate) enum DataKey {
     TaxResidency(Address),
     IssuerKey(Address),
     RevocationRoot(Address),
+    /// Issue #301: constant-size accumulator over all revoked identities.
+    RevocationAccumulator,
     AttestationMode,
     Attestation(Address),
     OracleMode,
@@ -553,6 +557,21 @@ impl ComplianceContract {
     pub fn unpause(env: Env, admin: Address) {
         Self::require_admin(&env, &admin);
         tessera_common::set_paused(&env, false);
+    }
+
+    /// Revokes a compromised identity by folding it into the constant-size
+    /// accumulator. Storage does not grow with the number of revocations.
+    pub fn revoke_identity(env: Env, admin: Address, id: BytesN<32>) -> RevocationAccumulator {
+        Self::require_admin(&env, &admin);
+        let acc = revocation_accumulator::revoke(&env, &id);
+        env.events()
+            .publish((symbol_short!("id_revok"), id), acc.epoch);
+        acc
+    }
+
+    /// Current accumulator root and revocation epoch.
+    pub fn get_revocation_accumulator(env: Env) -> RevocationAccumulator {
+        revocation_accumulator::current(&env)
     }
 
     pub fn upgrade(env: Env, admin: Address, new_wasm_hash: BytesN<32>) {
