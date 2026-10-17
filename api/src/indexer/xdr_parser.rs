@@ -100,7 +100,7 @@ impl<'a> Reader<'a> {
         Ok(s)
     }
 
-    fn array<const N: usize>(&mut self) -> Result<&'a [u8; N]> {
+    pub fn array<const N: usize>(&mut self) -> Result<&'a [u8; N]> {
         // `take` guarantees the slice length, so the conversion cannot fail.
         self.take(N)?
             .try_into()
@@ -305,7 +305,7 @@ impl<'a> ScValView<'a> {
     }
 }
 
-fn read_address<'a>(r: &mut Reader<'a>) -> Result<AddressView<'a>> {
+pub fn read_address<'a>(r: &mut Reader<'a>) -> Result<AddressView<'a>> {
     match r.u32()? {
         0 => match r.u32()? {
             0 => Ok(AddressView::Account(r.array::<32>()?)),
