@@ -28,6 +28,15 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::sync::RwLock;
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the standalone chain verifier is staged for the offline auditor CLI"
+    )
+)]
+pub mod chain_verifier;
+
 /// Standard 32-byte hex genesis hash for sequence 0 / empty logs.
 pub const GENESIS_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
