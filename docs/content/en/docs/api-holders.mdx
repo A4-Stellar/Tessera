@@ -28,6 +28,7 @@ the indexer derives this from the allowlist intersected with balances.
 |------|------|-------|
 | `offset` | integer | Skip the first N holders. Default: `0`. |
 | `limit` | integer | Page size. Default: `50`; maximum: `100`. |
+| `at_ledger` | integer | Rebuild holders as of this ledger by replaying indexed `transfer` events. Default: latest. |
 
 **Response schema** (per holder):
 
