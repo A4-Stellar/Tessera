@@ -1,0 +1,130 @@
+# Multi-region OpenTelemetry Collector configuration — Issue #309
+#
+# Intended to run as a Kubernetes DaemonSet (one collector per node) in each
+# region.  All regions forward spans to Grafana Tempo via OTLP/gRPC.  Tail
+# sampling keeps 100% of traces that contain an error span and 5% of clean
+# "happy-path" traces.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: "0.0.0.0:4317"
+      http:
+        endpoint: "0.0.0.0:4318"
+
+  # Pull host-level metrics from each Kubernetes node.
+  hostmetrics:
+    collection_interval: 30s
+    scrapers:
+      cpu:
+      memory:
+      network:
+      disk:
+
+processors:
+  # -------------------------------------------------------------------------
+  # Resource detection: annotate every span with the cloud region & node name
+  # so Tempo queries can filter by region.
+  # -------------------------------------------------------------------------
+  resourcedetection:
+    detectors: [env, aws, gcp, azure]
+    timeout: 5s
+    override: false
+
+  # Batch before exporting to keep Tempo ingestion smooth.
+  batch:
+    timeout: 1s
+    send_batch_size: 1024
+    send_batch_max_size: 2048
+
+  # -------------------------------------------------------------------------
+  # Tail-based sampling
+  #
+  # Policy evaluation waits up to 10 s after the first span in a trace before
+  # deciding — long enough for all spans in a normal request to arrive.
+  #
+  # Rules (evaluated in order, first match wins):
+  #   1. Keep 100% of traces that contain at least one error span.
+  #   2. Keep 5% of all other (happy-path) traces.
+  # -------------------------------------------------------------------------
+  tail_sampling:
+    decision_wait: 10s
+    num_traces: 50000
+    expected_new_traces_per_sec: 500
+    policies:
+      - name: keep-errors
+        type: status_code
+        status_code:
+          status_codes: [ERROR]
+
+      - name: happy-path-5pct
+        type: probabilistic
+        probabilistic:
+          sampling_percentage: 5
+
+  # Memory guard — drop oldest spans when the collector reaches 80% of
+  # GOMEMLIMIT so it does not OOM during traffic spikes.
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 80
+    spike_limit_percentage: 25
+
+exporters:
+  # -------------------------------------------------------------------------
+  # Grafana Tempo — OTLP/gRPC
+  # -------------------------------------------------------------------------
+  otlp/tempo:
+    endpoint: "${env:TEMPO_ENDPOINT}"        # e.g. tempo.monitoring.svc:4317
+    tls:
+      insecure: false
+      ca_file: /etc/otel/certs/ca.crt
+    headers:
+      authorization: "Bearer ${env:TEMPO_AUTH_TOKEN}"
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 300s
+    sending_queue:
+      enabled: true
+      num_consumers: 4
+      queue_size: 1000
+
+  # Forward metrics to Prometheus remote-write (Grafana Mimir / Cortex).
+  prometheusremotewrite:
+    endpoint: "${env:PROMETHEUS_REMOTE_WRITE_URL}"
+    tls:
+      insecure: false
+    headers:
+      authorization: "Bearer ${env:PROM_AUTH_TOKEN}"
+
+  # Debug exporter — disable in production by removing it from the pipelines.
+  logging:
+    verbosity: normal
+
+extensions:
+  health_check:
+    endpoint: "0.0.0.0:13133"
+  pprof:
+    endpoint: "0.0.0.0:1777"
+  zpages:
+    endpoint: "0.0.0.0:55679"
+
+service:
+  extensions: [health_check, pprof, zpages]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection, tail_sampling, batch]
+      exporters: [otlp/tempo]
+
+    metrics:
+      receivers: [otlp, hostmetrics]
+      processors: [memory_limiter, resourcedetection, batch]
+      exporters: [prometheusremotewrite]
+
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection, batch]
+      exporters: [otlp/tempo]
