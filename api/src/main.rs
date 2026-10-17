@@ -31,6 +31,7 @@ mod models;
 mod routes;
 mod services;
 pub mod storage;
+pub mod tracing;
 mod ws;
 
 use std::net::SocketAddr;
