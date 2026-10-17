@@ -1,3 +1,4 @@
+pub mod anonymizer;
 pub mod pii_scrubber;
 pub mod rate_limit;
 #[expect(
