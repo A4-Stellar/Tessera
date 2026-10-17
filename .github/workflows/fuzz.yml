@@ -47,7 +47,7 @@ env:
   ALL_TARGETS: >-
     ["asset_token","transfer_extremes","compliance","registry","dividend",
      "tax_withholding","cap_table","debt_token","bridge","vaults",
-     "cross_contract_invariants"]
+     "cross_contract_invariants","contract_fuzzer"]
 
 jobs:
   proptests:
