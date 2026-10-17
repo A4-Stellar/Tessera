@@ -1,0 +1,15 @@
+[package]
+name = "tessera-ast-scanner"
+version = "0.1.0"
+edition = "2021"
+description = "Soroban contract AST vulnerability scanner (Issue #299)"
+
+[[bin]]
+name = "ast-scanner"
+path = "ast_scanner.rs"
+
+[dependencies]
+syn = { version = "2", features = ["full", "visit"] }
+quote = "1"
+proc-macro2 = "1"
+walkdir = "2"

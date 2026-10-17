@@ -1,0 +1,6 @@
+(As0, As1, As2, As3, As4, As5, As6, As7, As8, As9, As10, As11, As12, As13)
+SerializeAs<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13)>
+(As0, As1, As2, As3, As4, As5, As6, As7, As8, As9, As10, As11, As12, As13, As14)
+SerializeAs<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14)>
+(As0, As1, As2, As3, As4, As5, As6, As7, As8, As9, As10, As11, As12, As13, As14, As15)
+SerializeAs<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15)>
