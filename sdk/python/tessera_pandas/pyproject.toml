@@ -1,0 +1,50 @@
+[build-system]
+requires = ["flit_core>=3.9,<4"]
+build-backend = "flit_core.buildapi"
+
+[project]
+name = "tessera-pandas"
+dynamic = ["version", "description"]
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+authors = [
+  { name = "Afolabi", email = "afolabiaderonke1995@gmail.com" },
+]
+keywords = ["stellar", "soroban", "rwa", "pandas", "pyarrow", "analytics"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Framework :: Pandas",
+  "Programming Language :: Python :: 3",
+  "Typing :: Typed",
+]
+dependencies = [
+  "pandas>=2.0,<3",
+  "pyarrow>=14,<18",
+  "tessera-sdk",
+]
+
+[project.optional-dependencies]
+test = [
+  "pytest>=8,<9",
+  "pytest-asyncio>=0.23,<2",
+  "ruff>=0.8,<1",
+]
+
+[project.urls]
+Repository = "https://github.com/A4-Stellar/Tessera"
+
+[tool.flit.module]
+name = "tessera_pandas"
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-config --strict-markers"
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["B", "E", "F", "I", "RUF", "SIM", "UP"]
