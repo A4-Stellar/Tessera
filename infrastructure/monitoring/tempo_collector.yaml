@@ -1,0 +1,340 @@
+# =============================================================================
+# Tessera — Multi-region trace ingestion into central Grafana Tempo (Issue #257)
+#
+# Apply this manifest unchanged to the Kubernetes cluster of EVERY region:
+#
+#   API pods ──OTLP──▶ otel-agent (DaemonSet, node-local)
+#                         │  load_balancing exporter, routed by trace ID
+#                         ▼
+#                      otel-gateway (Deployment, per region)
+#                         │  tail_sampling: 100% errors, 5% of the rest
+#                         ▼  OTLP/gRPC, gzip, TLS
+#                      central Grafana Tempo distributor
+#
+# Two tiers are required because tail sampling only works when every span of
+# a trace reaches the same collector; agents shard by trace ID so each trace
+# is buffered on exactly one gateway replica (O(T) memory for T in-flight
+# traces, bounded by num_traces).
+#
+# Per-region prerequisites (intentionally NOT defined here, so a cluster that
+# misses them fails to start instead of mislabelling or leaking traces):
+#
+#   kubectl -n observability create configmap otel-region \
+#     --from-literal=CLOUD_PROVIDER=aws --from-literal=CLOUD_REGION=us-east-1 \
+#     --from-literal=TEMPO_ENDPOINT=tempo-distributor.tessera.example:4317 \
+#     --from-literal=TEMPO_TENANT=tessera
+#   kubectl -n observability create secret generic tempo-auth \
+#     --from-literal=TEMPO_AUTH_TOKEN=<token accepted by the Tempo gateway>
+#
+# Instrumented workloads export to http://otel-agent.observability:4317
+# (gRPC) or :4318 (HTTP); internalTrafficPolicy: Local keeps that hop on-node.
+# =============================================================================
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: observability
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-agent-config
+  namespace: observability
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: ${env:MY_POD_IP}:4317
+          http:
+            endpoint: ${env:MY_POD_IP}:4318
+
+    processors:
+      memory_limiter:
+        check_interval: 1s
+        limit_percentage: 80
+        spike_limit_percentage: 25
+      # Stamp the origin region so Tempo/TraceQL can filter by it.
+      resource:
+        attributes:
+          - key: cloud.provider
+            value: ${env:CLOUD_PROVIDER}
+            action: upsert
+          - key: cloud.region
+            value: ${env:CLOUD_REGION}
+            action: upsert
+          - key: k8s.node.name
+            value: ${env:K8S_NODE_NAME}
+            action: upsert
+      batch:
+        timeout: 1s
+        send_batch_size: 1024
+        send_batch_max_size: 2048
+
+    exporters:
+      load_balancing:
+        routing_key: traceID
+        protocol:
+          otlp:
+            compression: gzip
+            timeout: 5s
+            tls:
+              insecure: true   # in-cluster hop; cross-region traffic is TLS below
+        resolver:
+          dns:
+            hostname: otel-gateway-headless.observability.svc.cluster.local
+            port: "4317"
+            interval: 5s
+            timeout: 1s
+
+    extensions:
+      health_check:
+        endpoint: ${env:MY_POD_IP}:13133
+
+    service:
+      extensions: [health_check]
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, resource, batch]
+          exporters: [load_balancing]
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-gateway-config
+  namespace: observability
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: ${env:MY_POD_IP}:4317
+
+    processors:
+      memory_limiter:
+        check_interval: 1s
+        limit_percentage: 80
+        spike_limit_percentage: 25
+
+      # Cost-optimised sampling. Policies are OR-ed: a trace is kept when any
+      # policy samples it. probabilistic hashes the trace ID, so the 5% cut
+      # is consistent across replicas and regions.
+      tail_sampling:
+        decision_wait: 10s
+        num_traces: 100000
+        expected_new_traces_per_sec: 1000
+        decision_cache:
+          sampled_cache_size: 100000
+          non_sampled_cache_size: 100000
+        policies:
+          - name: keep-all-errors
+            type: status_code
+            status_code:
+              status_codes: [ERROR]
+          - name: keep-all-http-5xx
+            type: numeric_attribute
+            numeric_attribute:
+              key: http.response.status_code
+              min_value: 500
+              max_value: 599
+          - name: keep-5pct-of-successful
+            type: probabilistic
+            probabilistic:
+              sampling_percentage: 5
+
+      batch:
+        timeout: 2s
+        send_batch_size: 2048
+        send_batch_max_size: 4096
+
+    exporters:
+      otlp_grpc/tempo:
+        endpoint: ${env:TEMPO_ENDPOINT}
+        compression: gzip
+        tls:
+          insecure: false
+        headers:
+          authorization: Bearer ${env:TEMPO_AUTH_TOKEN}
+          X-Scope-OrgID: ${env:TEMPO_TENANT}
+        timeout: 10s
+        retry_on_failure:
+          enabled: true
+          initial_interval: 1s
+          max_interval: 30s
+          max_elapsed_time: 300s
+        sending_queue:
+          enabled: true
+          num_consumers: 10
+          queue_size: 5000
+
+    extensions:
+      health_check:
+        endpoint: ${env:MY_POD_IP}:13133
+
+    service:
+      extensions: [health_check]
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, tail_sampling, batch]
+          exporters: [otlp_grpc/tempo]
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: otel-collector
+  namespace: observability
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: otel-agent
+  namespace: observability
+  labels: { app.kubernetes.io/name: otel-agent, app.kubernetes.io/part-of: tessera-tracing }
+spec:
+  selector:
+    matchLabels: { app.kubernetes.io/name: otel-agent }
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 1 }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: otel-agent, app.kubernetes.io/part-of: tessera-tracing }
+    spec:
+      serviceAccountName: otel-collector
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: otel-agent
+          image: otel/opentelemetry-collector-contrib:0.162.0
+          args: ["--config=/conf/config.yaml"]
+          env:
+            - name: MY_POD_IP
+              valueFrom: { fieldRef: { fieldPath: status.podIP } }
+            - name: K8S_NODE_NAME
+              valueFrom: { fieldRef: { fieldPath: spec.nodeName } }
+            - name: GOMEMLIMIT
+              value: "400MiB"
+          envFrom:
+            - configMapRef: { name: otel-region }
+          ports:
+            - { name: otlp-grpc, containerPort: 4317, protocol: TCP }
+            - { name: otlp-http, containerPort: 4318, protocol: TCP }
+            - { name: health, containerPort: 13133, protocol: TCP }
+          readinessProbe:
+            httpGet: { path: /, port: health }
+          livenessProbe:
+            httpGet: { path: /, port: health }
+            initialDelaySeconds: 10
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { memory: 512Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: config, mountPath: /conf, readOnly: true }
+      volumes:
+        - name: config
+          configMap: { name: otel-agent-config }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-agent
+  namespace: observability
+spec:
+  selector: { app.kubernetes.io/name: otel-agent }
+  internalTrafficPolicy: Local
+  ports:
+    - { name: otlp-grpc, port: 4317, targetPort: otlp-grpc, protocol: TCP }
+    - { name: otlp-http, port: 4318, targetPort: otlp-http, protocol: TCP }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-gateway
+  namespace: observability
+  labels: { app.kubernetes.io/name: otel-gateway, app.kubernetes.io/part-of: tessera-tracing }
+spec:
+  replicas: 3
+  selector:
+    matchLabels: { app.kubernetes.io/name: otel-gateway }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: otel-gateway, app.kubernetes.io/part-of: tessera-tracing }
+    spec:
+      serviceAccountName: otel-collector
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile: { type: RuntimeDefault }
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: { app.kubernetes.io/name: otel-gateway }
+      # Let in-flight traces finish decision_wait (10s) and flush before exit.
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: otel-gateway
+          image: otel/opentelemetry-collector-contrib:0.162.0
+          args: ["--config=/conf/config.yaml"]
+          env:
+            - name: MY_POD_IP
+              valueFrom: { fieldRef: { fieldPath: status.podIP } }
+            - name: GOMEMLIMIT
+              value: "1600MiB"
+          envFrom:
+            - configMapRef: { name: otel-region }
+            - secretRef: { name: tempo-auth }
+          ports:
+            - { name: otlp-grpc, containerPort: 4317, protocol: TCP }
+            - { name: health, containerPort: 13133, protocol: TCP }
+          readinessProbe:
+            httpGet: { path: /, port: health }
+          livenessProbe:
+            httpGet: { path: /, port: health }
+            initialDelaySeconds: 10
+          resources:
+            requests: { cpu: 500m, memory: 1Gi }
+            limits: { memory: 2Gi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: config, mountPath: /conf, readOnly: true }
+      volumes:
+        - name: config
+          configMap: { name: otel-gateway-config }
+---
+# Headless: the agents' DNS resolver needs every gateway pod IP to build its
+# consistent-hash ring, not a single load-balanced virtual IP.
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-gateway-headless
+  namespace: observability
+spec:
+  clusterIP: None
+  selector: { app.kubernetes.io/name: otel-gateway }
+  ports:
+    - { name: otlp-grpc, port: 4317, targetPort: otlp-grpc, protocol: TCP }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: otel-gateway
+  namespace: observability
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels: { app.kubernetes.io/name: otel-gateway }
