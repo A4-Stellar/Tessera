@@ -9,6 +9,8 @@ use axum::{
 use async_graphql_axum::{GraphQLRequest, GraphQLResponse, GraphQLSubscription};
 use serde::{Deserialize, Serialize};
 
+pub mod complexity;
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Asset {
     pub id: String,
@@ -169,7 +171,9 @@ async fn graphiql() -> axum::response::Html<String> {
 }
 
 pub fn create_graphql_router() -> Router {
-    let schema = Schema::build(QueryRoot, EmptyMutation, SubscriptionRoot).finish();
+    let schema =
+        complexity::apply_limits(Schema::build(QueryRoot, EmptyMutation, SubscriptionRoot))
+            .finish();
 
     Router::new()
         .route("/graphql", get(graphiql).post(graphql_handler))

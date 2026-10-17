@@ -19,6 +19,14 @@
 pub mod archive;
 pub mod diagnostics;
 pub mod dlq;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "fork detection is staged until the indexer poll loop reports ledger hashes"
+    )
+)]
+pub mod fork_detector;
 pub mod nav_calculator;
 pub mod price_feed;
 pub mod pulsar_producer;
