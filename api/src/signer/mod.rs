@@ -7,6 +7,7 @@
 //! [`kms`] for the HSM / AWS KMS signing path.
 
 pub mod kms;
+pub mod kms_adapter;
 
 pub use kms::{
     ed25519_public_key_from_spki, envelope_digest, network_id, AwsCredentials, AwsKmsClient,
