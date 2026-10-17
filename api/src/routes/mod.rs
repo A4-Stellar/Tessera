@@ -30,8 +30,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::middleware::rate_limit::{
-    rate_limit_middleware, MemoryRateLimiter, RateLimitState, RedisRateLimiter,
+use crate::middleware::token_bucket::{
+    token_bucket_middleware, BucketStore, MemoryBucketStore, RedisBucketStore, Tier,
+    TokenBucketState,
 };
 use axum::{
     body::Body,
@@ -109,17 +110,24 @@ pub fn router(state: AppState) -> Router {
     let per_second = env_value("RWA_RATE_LIMIT_PER_SECOND", RATE_LIMIT_PER_SECOND);
     let burst = env_value("RWA_RATE_LIMIT_BURST", RATE_LIMIT_BURST);
 
-    // Rate limiter allows switching between memory and Redis
-    let limiter: Arc<dyn crate::middleware::rate_limit::RateLimiter> =
+    // Token bucket: `burst` is the capacity, `per_second` the refill rate.
+    // Specific API keys can get their own tier via `RWA_API_KEY_TIERS`
+    // (`key=capacity:refill_per_second,...`). Redis-backed when configured.
+    let store: Arc<dyn BucketStore> =
         if let Ok(redis_url) = std::env::var("RWA_RATE_LIMIT_REDIS_URL") {
-            Arc::new(RedisRateLimiter::new(&redis_url).expect("failed to connect to Redis"))
+            Arc::new(RedisBucketStore::new(&redis_url).expect("failed to connect to Redis"))
         } else {
-            Arc::new(MemoryRateLimiter::new(per_second, burst))
+            Arc::new(MemoryBucketStore::default())
         };
-    let rate_limit_state = Arc::new(RateLimitState {
-        limiter,
-        limit: burst as u64,
-        window: (burst as u64).max(1) / per_second.max(1), // simple approximation for window if needed by Redis
+    let token_bucket_state = Arc::new(TokenBucketState {
+        store,
+        default_tier: Tier {
+            capacity: burst,
+            refill_per_second: per_second as u32,
+        },
+        api_key_tiers: TokenBucketState::parse_api_key_tiers(
+            &std::env::var("RWA_API_KEY_TIERS").unwrap_or_default(),
+        ),
     });
 
     // Snapshot-backed endpoints: cacheable and safe to answer with 304 when
@@ -186,8 +194,8 @@ pub fn router(state: AppState) -> Router {
             MAX_BODY_BYTES,
         )))
         .layer(middleware::from_fn_with_state(
-            rate_limit_state,
-            rate_limit_middleware,
+            token_bucket_state,
+            token_bucket_middleware,
         ))
         .layer(cors)
         // Outermost: scrub PII from every JSON/text response (issue #103).

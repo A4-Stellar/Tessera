@@ -6,6 +6,8 @@
 
 use sha2::{Digest, Sha256};
 
+pub mod pubsub_invalidator;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CachePolicy {
     pub ttl_seconds: u64,
