@@ -1,0 +1,2 @@
+# Only required when FAILOVER_DNS_PROVIDER=route53; the Cloudflare path is stdlib-only.
+boto3>=1.34,<2
