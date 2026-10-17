@@ -26,6 +26,14 @@ mod cluster;
 mod db;
 mod healthcheck;
 mod indexer;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the encrypted log exporter is staged until the log shipping sink is wired up"
+    )
+)]
+mod logging;
 mod middleware;
 mod models;
 mod routes;
