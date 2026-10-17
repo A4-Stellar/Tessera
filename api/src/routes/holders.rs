@@ -21,6 +21,9 @@ pub struct HolderQuery {
     /// Limit the number of holders returned. Defaults to 50 and is capped at 100.
     #[serde(default)]
     pub limit: Option<usize>,
+    /// Rebuild holders as of this ledger sequence instead of the latest.
+    #[serde(default)]
+    pub at_ledger: Option<u32>,
 }
 
 /// Holder list for an asset, sorted by balance descending.
@@ -30,16 +33,21 @@ pub async fn list(
     Query(query): Query<HolderQuery>,
 ) -> Result<Json<Vec<Holder>>, ApiError> {
     let snap = state.snapshot();
-    if snap.asset(id).is_none() {
+    let Some(asset) = snap.asset(id) else {
         return Err(ApiError::NotFound(format!("no asset with id {id}")));
-    }
+    };
     let offset = query.offset.unwrap_or(0);
     let limit = query.limit.unwrap_or(DEFAULT_PAGE_SIZE).min(MAX_PAGE_SIZE);
-    let holders = snap
-        .holders
-        .get(&id)
-        .cloned()
-        .unwrap_or_default()
+    let all = match query.at_ledger {
+        Some(ledger) => super::time_travel::holders_at(
+            &snap.events,
+            &asset.token_contract,
+            &asset.total_supply,
+            ledger,
+        ),
+        None => snap.holders.get(&id).cloned().unwrap_or_default(),
+    };
+    let holders = all
         .into_iter()
         .skip(offset)
         .take(limit)
@@ -133,6 +141,7 @@ mod tests {
             Query(HolderQuery {
                 offset: None,
                 limit: None,
+                at_ledger: None,
             }),
         )
         .await
@@ -153,6 +162,7 @@ mod tests {
             Query(HolderQuery {
                 offset: None,
                 limit: None,
+                at_ledger: None,
             }),
         )
         .await
@@ -194,6 +204,7 @@ mod tests {
             Query(HolderQuery {
                 offset: Some(1),
                 limit: Some(2),
+                at_ledger: None,
             }),
         )
         .await
