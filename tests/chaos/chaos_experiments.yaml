@@ -1,0 +1,225 @@
+# Chaos Mesh Fault Injection Suite — Issue #211
+#
+# Automated chaos engineering manifests verifying Tessera API resilience under:
+# - Network Latency (200ms - 2000ms)
+# - Packet Drop (10%)
+# - Pod Kill (random replica termination)
+# - Soroban RPC Outage (HTTP 503 abort)
+# - Database Master Crash (PostgreSQL primary failover)
+
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: network-delay-200ms-2000ms
+  namespace: tessera-chaos
+  labels:
+    app.kubernetes.io/part-of: tessera
+    chaos.tessera.finance/experiment: network-delay
+spec:
+  action: delay
+  mode: all
+  selector:
+    namespaces:
+      - tessera-system
+    labelSelectors:
+      app.kubernetes.io/name: tessera-api
+  delay:
+    latency: '500ms'
+    jitter: '1500ms'
+    correlation: '50'
+  direction: to
+  target:
+    mode: all
+    selector:
+      namespaces:
+        - tessera-system
+      labelSelectors:
+        app.kubernetes.io/name: soroban-rpc
+  duration: '5m'
+  scheduler:
+    cron: '@every 1h'
+
+---
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: packet-drop-10pct
+  namespace: tessera-chaos
+  labels:
+    app.kubernetes.io/part-of: tessera
+    chaos.tessera.finance/experiment: packet-loss
+spec:
+  action: loss
+  mode: all
+  selector:
+    namespaces:
+      - tessera-system
+    labelSelectors:
+      app.kubernetes.io/name: tessera-api
+  loss:
+    loss: '10'
+    correlation: '25'
+  direction: both
+  duration: '5m'
+  scheduler:
+    cron: '@every 1h'
+
+---
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: pod-kill-api-instances
+  namespace: tessera-chaos
+  labels:
+    app.kubernetes.io/part-of: tessera
+    chaos.tessera.finance/experiment: pod-kill
+spec:
+  action: pod-kill
+  mode: fixed-percent
+  value: '33'
+  selector:
+    namespaces:
+      - tessera-system
+    labelSelectors:
+      app.kubernetes.io/name: tessera-api
+  gracePeriod: 0
+  duration: '3m'
+  scheduler:
+    cron: '@every 2h'
+
+---
+apiVersion: chaos-mesh.org/v1alpha1
+kind: HTTPChaos
+metadata:
+  name: rpc-outage-503-simulation
+  namespace: tessera-chaos
+  labels:
+    app.kubernetes.io/part-of: tessera
+    chaos.tessera.finance/experiment: rpc-outage
+spec:
+  mode: all
+  selector:
+    namespaces:
+      - tessera-system
+    labelSelectors:
+      app.kubernetes.io/name: tessera-api
+  target: Request
+  port: 443
+  path: '/simulateTransaction*'
+  method: POST
+  abort: true
+  code: 503
+  duration: '4m'
+
+---
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: db-master-crash-failover
+  namespace: tessera-chaos
+  labels:
+    app.kubernetes.io/part-of: tessera
+    chaos.tessera.finance/experiment: db-crash
+spec:
+  action: pod-kill
+  mode: one
+  selector:
+    namespaces:
+      - tessera-system
+    labelSelectors:
+      app.kubernetes.io/name: postgresql-primary
+  gracePeriod: 0
+  duration: '3m'
+
+---
+apiVersion: chaos-mesh.org/v1alpha1
+kind: Workflow
+metadata:
+  name: tessera-resilience-validation-pipeline
+  namespace: tessera-chaos
+spec:
+  entry: the-entry
+  templates:
+    - name: the-entry
+      templateType: Serial
+      children:
+        - phase-baseline-check
+        - phase-network-delay
+        - phase-packet-drop
+        - phase-pod-kill
+        - phase-rpc-outage
+        - phase-db-crash
+        - phase-post-recovery
+    - name: phase-baseline-check
+      templateType: Task
+      task:
+        container:
+          name: health-probe
+          image: curlimages/curl:latest
+          command: ["curl", "-f", "http://tessera-api.tessera-system.svc:8080/health"]
+    - name: phase-network-delay
+      templateType: Chaos
+      chaos:
+        networkChaos:
+          action: delay
+          mode: all
+          selector:
+            labelSelectors:
+              app.kubernetes.io/name: tessera-api
+          delay:
+            latency: '500ms'
+            jitter: '1500ms'
+          duration: '3m'
+    - name: phase-packet-drop
+      templateType: Chaos
+      chaos:
+        networkChaos:
+          action: loss
+          mode: all
+          selector:
+            labelSelectors:
+              app.kubernetes.io/name: tessera-api
+          loss:
+            loss: '10'
+          duration: '3m'
+    - name: phase-pod-kill
+      templateType: Chaos
+      chaos:
+        podChaos:
+          action: pod-kill
+          mode: fixed-percent
+          value: '33'
+          selector:
+            labelSelectors:
+              app.kubernetes.io/name: tessera-api
+          gracePeriod: 0
+    - name: phase-rpc-outage
+      templateType: Chaos
+      chaos:
+        httpChaos:
+          mode: all
+          selector:
+            labelSelectors:
+              app.kubernetes.io/name: tessera-api
+          target: Request
+          path: '/simulateTransaction*'
+          abort: true
+          code: 503
+          duration: '3m'
+    - name: phase-db-crash
+      templateType: Chaos
+      chaos:
+        podChaos:
+          action: pod-kill
+          mode: one
+          selector:
+            labelSelectors:
+              app.kubernetes.io/name: postgresql-primary
+          gracePeriod: 0
+    - name: phase-post-recovery
+      templateType: Task
+      task:
+        container:
+          name: recovery-verification
+          image: curlimages/curl:latest
+          command: ["curl", "-f", "http://tessera-api.tessera-system.svc:8080/stats"]

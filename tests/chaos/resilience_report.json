@@ -1,0 +1,90 @@
+{
+  "timestamp": 1792247775.4183118,
+  "target_url": "http://localhost:8080",
+  "overall_score": 99.2,
+  "grade": "A+",
+  "passed": true,
+  "scenarios": [
+    {
+      "scenario": "baseline",
+      "total_probes": 20,
+      "successful_probes": 20,
+      "availability_pct": 100.0,
+      "avg_latency_ms": 12.0,
+      "p95_latency_ms": 12.0,
+      "p99_latency_ms": 12.0,
+      "fallback_success_rate_pct": 0.0,
+      "resilience_score": 100.0,
+      "passed": true,
+      "notes": "Availability: 100.0%, p95: 12.0ms, Fallback rate: 0.0%"
+    },
+    {
+      "scenario": "network_delay_200ms_2000ms",
+      "total_probes": 20,
+      "successful_probes": 20,
+      "availability_pct": 100.0,
+      "avg_latency_ms": 902.0,
+      "p95_latency_ms": 1892.0,
+      "p99_latency_ms": 1892.0,
+      "fallback_success_rate_pct": 0.0,
+      "resilience_score": 95.0,
+      "passed": true,
+      "notes": "Availability: 100.0%, p95: 1892.0ms, Fallback rate: 0.0%"
+    },
+    {
+      "scenario": "packet_drop_10pct",
+      "total_probes": 20,
+      "successful_probes": 20,
+      "availability_pct": 100.0,
+      "avg_latency_ms": 27.0,
+      "p95_latency_ms": 162.0,
+      "p99_latency_ms": 162.0,
+      "fallback_success_rate_pct": 10.0,
+      "resilience_score": 100.0,
+      "passed": true,
+      "notes": "Availability: 100.0%, p95: 162.0ms, Fallback rate: 10.0%"
+    },
+    {
+      "scenario": "pod_kill_api_instances",
+      "total_probes": 20,
+      "successful_probes": 20,
+      "availability_pct": 100.0,
+      "avg_latency_ms": 37.0,
+      "p95_latency_ms": 37.0,
+      "p99_latency_ms": 37.0,
+      "fallback_success_rate_pct": 0.0,
+      "resilience_score": 100.0,
+      "passed": true,
+      "notes": "Availability: 100.0%, p95: 37.0ms, Fallback rate: 0.0%"
+    },
+    {
+      "scenario": "rpc_outage_503_simulation",
+      "total_probes": 20,
+      "successful_probes": 20,
+      "availability_pct": 100.0,
+      "avg_latency_ms": 17.0,
+      "p95_latency_ms": 17.0,
+      "p99_latency_ms": 17.0,
+      "fallback_success_rate_pct": 65.0,
+      "resilience_score": 100.0,
+      "passed": true,
+      "notes": "Availability: 100.0%, p95: 17.0ms, Fallback rate: 65.0%"
+    },
+    {
+      "scenario": "db_master_crash_failover",
+      "total_probes": 20,
+      "successful_probes": 20,
+      "availability_pct": 100.0,
+      "avg_latency_ms": 57.0,
+      "p95_latency_ms": 57.0,
+      "p99_latency_ms": 57.0,
+      "fallback_success_rate_pct": 100.0,
+      "resilience_score": 100.0,
+      "passed": true,
+      "notes": "Availability: 100.0%, p95: 57.0ms, Fallback rate: 100.0%"
+    }
+  ],
+  "recommendations": [
+    "Optimize timeout limits under network_delay_200ms_2000ms: p95 reached 1892.0ms"
+  ]
+}

@@ -1,0 +1,271 @@
+{
+  "timestamp": "2026-10-17T14:39:47.014653+00:00",
+  "observation_period_days": 14.0,
+  "total_containers_analyzed": 4,
+  "idle_containers": 1,
+  "overprovisioned_containers": 1,
+  "well_sized_containers": 1,
+  "underprovisioned_containers": 1,
+  "current_total_monthly_cost_usd": 132.86,
+  "recommended_total_monthly_cost_usd": 34.74,
+  "total_monthly_savings_usd": 98.12,
+  "overall_savings_percentage": 73.9,
+  "workloads": [
+    {
+      "namespace": "tessera-system",
+      "workload_name": "tessera-api",
+      "container_name": "tessera-api",
+      "status": "SEVERELY_OVERPROVISIONED",
+      "current_resources": {
+        "cpu_request": "2000m",
+        "cpu_limit": "4000m",
+        "memory_request": "4Gi",
+        "memory_limit": "8Gi"
+      },
+      "recommended_resources": {
+        "cpu_request": "270m",
+        "cpu_limit": "400m",
+        "memory_request": "624Mi",
+        "memory_limit": "784Mi"
+      },
+      "cpu_metrics": {
+        "mean_cores": 0.1506,
+        "p50_cores": 0.1507,
+        "p90_cores": 0.2263,
+        "p95_cores": 0.2289,
+        "p99_cores": 0.23,
+        "max_cores": 0.28
+      },
+      "memory_metrics": {
+        "mean_mib": 487.81,
+        "p50_mib": 494.49,
+        "p90_mib": 518.95,
+        "p95_mib": 519.71,
+        "p99_mib": 519.99,
+        "max_mib": 519.99
+      },
+      "current_monthly_cost_usd": 72.08,
+      "recommended_monthly_cost_usd": 9.76,
+      "monthly_savings_usd": 62.32,
+      "savings_percentage": 86.5,
+      "recommendations": [
+        "Container is SEVERELY_OVERPROVISIONED: Downscale CPU from 2000m to 270m and RAM from 4Gi to 624Mi to save $62.32/mo (86%)."
+      ],
+      "kubernetes_patch": {
+        "spec": {
+          "template": {
+            "spec": {
+              "containers": [
+                {
+                  "name": "tessera-api",
+                  "resources": {
+                    "requests": {
+                      "cpu": "270m",
+                      "memory": "624Mi"
+                    },
+                    "limits": {
+                      "cpu": "400m",
+                      "memory": "784Mi"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "namespace": "tessera-system",
+      "workload_name": "channel-node",
+      "container_name": "channel-node",
+      "status": "WELL_SIZED",
+      "current_resources": {
+        "cpu_request": "500m",
+        "cpu_limit": "1000m",
+        "memory_request": "1Gi",
+        "memory_limit": "2Gi"
+      },
+      "recommended_resources": {
+        "cpu_request": "460m",
+        "cpu_limit": "690m",
+        "memory_request": "960Mi",
+        "memory_limit": "1200Mi"
+      },
+      "cpu_metrics": {
+        "mean_cores": 0.3506,
+        "p50_cores": 0.3512,
+        "p90_cores": 0.3977,
+        "p95_cores": 0.3994,
+        "p99_cores": 0.4,
+        "max_cores": 0.4
+      },
+      "memory_metrics": {
+        "mean_mib": 750.58,
+        "p50_mib": 751.12,
+        "p90_mib": 797.68,
+        "p95_mib": 799.43,
+        "p99_mib": 799.97,
+        "max_mib": 800.0
+      },
+      "current_monthly_cost_usd": 18.02,
+      "recommended_monthly_cost_usd": 16.61,
+      "monthly_savings_usd": 1.41,
+      "savings_percentage": 7.8,
+      "recommendations": [
+        "Resource requests and limits are well-aligned with historical 14-day traffic patterns."
+      ],
+      "kubernetes_patch": {
+        "spec": {
+          "template": {
+            "spec": {
+              "containers": [
+                {
+                  "name": "channel-node",
+                  "resources": {
+                    "requests": {
+                      "cpu": "460m",
+                      "memory": "960Mi"
+                    },
+                    "limits": {
+                      "cpu": "690m",
+                      "memory": "1200Mi"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "namespace": "tessera-system",
+      "workload_name": "mpc-signer",
+      "container_name": "mpc-signer",
+      "status": "IDLE",
+      "current_resources": {
+        "cpu_request": "1000m",
+        "cpu_limit": "2000m",
+        "memory_request": "2Gi",
+        "memory_limit": "4Gi"
+      },
+      "recommended_resources": {
+        "cpu_request": "20m",
+        "cpu_limit": "30m",
+        "memory_request": "64Mi",
+        "memory_limit": "80Mi"
+      },
+      "cpu_metrics": {
+        "mean_cores": 0.0101,
+        "p50_cores": 0.0101,
+        "p90_cores": 0.0148,
+        "p95_cores": 0.0149,
+        "p99_cores": 0.015,
+        "max_cores": 0.015
+      },
+      "memory_metrics": {
+        "mean_mib": 44.93,
+        "p50_mib": 44.86,
+        "p90_mib": 49.75,
+        "p95_mib": 49.93,
+        "p99_mib": 50.0,
+        "max_mib": 50.0
+      },
+      "current_monthly_cost_usd": 36.04,
+      "recommended_monthly_cost_usd": 0.79,
+      "monthly_savings_usd": 35.25,
+      "savings_percentage": 97.8,
+      "recommendations": [
+        "Container is IDLE: Downscale CPU from 1000m to 20m and RAM from 2Gi to 64Mi to save $35.25/mo (98%)."
+      ],
+      "kubernetes_patch": {
+        "spec": {
+          "template": {
+            "spec": {
+              "containers": [
+                {
+                  "name": "mpc-signer",
+                  "resources": {
+                    "requests": {
+                      "cpu": "20m",
+                      "memory": "64Mi"
+                    },
+                    "limits": {
+                      "cpu": "30m",
+                      "memory": "80Mi"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "namespace": "tessera-system",
+      "workload_name": "synthetic-monitor",
+      "container_name": "probe-worker",
+      "status": "UNDERPROVISIONED",
+      "current_resources": {
+        "cpu_request": "200m",
+        "cpu_limit": "200m",
+        "memory_request": "256Mi",
+        "memory_limit": "256Mi"
+      },
+      "recommended_resources": {
+        "cpu_request": "230m",
+        "cpu_limit": "340m",
+        "memory_request": "304Mi",
+        "memory_limit": "384Mi"
+      },
+      "cpu_metrics": {
+        "mean_cores": 0.1801,
+        "p50_cores": 0.1801,
+        "p90_cores": 0.1943,
+        "p95_cores": 0.1948,
+        "p99_cores": 0.195,
+        "max_cores": 0.195
+      },
+      "memory_metrics": {
+        "mean_mib": 245.05,
+        "p50_mib": 245.12,
+        "p90_mib": 252.61,
+        "p95_mib": 252.9,
+        "p99_mib": 253.0,
+        "max_mib": 253.0
+      },
+      "current_monthly_cost_usd": 6.72,
+      "recommended_monthly_cost_usd": 7.58,
+      "monthly_savings_usd": 0.0,
+      "savings_percentage": 0.0,
+      "recommendations": [
+        "High utilization / throttling risk: Increase limits to 340m CPU and 384Mi RAM to ensure headroom."
+      ],
+      "kubernetes_patch": {
+        "spec": {
+          "template": {
+            "spec": {
+              "containers": [
+                {
+                  "name": "probe-worker",
+                  "resources": {
+                    "requests": {
+                      "cpu": "230m",
+                      "memory": "304Mi"
+                    },
+                    "limits": {
+                      "cpu": "340m",
+                      "memory": "384Mi"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  ]
+}
