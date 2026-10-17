@@ -1758,6 +1758,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "tessera-confidential-token"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "tessera-dividend"
 version = "0.1.0"
 dependencies = [
@@ -1767,11 +1774,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "tessera-nft-deed"
+name = "tessera-index-token"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",
- "tessera-common",
 ]
 
 [[package]]
@@ -1780,6 +1786,13 @@ version = "0.1.0"
 dependencies = [
  "soroban-sdk",
  "tessera-common",
+]
+
+[[package]]
+name = "tessera-state-channel"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
 ]
 
 [[package]]
