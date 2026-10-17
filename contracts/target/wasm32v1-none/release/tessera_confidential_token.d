@@ -1,1 +1,0 @@
-/Users/mac/Documents/OPEN\ SOURCE/Tessera/contracts/target/wasm32v1-none/release/tessera_confidential_token.wasm: /Users/mac/Documents/OPEN\ SOURCE/Tessera/contracts/confidential-token/src/bulletproofs.rs /Users/mac/Documents/OPEN\ SOURCE/Tessera/contracts/confidential-token/src/lib.rs /Users/mac/Documents/OPEN\ SOURCE/Tessera/contracts/confidential-token/src/pedersen.rs

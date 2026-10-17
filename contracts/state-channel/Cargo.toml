@@ -1,0 +1,16 @@
+[package]
+name = "tessera-state-channel"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+description = "Tessera Layer-2 state channel contract for high-frequency micropayments with timelocked dispute resolution."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+soroban-sdk = { workspace = true }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
