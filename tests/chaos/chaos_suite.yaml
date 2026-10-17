@@ -1,0 +1,99 @@
+# Chaos Mesh experiments for the Tessera API (issue #314).
+#
+# Assumes the API runs in namespace `tessera` with pods labelled
+# `app.kubernetes.io/name: tessera-api` (adjust the selectors to your
+# deployment). Run with tests/chaos/run_chaos.sh, which applies each
+# experiment in turn, probes the API while it is active and writes a scorecard.
+# Each experiment carries `tessera.dev/chaos: "true"` so it can be listed and
+# cleaned up with `kubectl delete -n tessera -l tessera.dev/chaos=true ...`.
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: network-delay-500ms
+  namespace: tessera
+  labels: {tessera.dev/chaos: "true"}
+spec:
+  action: delay
+  mode: all
+  selector:
+    namespaces: [tessera]
+    labelSelectors: {app.kubernetes.io/name: tessera-api}
+  delay: {latency: 500ms, jitter: 100ms, correlation: "50"}
+  duration: 60s
+---
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: network-delay-2000ms
+  namespace: tessera
+  labels: {tessera.dev/chaos: "true"}
+spec:
+  action: delay
+  mode: all
+  selector:
+    namespaces: [tessera]
+    labelSelectors: {app.kubernetes.io/name: tessera-api}
+  delay: {latency: 2000ms, jitter: 200ms, correlation: "50"}
+  duration: 60s
+---
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: packet-loss-15pct
+  namespace: tessera
+  labels: {tessera.dev/chaos: "true"}
+spec:
+  action: loss
+  mode: all
+  selector:
+    namespaces: [tessera]
+    labelSelectors: {app.kubernetes.io/name: tessera-api}
+  loss: {loss: "15", correlation: "25"}
+  duration: 60s
+---
+# RPC failure: every call to the Soroban RPC port is dropped.
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: rpc-failure
+  namespace: tessera
+  labels: {tessera.dev/chaos: "true"}
+spec:
+  action: partition
+  mode: all
+  selector:
+    namespaces: [tessera]
+    labelSelectors: {app.kubernetes.io/name: tessera-api}
+  direction: to
+  externalTargets: ["soroban-testnet.stellar.org"]
+  duration: 60s
+---
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: pod-kill
+  namespace: tessera
+  labels: {tessera.dev/chaos: "true"}
+spec:
+  action: pod-kill
+  mode: one
+  selector:
+    namespaces: [tessera]
+    labelSelectors: {app.kubernetes.io/name: tessera-api}
+---
+# Node failure: Chaos Mesh cannot power off a node, so one API pod is made
+# unavailable for the whole window, which is what a lost node looks like to
+# clients.
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: node-failure
+  namespace: tessera
+  labels: {tessera.dev/chaos: "true"}
+spec:
+  action: pod-failure
+  mode: one
+  selector:
+    namespaces: [tessera]
+    labelSelectors: {app.kubernetes.io/name: tessera-api}
+  duration: 60s

@@ -190,6 +190,10 @@ pub fn router(state: AppState) -> Router {
             rate_limit_middleware,
         ))
         .layer(cors)
+        // Drop named personal-data fields for non-admin callers (issue #284).
+        .layer(middleware::from_fn(
+            crate::middleware::anonymizer::anonymizer_middleware,
+        ))
         // Outermost: scrub PII from every JSON/text response (issue #103).
         .layer(middleware::from_fn(
             crate::middleware::pii_scrubber::pii_scrub_middleware,

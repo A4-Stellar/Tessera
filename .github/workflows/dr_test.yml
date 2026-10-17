@@ -2,8 +2,8 @@ name: Disaster Recovery Verification
 
 on:
   schedule:
-    # Every Sunday at 02:00 UTC
-    - cron: "0 2 * * 0"
+    # Every day at 02:00 UTC
+    - cron: "0 2 * * *"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -144,9 +144,9 @@ jobs:
       # -----------------------------------------------------------------------
       - name: Run DR test pipeline
         run: |
-          chmod +x infrastructure/scripts/dr_test.sh
+          chmod +x infrastructure/scripts/dr_test.sh infrastructure/dr/restore_verification.sh
           PRODUCTION_BASELINE=/tmp/baseline.json \
-          infrastructure/scripts/dr_test.sh
+          infrastructure/dr/restore_verification.sh
 
       # -----------------------------------------------------------------------
       # Publish results
