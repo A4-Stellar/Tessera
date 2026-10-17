@@ -1,0 +1,590 @@
+//! Automated Edge CDN Cache Invalidation Controller (Issue #311).
+//!
+//! Intercepts on-chain ledger update events (asset parameter changes, cap-table
+//! snapshots, dividend distributions) and sends batched, rate-limited purge
+//! requests to Cloudflare and Fastly edge CDN APIs for `/v1/assets/:id/*`.
+
+use std::{
+    collections::HashSet,
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
+
+use reqwest::{header, StatusCode};
+use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc;
+use tracing::{debug, error, info, warn};
+
+/// Target CDN API Providers
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CdnProvider {
+    Cloudflare,
+    Fastly,
+    Both,
+    Mock,
+}
+
+/// On-chain update events that trigger edge cache invalidations
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OnChainUpdateEvent {
+    /// Asset metadata or valuation updated in registry or asset-token contract.
+    AssetUpdated {
+        asset_id: String,
+        ledger_sequence: u32,
+    },
+    /// Cap-table snapshot published on-chain.
+    CapTableUpdated {
+        asset_id: String,
+        snapshot_id: u64,
+        ledger_sequence: u32,
+    },
+    /// Dividend distribution funded or claimed.
+    DividendDistributed {
+        asset_id: String,
+        distribution_id: u64,
+        ledger_sequence: u32,
+    },
+    /// Compliance allowlist or KYC status changed.
+    ComplianceUpdated {
+        asset_id: String,
+        address: String,
+        ledger_sequence: u32,
+    },
+}
+
+impl OnChainUpdateEvent {
+    /// Return the primary asset ID associated with this event.
+    pub fn asset_id(&self) -> &str {
+        match self {
+            Self::AssetUpdated { asset_id, .. } => asset_id,
+            Self::CapTableUpdated { asset_id, .. } => asset_id,
+            Self::DividendDistributed { asset_id, .. } => asset_id,
+            Self::ComplianceUpdated { asset_id, .. } => asset_id,
+        }
+    }
+
+    /// Return the ledger sequence at which this update occurred.
+    pub fn ledger_sequence(&self) -> u32 {
+        match self {
+            Self::AssetUpdated { ledger_sequence, .. } => *ledger_sequence,
+            Self::CapTableUpdated { ledger_sequence, .. } => *ledger_sequence,
+            Self::DividendDistributed { ledger_sequence, .. } => *ledger_sequence,
+            Self::ComplianceUpdated { ledger_sequence, .. } => *ledger_sequence,
+        }
+    }
+
+    /// Generate the targeted URL paths for `/v1/assets/:id/*` and dependent endpoints.
+    pub fn target_paths(&self) -> Vec<String> {
+        let id = self.asset_id();
+        match self {
+            Self::AssetUpdated { .. } => vec![
+                format!("/v1/assets/{}", id),
+                format!("/v1/assets/{}/holders", id),
+                format!("/v1/assets/{}/compliance", id),
+                format!("/v1/assets/{}/dividends", id),
+                "/v1/assets".to_string(),
+                "/v1/stats".to_string(),
+            ],
+            Self::CapTableUpdated { .. } => vec![
+                format!("/v1/assets/{}/holders", id),
+                format!("/v1/assets/{}", id),
+                "/v1/stats".to_string(),
+            ],
+            Self::DividendDistributed { .. } => vec![
+                format!("/v1/assets/{}/dividends", id),
+                format!("/v1/assets/{}", id),
+            ],
+            Self::ComplianceUpdated { .. } => vec![
+                format!("/v1/assets/{}/compliance", id),
+                format!("/v1/assets/{}/holders", id),
+                format!("/v1/assets/{}", id),
+            ],
+        }
+    }
+
+    /// Generate surrogate keys / cache tags for tag-based purge.
+    pub fn cache_tags(&self) -> Vec<String> {
+        let id = self.asset_id();
+        vec![
+            format!("asset-{}", id),
+            format!("asset-{}-holders", id),
+            format!("asset-{}-compliance", id),
+            format!("asset-{}-dividends", id),
+            "stats".to_string(),
+        ]
+    }
+}
+
+/// Configuration options for the CDN cache invalidator.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CdnInvalidatorConfig {
+    pub provider: CdnProvider,
+    /// Public base URL of the API (e.g. `https://api.tessera.finance`).
+    pub api_base_url: String,
+    /// Cloudflare zone identifier.
+    pub cloudflare_zone_id: Option<String>,
+    /// Cloudflare API token with `Cache Purge` permissions.
+    pub cloudflare_api_token: Option<String>,
+    /// Fastly Service ID.
+    pub fastly_service_id: Option<String>,
+    /// Fastly API Key.
+    pub fastly_api_key: Option<String>,
+    /// Debounce accumulation window before dispatching a batch.
+    pub batch_window: Duration,
+    /// Maximum number of URLs per batch request.
+    pub max_batch_size: usize,
+    /// Maximum invalidation requests allowed per minute.
+    pub rate_limit_per_minute: u32,
+    /// Request timeout for purge calls.
+    pub request_timeout: Duration,
+}
+
+impl Default for CdnInvalidatorConfig {
+    fn default() -> Self {
+        let provider = match std::env::var("CDN_PROVIDER").as_deref() {
+            Ok("cloudflare") => CdnProvider::Cloudflare,
+            Ok("fastly") => CdnProvider::Fastly,
+            Ok("both") => CdnProvider::Both,
+            _ => CdnProvider::Mock,
+        };
+
+        let api_base_url = std::env::var("CDN_API_BASE_URL")
+            .unwrap_or_else(|_| "https://api.tessera.finance".to_string());
+        let cloudflare_zone_id = std::env::var("CLOUDFLARE_ZONE_ID").ok();
+        let cloudflare_api_token = std::env::var("CLOUDFLARE_API_TOKEN").ok();
+        let fastly_service_id = std::env::var("FASTLY_SERVICE_ID").ok();
+        let fastly_api_key = std::env::var("FASTLY_API_KEY").ok();
+
+        Self {
+            provider,
+            api_base_url,
+            cloudflare_zone_id,
+            cloudflare_api_token,
+            fastly_service_id,
+            fastly_api_key,
+            batch_window: Duration::from_millis(500),
+            max_batch_size: 50,
+            rate_limit_per_minute: 30,
+            request_timeout: Duration::from_secs(5),
+        }
+    }
+}
+
+/// Summary outcome of an edge cache purge execution.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PurgeResult {
+    pub provider: CdnProvider,
+    pub purged_count: usize,
+    pub status_code: u16,
+    pub execution_time_ms: u64,
+    pub success: bool,
+    pub message: String,
+}
+
+/// Error conditions during cache invalidation.
+#[derive(Debug, thiserror::Error)]
+pub enum CdnError {
+    #[error("Missing CDN configuration for {0}")]
+    MissingConfig(String),
+    #[error("Rate limit exceeded for CDN API (allowed: {0}/min)")]
+    RateLimitExceeded(u32),
+    #[error("Network error during purge call: {0}")]
+    Network(#[from] reqwest::Error),
+    #[error("CDN API rejected purge with status {0}: {1}")]
+    ApiRejection(StatusCode, String),
+    #[error("Invalidation channel closed")]
+    ChannelClosed,
+}
+
+/// Sliding window rate limiter for edge CDN API calls.
+struct RateLimiter {
+    max_requests_per_minute: u32,
+    window_start: Instant,
+    request_count: u32,
+}
+
+impl RateLimiter {
+    fn new(max_requests_per_minute: u32) -> Self {
+        Self {
+            max_requests_per_minute,
+            window_start: Instant::now(),
+            request_count: 0,
+        }
+    }
+
+    fn check_and_increment(&mut self) -> Result<(), CdnError> {
+        let now = Instant::now();
+        if now.duration_since(self.window_start) >= Duration::from_secs(60) {
+            self.window_start = now;
+            self.request_count = 0;
+        }
+
+        if self.request_count >= self.max_requests_per_minute {
+            return Err(CdnError::RateLimitExceeded(self.max_requests_per_minute));
+        }
+
+        self.request_count += 1;
+        Ok(())
+    }
+}
+
+/// Controller managing edge CDN cache invalidations with debouncing and rate limiting.
+#[derive(Clone)]
+pub struct CdnInvalidator {
+    config: Arc<CdnInvalidatorConfig>,
+    client: reqwest::Client,
+    event_tx: mpsc::Sender<OnChainUpdateEvent>,
+    rate_limiter: Arc<Mutex<RateLimiter>>,
+    mock_history: Arc<Mutex<Vec<String>>>,
+}
+
+impl CdnInvalidator {
+    /// Initialize a new CDN invalidator and launch its background batch worker.
+    pub fn new(config: CdnInvalidatorConfig) -> Self {
+        let (event_tx, event_rx) = mpsc::channel(2048);
+        let client = reqwest::Client::builder()
+            .timeout(config.request_timeout)
+            .build()
+            .unwrap_or_default();
+
+        let rate_limiter = Arc::new(Mutex::new(RateLimiter::new(config.rate_limit_per_minute)));
+        let mock_history = Arc::new(Mutex::new(Vec::new()));
+
+        let invalidator = Self {
+            config: Arc::new(config),
+            client,
+            event_tx,
+            rate_limiter,
+            mock_history,
+        };
+
+        invalidator.start_worker(event_rx);
+        invalidator
+    }
+
+    /// Background worker that drains events, debounces within `batch_window`,
+    /// batches unique target URLs up to `max_batch_size`, and purges.
+    fn start_worker(&self, mut event_rx: mpsc::Receiver<OnChainUpdateEvent>) {
+        let this = self.clone();
+
+        tokio::spawn(async move {
+            let mut pending_urls = HashSet::new();
+            let mut pending_tags = HashSet::new();
+            let mut timer = tokio::time::interval(this.config.batch_window);
+
+            loop {
+                tokio::select! {
+                    Some(event) = event_rx.recv() => {
+                        for path in event.target_paths() {
+                            let full_url = format!("{}{}", this.config.api_base_url.trim_end_matches('/'), path);
+                            pending_urls.insert(full_url);
+                        }
+                        for tag in event.cache_tags() {
+                            pending_tags.insert(tag);
+                        }
+
+                        // Immediate flush if batch size ceiling is reached
+                        if pending_urls.len() >= this.config.max_batch_size {
+                            let urls: Vec<String> = pending_urls.drain().collect();
+                            let tags: Vec<String> = pending_tags.drain().collect();
+                            this.dispatch_batch(&urls, &tags).await;
+                        }
+                    }
+                    _ = timer.tick() => {
+                        if !pending_urls.is_empty() || !pending_tags.is_empty() {
+                            let urls: Vec<String> = pending_urls.drain().collect();
+                            let tags: Vec<String> = pending_tags.drain().collect();
+                            this.dispatch_batch(&urls, &tags).await;
+                        }
+                    }
+                    else => break,
+                }
+            }
+        });
+    }
+
+    /// Dispatch a batch of URLs and Tags across configured CDN providers.
+    async fn dispatch_batch(&self, urls: &[String], tags: &[String]) {
+        if urls.is_empty() && tags.is_empty() {
+            return;
+        }
+
+        // Enforce rate limiter
+        {
+            let mut limiter = self.rate_limiter.lock().unwrap();
+            if let Err(e) = limiter.check_and_increment() {
+                warn!(error = %e, "Rate limit reached for CDN invalidator; backing off");
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+        }
+
+        let start = Instant::now();
+        match self.config.provider {
+            CdnProvider::Cloudflare => {
+                if let Err(e) = self.purge_cloudflare(urls, tags).await {
+                    error!(error = %e, "Failed to purge Cloudflare edge cache");
+                }
+            }
+            CdnProvider::Fastly => {
+                if let Err(e) = self.purge_fastly(tags).await {
+                    error!(error = %e, "Failed to purge Fastly edge cache");
+                }
+            }
+            CdnProvider::Both => {
+                let cf_res = self.purge_cloudflare(urls, tags);
+                let fastly_res = self.purge_fastly(tags);
+                let (cf, fst) = tokio::join!(cf_res, fastly_res);
+                if let Err(e) = cf {
+                    error!(error = %e, "Cloudflare purge error");
+                }
+                if let Err(e) = fst {
+                    error!(error = %e, "Fastly purge error");
+                }
+            }
+            CdnProvider::Mock => {
+                let mut history = self.mock_history.lock().unwrap();
+                history.extend(urls.iter().cloned());
+                debug!(
+                    purged_urls = urls.len(),
+                    purged_tags = tags.len(),
+                    elapsed_ms = start.elapsed().as_millis(),
+                    "Mock CDN purge recorded successfully"
+                );
+            }
+        }
+    }
+
+    /// Enqueue an on-chain ledger update event to trigger cache invalidation.
+    pub async fn enqueue_event(&self, event: OnChainUpdateEvent) -> Result<(), CdnError> {
+        self.event_tx
+            .send(event)
+            .await
+            .map_err(|_| CdnError::ChannelClosed)
+    }
+
+    /// Convenience helper for simple asset update invalidation.
+    pub async fn invalidate_asset(&self, asset_id: &str, ledger_sequence: u32) -> Result<(), CdnError> {
+        self.enqueue_event(OnChainUpdateEvent::AssetUpdated {
+            asset_id: asset_id.to_string(),
+            ledger_sequence,
+        })
+        .await
+    }
+
+    /// Purge cache entries via Cloudflare Zone Purge API.
+    /// Uses targeted `files` (URLs) or `tags`.
+    pub async fn purge_cloudflare(&self, urls: &[String], tags: &[String]) -> Result<PurgeResult, CdnError> {
+        let zone_id = self
+            .config
+            .cloudflare_zone_id
+            .as_ref()
+            .ok_or_else(|| CdnError::MissingConfig("cloudflare_zone_id".into()))?;
+        let token = self
+            .config
+            .cloudflare_api_token
+            .as_ref()
+            .ok_or_else(|| CdnError::MissingConfig("cloudflare_api_token".into()))?;
+
+        let url = format!("https://api.cloudflare.com/client/v4/zones/{}/purge_cache", zone_id);
+        let start = Instant::now();
+
+        // Build batch payload: prefer targeted file URLs
+        let payload = if !urls.is_empty() {
+            serde_json::json!({ "files": urls })
+        } else {
+            serde_json::json!({ "tags": tags })
+        };
+
+        let resp = self
+            .client
+            .post(&url)
+            .header(header::AUTHORIZATION, format!("Bearer {}", token))
+            .header(header::CONTENT_TYPE, "application/json")
+            .json(&payload)
+            .send()
+            .await?;
+
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        let elapsed = start.elapsed().as_millis() as u64;
+
+        if !status.is_success() {
+            return Err(CdnError::ApiRejection(status, body));
+        }
+
+        info!(
+            provider = "cloudflare",
+            purged_count = urls.len(),
+            elapsed_ms = elapsed,
+            "Cloudflare edge cache purge succeeded"
+        );
+
+        Ok(PurgeResult {
+            provider: CdnProvider::Cloudflare,
+            purged_count: urls.len(),
+            status_code: status.as_u16(),
+            execution_time_ms: elapsed,
+            success: true,
+            message: "Purge accepted".to_string(),
+        })
+    }
+
+    /// Purge cache entries via Fastly Surrogate-Key API.
+    pub async fn purge_fastly(&self, tags: &[String]) -> Result<PurgeResult, CdnError> {
+        let service_id = self
+            .config
+            .fastly_service_id
+            .as_ref()
+            .ok_or_else(|| CdnError::MissingConfig("fastly_service_id".into()))?;
+        let api_key = self
+            .config
+            .fastly_api_key
+            .as_ref()
+            .ok_or_else(|| CdnError::MissingConfig("fastly_api_key".into()))?;
+
+        let url = format!("https://api.fastly.com/service/{}/purge", service_id);
+        let start = Instant::now();
+
+        let payload = serde_json::json!({ "surrogate_keys": tags });
+
+        let resp = self
+            .client
+            .post(&url)
+            .header("Fastly-Key", api_key)
+            .header(header::CONTENT_TYPE, "application/json")
+            .json(&payload)
+            .send()
+            .await?;
+
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        let elapsed = start.elapsed().as_millis() as u64;
+
+        if !status.is_success() {
+            return Err(CdnError::ApiRejection(status, body));
+        }
+
+        info!(
+            provider = "fastly",
+            purged_tags = tags.len(),
+            elapsed_ms = elapsed,
+            "Fastly edge cache purge succeeded"
+        );
+
+        Ok(PurgeResult {
+            provider: CdnProvider::Fastly,
+            purged_count: tags.len(),
+            status_code: status.as_u16(),
+            execution_time_ms: elapsed,
+            success: true,
+            message: "Purge accepted".to_string(),
+        })
+    }
+
+    /// Retrieve mock history for validation in automated test suites.
+    pub fn get_mock_history(&self) -> Vec<String> {
+        self.mock_history.lock().unwrap().clone()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Unit Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_on_chain_event_target_paths() {
+        let asset_id = "CBMCWLSQSWUTLUJFCNBHNBSXMUM3XU7NAQ5TSNERW4HA4ZZBYHLG4ECZ";
+        let event = OnChainUpdateEvent::AssetUpdated {
+            asset_id: asset_id.to_string(),
+            ledger_sequence: 1050000,
+        };
+
+        let paths = event.target_paths();
+        assert!(paths.contains(&format!("/v1/assets/{}", asset_id)));
+        assert!(paths.contains(&format!("/v1/assets/{}/holders", asset_id)));
+        assert!(paths.contains(&format!("/v1/assets/{}/compliance", asset_id)));
+        assert!(paths.contains(&format!("/v1/assets/{}/dividends", asset_id)));
+        assert!(paths.contains(&"/v1/stats".to_string()));
+    }
+
+    #[test]
+    fn test_cap_table_update_target_paths() {
+        let asset_id = "CBMCWLSQSWUTLUJFCNBHNBSXMUM3XU7NAQ5TSNERW4HA4ZZBYHLG4ECZ";
+        let event = OnChainUpdateEvent::CapTableUpdated {
+            asset_id: asset_id.to_string(),
+            snapshot_id: 42,
+            ledger_sequence: 1050100,
+        };
+
+        let paths = event.target_paths();
+        assert!(paths.contains(&format!("/v1/assets/{}/holders", asset_id)));
+        assert!(paths.contains(&format!("/v1/assets/{}", asset_id)));
+        assert!(paths.contains(&"/v1/stats".to_string()));
+    }
+
+    #[test]
+    fn test_cache_tag_generation() {
+        let asset_id = "CBMCWLSQSWUTLUJFCNBHNBSXMUM3XU7NAQ5TSNERW4HA4ZZBYHLG4ECZ";
+        let event = OnChainUpdateEvent::DividendDistributed {
+            asset_id: asset_id.to_string(),
+            distribution_id: 1,
+            ledger_sequence: 1050200,
+        };
+
+        let tags = event.cache_tags();
+        assert!(tags.contains(&format!("asset-{}", asset_id)));
+        assert!(tags.contains(&format!("asset-{}-dividends", asset_id)));
+        assert!(tags.contains(&"stats".to_string()));
+    }
+
+    #[test]
+    fn test_rate_limiter_enforcement() {
+        let mut limiter = RateLimiter::new(3);
+        assert!(limiter.check_and_increment().is_ok());
+        assert!(limiter.check_and_increment().is_ok());
+        assert!(limiter.check_and_increment().is_ok());
+
+        // 4th request in the same window must fail with RateLimitExceeded
+        let err = limiter.check_and_increment().unwrap_err();
+        match err {
+            CdnError::RateLimitExceeded(max) => assert_eq!(max, 3),
+            _ => panic!("Expected RateLimitExceeded error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_invalidator_batch_debouncing() {
+        let config = CdnInvalidatorConfig {
+            provider: CdnProvider::Mock,
+            api_base_url: "https://api.tessera.finance".to_string(),
+            cloudflare_zone_id: None,
+            cloudflare_api_token: None,
+            fastly_service_id: None,
+            fastly_api_key: None,
+            batch_window: Duration::from_millis(50),
+            max_batch_size: 10,
+            rate_limit_per_minute: 60,
+            request_timeout: Duration::from_secs(1),
+        };
+
+        let invalidator = CdnInvalidator::new(config);
+        let asset_id = "CBMCWLSQSWUTLUJFCNBHNBSXMUM3XU7NAQ5TSNERW4HA4ZZBYHLG4ECZ";
+
+        // Send two identical events - debouncing must deduplicate paths
+        invalidator.invalidate_asset(asset_id, 100).await.unwrap();
+        invalidator.invalidate_asset(asset_id, 101).await.unwrap();
+
+        // Allow debounce window to tick
+        tokio::time::sleep(Duration::from_millis(150)).await;
+
+        let history = invalidator.get_mock_history();
+        assert!(!history.is_empty());
+        // Verify no duplicate URLs exist in the batch
+        let unique_count: HashSet<_> = history.iter().collect();
+        assert_eq!(unique_count.len(), history.len(), "URLs must be deduplicated");
+    }
+}
