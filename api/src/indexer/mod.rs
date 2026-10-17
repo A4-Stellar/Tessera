@@ -19,6 +19,14 @@
 pub mod archive;
 pub mod diagnostics;
 pub mod dlq;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "fork detection is staged until the indexer poll loop reports ledger hashes"
+    )
+)]
+pub mod fork_detector;
 pub mod nav_calculator;
 pub mod price_feed;
 pub mod pulsar_producer;
@@ -535,7 +543,7 @@ struct RawDistribution {
     completed: bool,
 }
 
-fn parse_i128(s: &str) -> i128 {
+pub(crate) fn parse_i128(s: &str) -> i128 {
     s.parse::<i128>().unwrap_or(0)
 }
 
@@ -543,7 +551,7 @@ fn cents_to_usd(cents: i128) -> f64 {
     (cents / 100) as f64 + (cents % 100) as f64 / 100.0
 }
 
-fn ratio_percent(part: i128, whole: i128) -> f64 {
+pub(crate) fn ratio_percent(part: i128, whole: i128) -> f64 {
     if whole <= 0 {
         return 0.0;
     }
