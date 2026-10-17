@@ -45,7 +45,7 @@ pub async fn retry(
 
 /// Constant-time comparison, so response timing does not reveal how much of
 /// a guessed token is correct. An empty `expected` never matches.
-fn token_matches(expected: &str, supplied: Option<&str>) -> bool {
+pub(crate) fn token_matches(expected: &str, supplied: Option<&str>) -> bool {
     let Some(supplied) = supplied else {
         return false;
     };
