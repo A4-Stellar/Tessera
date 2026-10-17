@@ -21,6 +21,7 @@ pub mod security;
 )]
 pub mod simulate;
 pub mod stats;
+pub mod time_travel;
 
 #[cfg(test)]
 mod test_support;
