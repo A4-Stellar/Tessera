@@ -216,6 +216,35 @@ func TestAutoscaling_WebSocketConnectionsAndCPU(t *testing.T) {
 	}
 }
 
+func TestAutoscaling_RPCLatency(t *testing.T) {
+	reconciler := NewIndexerReconciler(newMockK8sClient())
+
+	indexer := &v1alpha1.TesseraIndexer{
+		Spec: v1alpha1.TesseraIndexerSpec{
+			Replicas:    2,
+			MinReplicas: 2,
+			MaxReplicas: 8,
+			AutoScaling: v1alpha1.AutoScalingSpec{
+				Enabled:                          true,
+				TargetCPUUtilizationPercentage:   80,
+				TargetWebSocketConnectionsPerPod: 1000,
+				TargetRPCLatencyMillis:           100, // target p99 latency < 100ms
+			},
+		},
+	}
+
+	// RPC Latency Spike: 250ms latency with 2 pods -> ceil(2 * 250 / 100) = 5 pods
+	metrics := ClusterMetrics{
+		AverageCPUUtilization:      40,
+		ActiveWebSocketConnections: 200,
+		RPCLatencyMillis:           250,
+	}
+	desired := reconciler.ComputeDesiredReplicas(indexer, 2, metrics)
+	if desired != 5 {
+		t.Fatalf("expected 5 replicas for 250ms RPC latency, got %d", desired)
+	}
+}
+
 type mockDocsClient struct {
 	available int32
 }
