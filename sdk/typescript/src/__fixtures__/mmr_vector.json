@@ -1,0 +1,26 @@
+{
+  "alice": {
+    "asset_id": 1,
+    "balance": "602",
+    "leaf_index": 0,
+    "path": [
+      "41fbf46d60e4d5fc1b99f5dc6f94902c08ca15c8c51e2d429d775f1c91fec9e4",
+      "334ab2638581eb50d8174738b4cdf7031cd5f4dee0effb718a1e93810452b439"
+    ]
+  },
+  "contract_state_root": "e5b6e9f68d7f22246579a95403df43b9fe2e90c41363ab86d203cdd136f1ceae",
+  "leaf_count": 5,
+  "leaf_index": 2,
+  "ledger_hash": "6666666666666666666666666666666666666666666666666666666666666666",
+  "ledger_sequence": 102,
+  "path": [
+    "c956358999a04505195267c50685bda6aa4a8fd9a234f58c2713e57148ffe3af",
+    "826c4565839a1686bac4a783b8314f7bed627e772b16665af66625b2b1ff716d"
+  ],
+  "peaks": [
+    "bc7581b8038c57ff39fecdb01aa83a516d625cbf4d597736545f2cfeec4342bb",
+    "090a5066c1d38e91a502c462bed54b36b171f1fb47cc93154eb41f3a6b5fd0cf"
+  ],
+  "root": "bde502b459bda09458dcb3f1e504ac6921faf7799475ffd5cede084c42801273",
+  "state_leaf_count": 3
+}

@@ -11,6 +11,11 @@
 #![no_std]
 
 pub mod circuit_breaker;
+// `post_quantum` measures cost via `Env::budget()`, which only exists when
+// soroban-sdk's `testutils` feature is on. No contract uses it yet, so it is
+// only compiled for tests (or with this crate's `testutils` feature);
+// otherwise every contract depending on this crate fails to build.
+#[cfg(any(test, feature = "testutils"))]
 pub mod post_quantum;
 
 use soroban_sdk::{symbol_short, BytesN, Env, Symbol};

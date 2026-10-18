@@ -15,6 +15,7 @@ members = [
     "confidential-token",
     "index-token",
     "state-channel",
+    "settlement",
 ]
 # `fuzz/` is a self-contained sub-tree of three independent packages:
 #
@@ -32,7 +33,10 @@ members = [
 # `verification/` is the same kind of standalone package, for the same
 # reason: its own `proptest` dependency and release-profile overrides must
 # not leak into (or be constrained by) the wasm-targeted workspace build.
-exclude = ["fuzz", "fuzz/harness", "fuzz/proptests", "verification"]
+#
+# `zk-aggregator/` (issue #317) is the off-chain prover CLI; its arkworks
+# prover stack is native-only and stays out of the contract build.
+exclude = ["fuzz", "fuzz/harness", "fuzz/proptests", "verification", "zk-aggregator"]
 
 [workspace.dependencies]
 soroban-sdk = "25.0.0"

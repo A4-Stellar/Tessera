@@ -1753,6 +1753,8 @@ dependencies = [
 name = "tessera-compliance"
 version = "0.1.0"
 dependencies = [
+ "hex",
+ "serde_json",
  "soroban-sdk",
  "tessera-common",
 ]
@@ -1786,6 +1788,16 @@ version = "0.1.0"
 dependencies = [
  "soroban-sdk",
  "tessera-common",
+]
+
+[[package]]
+name = "tessera-settlement"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+ "tessera-asset-token",
+ "tessera-common",
+ "tessera-compliance",
 ]
 
 [[package]]

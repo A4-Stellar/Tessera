@@ -310,12 +310,11 @@ impl CdnInvalidator {
         }
 
         // Enforce rate limiter
-        {
-            let mut limiter = self.rate_limiter.lock().unwrap();
-            if let Err(e) = limiter.check_and_increment() {
-                warn!(error = %e, "Rate limit reached for CDN invalidator; backing off");
-                tokio::time::sleep(Duration::from_secs(2)).await;
-            }
+        // The guard is dropped before the backoff so the future stays `Send`.
+        let limited = self.rate_limiter.lock().unwrap().check_and_increment();
+        if let Err(e) = limited {
+            warn!(error = %e, "Rate limit reached for CDN invalidator; backing off");
+            tokio::time::sleep(Duration::from_secs(2)).await;
         }
 
         let start = Instant::now();
