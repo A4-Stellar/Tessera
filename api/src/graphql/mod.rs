@@ -10,6 +10,7 @@ use async_graphql_axum::{GraphQLRequest, GraphQLResponse, GraphQLSubscription};
 use serde::{Deserialize, Serialize};
 
 pub mod complexity;
+pub mod federation;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Asset {
@@ -20,6 +21,7 @@ pub struct Asset {
 
 #[async_graphql::Object]
 impl Asset {
+    #[graphql(shareable)]
     async fn id(&self) -> &str {
         &self.id
     }
@@ -39,6 +41,7 @@ pub struct Holder {
 
 #[async_graphql::Object]
 impl Holder {
+    #[graphql(shareable)]
     async fn address(&self) -> &str {
         &self.address
     }
@@ -108,12 +111,7 @@ pub struct QueryRoot;
 #[Object]
 impl QueryRoot {
     async fn asset(&self, _ctx: &Context<'_>, id: String) -> FieldResult<Asset> {
-        // Stub implementation
-        Ok(Asset {
-            id,
-            name: "Tokenized Real Estate Fund".to_string(),
-            tvl: 1500000.0,
-        })
+        Ok(federation::asset_by_id(id))
     }
 
     async fn assets(&self, _ctx: &Context<'_>, filter: Option<String>) -> FieldResult<Vec<Asset>> {
@@ -126,11 +124,20 @@ impl QueryRoot {
     }
 
     async fn holder(&self, _ctx: &Context<'_>, address: String) -> FieldResult<Holder> {
-        // Stub implementation
-        Ok(Holder {
-            address,
-            balance: 100.5,
-        })
+        Ok(federation::holder_by_address(address))
+    }
+
+    /// Apollo Federation v2 reference resolver. Generates `Asset @key(fields:
+    /// "id")` and enables the router's `_entities` query automatically.
+    #[graphql(entity)]
+    async fn find_asset_by_id(&self, id: String) -> Asset {
+        federation::asset_by_id(id)
+    }
+
+    /// Apollo Federation v2 reference resolver for investor identity.
+    #[graphql(entity)]
+    async fn find_holder_by_address(&self, address: String) -> Holder {
+        federation::holder_by_address(address)
     }
 
     async fn compliance_summary(&self, _ctx: &Context<'_>, id: String) -> FieldResult<ComplianceSummary> {
@@ -173,10 +180,31 @@ async fn graphiql() -> axum::response::Html<String> {
 pub fn create_graphql_router() -> Router {
     let schema =
         complexity::apply_limits(Schema::build(QueryRoot, EmptyMutation, SubscriptionRoot))
+            // Emits Federation v2 `@link`/directive definitions even if an
+            // entity resolver is conditionally removed in a future build.
+            .enable_federation()
             .finish();
 
     Router::new()
         .route("/graphql", get(graphiql).post(graphql_handler))
         .route_service("/graphql/ws", GraphQLSubscription::new(schema.clone()))
         .layer(axum::extract::Extension(schema))
+}
+
+#[cfg(test)]
+mod federation_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn federation_schema_exposes_keys_and_entity_resolution() {
+        let schema = Schema::build(QueryRoot, EmptyMutation, SubscriptionRoot)
+            .enable_federation()
+            .finish();
+        let sdl = schema.sdl();
+        assert!(sdl.contains("type Asset @key(fields: \"id\")"));
+        assert!(sdl.contains("type Holder @key(fields: \"address\")"));
+        assert!(sdl.contains("@shareable"));
+        let response = schema.execute(r#"{ _entities(representations: [{__typename: "Asset", id: "A-1"}]) { ... on Asset { id } } }"#).await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+    }
 }

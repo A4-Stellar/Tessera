@@ -32,6 +32,7 @@ pub mod nav_calculator;
 pub mod price_feed;
 pub mod pulsar_producer;
 pub mod replay;
+pub mod resequencer;
 pub mod rpc_client;
 pub mod stream_processor;
 pub mod flink_pipeline;
