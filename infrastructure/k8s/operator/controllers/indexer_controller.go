@@ -16,10 +16,11 @@ type ReconcileResult struct {
 	BlockRollingUpdate bool
 }
 
-// ClusterMetrics reports live CPU and WebSocket connection observations.
+// ClusterMetrics reports live CPU, WebSocket connection, and RPC latency observations.
 type ClusterMetrics struct {
 	AverageCPUUtilization      int32
 	ActiveWebSocketConnections int32
+	RPCLatencyMillis           int32
 }
 
 // JobState represents the execution status of a Kubernetes schema migration job.
@@ -127,8 +128,8 @@ func (r *IndexerReconciler) Reconcile(ctx context.Context, indexer *v1alpha1.Tes
 				indexer.Status.Phase = v1alpha1.PhaseScaling
 				indexer.Status.CurrentReplicas = desiredReplicas
 				indexer.Status.LastScaleTime = &now
-				r.setCondition(indexer, "Autoscaled", "True", fmt.Sprintf("Scaled replicas from %d to %d (CPU: %d%%, WS: %d)",
-					currentReplicas, desiredReplicas, metrics.AverageCPUUtilization, metrics.ActiveWebSocketConnections))
+				r.setCondition(indexer, "Autoscaled", "True", fmt.Sprintf("Scaled replicas from %d to %d (CPU: %d%%, WS: %d, RPC: %dms)",
+					currentReplicas, desiredReplicas, metrics.AverageCPUUtilization, metrics.ActiveWebSocketConnections, metrics.RPCLatencyMillis))
 				return ReconcileResult{RequeueAfter: 15 * time.Second}, nil
 			}
 		}
@@ -146,7 +147,7 @@ func (r *IndexerReconciler) Reconcile(ctx context.Context, indexer *v1alpha1.Tes
 	return ReconcileResult{RequeueAfter: 30 * time.Second}, nil
 }
 
-// ComputeDesiredReplicas calculates optimal replica counts from WebSocket client connections and CPU utilization.
+// ComputeDesiredReplicas calculates optimal replica counts from WebSocket client connections, RPC latency, and CPU utilization.
 func (r *IndexerReconciler) ComputeDesiredReplicas(
 	indexer *v1alpha1.TesseraIndexer,
 	currentReplicas int32,
@@ -177,10 +178,21 @@ func (r *IndexerReconciler) ComputeDesiredReplicas(
 		wsDemand = int32(math.Ceil(float64(metrics.ActiveWebSocketConnections) / float64(autoScale.TargetWebSocketConnectionsPerPod)))
 	}
 
-	// Take the maximum demand to satisfy both CPU and WebSocket capacity
+	// Replica demand from Soroban RPC Latency:
+	// desiredRPC = ceil(currentReplicas * (currentRPCLatency / targetRPCLatency))
+	var rpcDemand int32 = currentReplicas
+	if autoScale.TargetRPCLatencyMillis > 0 && metrics.RPCLatencyMillis > 0 {
+		ratio := float64(metrics.RPCLatencyMillis) / float64(autoScale.TargetRPCLatencyMillis)
+		rpcDemand = int32(math.Ceil(float64(currentReplicas) * ratio))
+	}
+
+	// Take the maximum demand to satisfy CPU, WebSocket capacity, and RPC latency
 	desired := cpuDemand
 	if wsDemand > desired {
 		desired = wsDemand
+	}
+	if rpcDemand > desired {
+		desired = rpcDemand
 	}
 
 	// Clamp within [minReplicas, maxReplicas]

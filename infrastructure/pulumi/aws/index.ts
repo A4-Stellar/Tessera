@@ -161,6 +161,6 @@ export function awsInfrastructure(): AwsOutputs {
         clusterId: cluster.id,
         albDnsName: alb.dnsName,
         dbEndpoint: dbCluster.endpoint,
-        redisEndpoint: redisServerless.endpoint.apply(e => e.address),
+        redisEndpoint: redisServerless.endpoints.apply((endpoints): string => endpoints?.[0]?.address ?? ""),
     };
 }

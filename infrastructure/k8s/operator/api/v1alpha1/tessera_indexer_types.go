@@ -35,6 +35,8 @@ type AutoScalingSpec struct {
 	TargetCPUUtilizationPercentage int32 `json:"targetCpuUtilizationPercentage"`
 	// TargetWebSocketConnectionsPerPod sets client connection limit per replica (e.g., 500).
 	TargetWebSocketConnectionsPerPod int32 `json:"targetWebSocketConnectionsPerPod"`
+	// TargetRPCLatencyMillis sets RPC latency threshold before scaling (e.g., 250).
+	TargetRPCLatencyMillis int32 `json:"targetRpcLatencyMillis,omitempty"`
 	// ScaleUpCooldownSeconds avoids rapid flap scaling when traffic surges.
 	ScaleUpCooldownSeconds int32 `json:"scaleUpCooldownSeconds"`
 	// ScaleDownCooldownSeconds ensures stabilization before pods terminate.

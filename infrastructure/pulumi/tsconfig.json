@@ -10,7 +10,9 @@
     "pretty": true,
     "noFallthroughCasesInSwitch": true,
     "noImplicitReturns": true,
-    "forceConsistentCasingInFileNames": true
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "typeRoots": ["./node_modules/@types"]
   },
   "include": ["**/*.ts"],
   "exclude": ["node_modules", "bin"]
