@@ -26,6 +26,7 @@ const gcp = gcpInfrastructure();
 // Cloudflare DNS — weighted load-balance across AWS ALB and GCP HTTPS LB
 // ---------------------------------------------------------------------------
 const zone = new cloudflare.Zone("tessera-zone", {
+    accountId: config.get("cloudflareAccountId") ?? "00000000000000000000000000000000",
     zone: config.require("domain"),
     plan: "free",
 });

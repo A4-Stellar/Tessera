@@ -57,6 +57,10 @@ receivers:
         text: >-
           {{ range .Alerts }}*{{ .Labels.severity }}* — {{ .Annotations.description }}
           {{ end }}
-          Runbook: {{ .CommonAnnotations.runbook_url }}
+    webhook_configs: &discord
+      - url_file: /etc/alertmanager/secrets/discord_webhook_url
+        send_resolved: true
   - name: slack
     slack_configs: *slack
+    webhook_configs: *discord
+

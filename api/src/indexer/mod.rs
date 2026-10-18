@@ -34,6 +34,7 @@ pub mod pulsar_producer;
 pub mod replay;
 pub mod rpc_client;
 pub mod stream_processor;
+pub mod flink_pipeline;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex};
