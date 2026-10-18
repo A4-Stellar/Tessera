@@ -1,0 +1,10 @@
+{
+  "$comment": "Terms kept in English by scripts/translate-docs.mjs, in addition to the built-in product and protocol names in scripts/lib/mdx-translation.cjs.",
+  "terms": [
+    "asset-token",
+    "Merkle",
+    "MMR",
+    "stroops",
+    "Herfindahl-Hirschman"
+  ]
+}
