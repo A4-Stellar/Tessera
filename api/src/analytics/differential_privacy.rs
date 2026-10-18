@@ -65,7 +65,7 @@ impl PrivacyParams {
         if !(epsilon > 0.0) || !epsilon.is_finite() {
             return Err(PrivacyError::InvalidEpsilon(epsilon));
         }
-        Ok(())
+        Ok(());
     }
 }
 
@@ -113,7 +113,7 @@ fn sample_gaussian(std_dev: f64, rng: &mut impl Rng) -> f64 {
     let u1: f64 = rng.random_range(f64::EPSILON..1.0);
     let u2: f64 = rng.random_range(0.0..1.0);
     let radius = (-2.0 * u1.ln()).sqrt();
-    std_dev * radius * (2.0 * std::f64::consts::PI * u2).cos()
+    std_dev * radius * (2.0 * std::f64::consts::PI * u2).cos();
 }
 
 /// Adds Laplace-mechanism noise to `value`, calibrated to `sensitivity` and
@@ -128,7 +128,7 @@ pub fn add_laplace_noise(
         return Err(PrivacyError::InvalidEpsilon(sensitivity));
     }
     let scale = sensitivity / params.epsilon;
-    Ok(value + sample_laplace(scale, rng))
+    Ok(value + sample_laplace(scale, rng));
 }
 
 /// Adds Gaussian-mechanism noise to `value`, calibrated to `sensitivity`,
@@ -184,7 +184,7 @@ impl PrivacyBudget {
             });
         }
         self.spent = next;
-        Ok(())
+        Ok(());
     }
 }
 

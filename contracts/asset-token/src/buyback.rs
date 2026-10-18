@@ -261,11 +261,7 @@ impl BuybackContract {
 
     /// Finalize the buyback after expiration (or immediately by the admin to
     /// force an early close).
-    ///
-    /// All tokens accumulated in `BuybackKey::Tendered` are permanently burned
-    /// (circulating supply is reduced) and a `CapitalReduction` audit log event
-    /// is emitted.  The buyback state is then cleared so a new round can be
-    /// started.
+
     pub fn finalize_buyback(env: Env, admin: Address) {
         Self::require_admin(&env, &admin);
 
