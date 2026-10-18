@@ -249,5 +249,7 @@ impl VestingContract {
     }
 }
 
+pub mod grant_vault;
+
 #[cfg(test)]
 mod test;
