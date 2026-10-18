@@ -1,0 +1,59 @@
+name: SDKs (.NET & Java)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "sdk/csharp/**"
+      - "sdk/java/**"
+      - ".github/workflows/sdk-dotnet-java.yml"
+  pull_request:
+    paths:
+      - "sdk/csharp/**"
+      - "sdk/java/**"
+      - ".github/workflows/sdk-dotnet-java.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  dotnet:
+    name: Tessera.SDK (.NET 8)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk/csharp
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - run: dotnet restore
+      - run: dotnet build --configuration Release --no-restore
+      - run: dotnet test --configuration Release --no-build
+      - name: Pack NuGet package
+        run: dotnet pack src/Tessera.SDK --configuration Release --no-build --output artifacts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tessera-dotnet-sdk
+          path: sdk/csharp/artifacts/*
+
+  java:
+    name: tessera-java-sdk (Java 17)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk/java
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+      - name: Build, test, sources and javadoc jars
+        run: mvn --batch-mode verify
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tessera-java-sdk
+          path: sdk/java/target/*.jar
