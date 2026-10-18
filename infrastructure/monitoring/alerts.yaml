@@ -1,0 +1,31 @@
+groups:
+  - name: tessera-critical
+    rules:
+      - alert: HighIndexerLag
+        expr: tessera_indexer_ledger_lag > 10
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: Indexer is more than ten ledgers behind
+          runbook: https://github.com/A4-Stellar/Tessera/blob/main/docs/runbooks/indexer-lag.md
+      - alert: HighErrorRate
+        expr: (sum(rate(http_requests_total{status=~"5.."}[5m])) / clamp_min(sum(rate(http_requests_total[5m])), 1)) > 0.01
+        for: 10m
+        labels: { severity: critical }
+        annotations:
+          summary: API 5xx error rate exceeds one percent
+          runbook: https://github.com/A4-Stellar/Tessera/blob/main/docs/runbooks/api-errors.md
+      - alert: DatabasePoolExhaustion
+        expr: tessera_db_pool_in_use / tessera_db_pool_size > 0.9
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: Database pool is over 90 percent utilized
+          runbook: https://github.com/A4-Stellar/Tessera/blob/main/docs/runbooks/database-pool.md
+      - alert: SorobanRpcDown
+        expr: up{job="soroban-rpc"} == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: Soroban RPC target is unavailable
+          runbook: https://github.com/A4-Stellar/Tessera/blob/main/docs/runbooks/soroban-rpc.md

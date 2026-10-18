@@ -1,0 +1,22 @@
+route:
+  receiver: warning-chat
+  group_by: [alertname, cluster, service]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    - matchers: [severity="critical"]
+      receiver: pagerduty
+      continue: false
+    - matchers: [severity="warning"]
+      receiver: warning-chat
+receivers:
+  - name: pagerduty
+    pagerduty_configs:
+      - routing_key_file: /etc/alertmanager/secrets/pagerduty-routing-key
+        severity: critical
+        send_resolved: true
+  - name: warning-chat
+    webhook_configs:
+      - url_file: /etc/alertmanager/secrets/warning-webhook-url
+        send_resolved: true

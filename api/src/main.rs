@@ -3,21 +3,49 @@
 //!
 //! The server starts the background indexer (which polls Soroban RPC every 10s)
 //! and serves the current in-memory snapshot over HTTP. It holds no secrets,
-//! signs nothing, and never mutates on-chain state.
+//! signs nothing, and never mutates on-chain state. The `signer` module it also
+//! ships is the HSM-backed signing path for the trusted jobs that *do* submit
+//! transactions (dividends, rent, registry updates): the Stellar key stays
+//! inside AWS KMS and only a signature ever leaves it.
 
+mod analytics;
 pub mod audit;
+#[expect(
+    dead_code,
+    reason = "cache policy helpers are staged until response-cache integration"
+)]
+mod cache;
+mod cluster;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "DbRouter::route/primary gain callers with the PostgreSQL persistence layer (#42)"
+    )
+)]
+mod db;
 mod healthcheck;
 mod indexer;
 mod middleware;
 mod models;
 mod routes;
+mod services;
+pub mod storage;
+pub mod tracing;
 mod ws;
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use indexer::{AppState, Config, Indexer};
-use metrics_exporter_prometheus::PrometheusBuilder;
+use metrics_exporter_prometheus::{Matcher, PrometheusBuilder};
 use tokio::sync::watch;
+
+/// Latency buckets (seconds) for `rwa_http_request_duration_seconds`.
+/// `0.1` must stay: it is the boundary of the p99 < 100 ms SLO (issue #312).
+const HTTP_LATENCY_BUCKETS: &[f64] = &[
+    0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
+];
 
 #[tokio::main]
 async fn main() {
@@ -35,13 +63,27 @@ async fn main() {
             std::process::exit(1);
         }
     };
+    // `tessera-api replay ...` (issue #104): admin backfill, then exit.
+    if std::env::args().nth(1).as_deref() == Some("replay") {
+        let rest: Vec<String> = std::env::args().skip(2).collect();
+        std::process::exit(indexer::replay::run_cli(&rest, &config).await);
+    }
     tracing::info!(
         rpc = ?config.rpc_urls,
         registry = %config.registry_id,
         "starting stellar-rwa-api"
     );
 
+    // Issue #312: export request latency as a real histogram (not the
+    // default summary) so Prometheus can aggregate it across replicas and
+    // the SLO rules in `infrastructure/monitoring/` can count requests under
+    // the 100 ms latency objective via the `le="0.1"` bucket.
     let metrics_handle = PrometheusBuilder::new()
+        .set_buckets_for_metric(
+            Matcher::Full("rwa_http_request_duration_seconds".to_string()),
+            HTTP_LATENCY_BUCKETS,
+        )
+        .expect("static latency buckets are non-empty")
         .install_recorder()
         .expect("failed to install Prometheus recorder");
 
@@ -52,12 +94,33 @@ async fn main() {
     // handler is added, without a metric-name/dashboard-panel change.
     metrics::gauge!("active_websocket_connections").set(0.0);
 
-    let state = AppState::new(config, metrics_handle);
+    let mut state = AppState::new(config, metrics_handle);
 
     // Shared shutdown flag: flipped once by `shutdown_signal` and observed
     // by the indexer's poll loop so it stops issuing new refresh cycles
     // once the process is terminating, rather than racing shutdown.
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
+
+    // Issue #159: only the elected leader polls Soroban RPC.
+    state.node_role = cluster::leader_election::spawn(
+        cluster::leader_election::ElectionConfig::from_env(),
+        shutdown_rx.clone(),
+    );
+
+    // Issue #95: probe read replicas for availability and replication lag.
+    match db::DbRouter::from_env() {
+        Ok(Some(router)) => {
+            let router = Arc::new(router);
+            router.spawn_health_monitor(shutdown_rx.clone());
+            // Issue #163: quarantine table behind `POST /v1/admin/dlq/retry`.
+            state.dlq = indexer::dlq::DeadLetterQueue::open(router.primary().clone()).await;
+        }
+        Ok(None) => {}
+        Err(e) => {
+            tracing::error!(error = %e, "database config validation failed; exiting");
+            std::process::exit(1);
+        }
+    }
 
     // Spawn the indexer; it owns its own clone of the shared state.
     let indexer = Indexer::new(state.clone());
@@ -132,6 +195,9 @@ fn init_tracing() {
         .unwrap_or_else(|_| EnvFilter::new("tessera_api=info,tower_http=warn"));
     tracing_subscriber::registry()
         .with(filter)
-        .with(fmt::layer())
+        // Issue #103: every log record is PII-scrubbed before it is written.
+        .with(fmt::layer().with_writer(middleware::pii_scrubber::ScrubbingMakeWriter))
         .init();
 }
+pub mod graphql;
+pub mod events;
