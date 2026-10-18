@@ -8,8 +8,8 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, Address,
-    BytesN, Env, IntoVal, String, Symbol, Val, Vec,
+    contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short,
+    xdr::ToXdr, Address, Bytes, BytesN, Env, IntoVal, String, Symbol, Val, Vec,
 };
 
 mod attestation;
@@ -693,6 +693,54 @@ impl ComplianceContract {
         let args: Vec<Val> = (address.clone(),).into_val(env);
         env.invoke_contract(hook, &Symbol::new(env, "check"), args)
     }
+
+    // ---- Issue #245: Bulletproofs Zero-Knowledge Balance Range Proof Verification ----
+
+    /// Verifies that `holder` owns a balance exceeding `threshold` without revealing the actual balance.
+    pub fn verify_holder_balance_range(
+        env: Env,
+        holder: Address,
+        threshold: u64,
+        commitment: BytesN<32>,
+        proof: zk_range_proof::ZkRangeProof,
+    ) -> bool {
+        let mut context = Bytes::new(&env);
+        context.append(&holder.clone().to_xdr(&env));
+        let valid = zk_range_proof::verify_balance_threshold_proof(
+            &env,
+            &commitment,
+            threshold,
+            &proof,
+            &context,
+        )
+        .unwrap_or_default();
+
+        if valid {
+            let key = (symbol_short!("zk_range"), holder.clone());
+            let expires_at = env.ledger().sequence() + 17280; // ~24h validity window
+            let record = zk_range_proof::BalanceThresholdRecord {
+                holder: holder.clone(),
+                min_threshold: threshold,
+                verified_at: env.ledger().sequence(),
+                expires_at,
+            };
+            env.storage().persistent().set(&key, &record);
+        }
+
+        valid
+    }
+
+    /// Checks if `holder` has an active, unexpired balance verification at or above `min_threshold`.
+    pub fn is_balance_threshold_verified(env: Env, holder: Address, min_threshold: u64) -> bool {
+        let key = (symbol_short!("zk_range"), holder);
+        if let Some(record) = env.storage().persistent().get::<_, zk_range_proof::BalanceThresholdRecord>(&key) {
+            env.ledger().sequence() <= record.expires_at && record.min_threshold >= min_threshold
+        } else {
+            false
+        }
+    }
 }
 pub mod zk_balance_verifier;
+pub mod zk_range_proof;
 pub mod zk_verifier;
+

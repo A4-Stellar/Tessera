@@ -1,10 +1,13 @@
-/* Tessera Docs service worker (issue #130).
+/* Tessera Docs service worker (issue #130 & #243).
  *
  * Caching strategies:
  * - Docs pages & static assets (`/_next/static`, images, fonts): stale-while-revalidate.
  * - API routes (`/api/*`): network-first with cached fallback.
  * - Navigations: stale-while-revalidate with an offline fallback to the cached app shell.
+ * - Push notifications: handled via sw-notifications.js
  */
+
+importScripts("/sw-notifications.js");
 
 const VERSION = "tessera-docs-v1";
 const DOCS_CACHE = `${VERSION}-docs`;
