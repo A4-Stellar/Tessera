@@ -15,6 +15,8 @@
     "generate:sdk-examples": "node scripts/generate-sdk-examples.mjs",
     "docs:components": "node scripts/extract-component-docs.mjs",
     "check:component-docs": "node scripts/extract-component-docs.mjs --check",
+    "translate:docs": "node scripts/translate-docs.mjs",
+    "check:translations": "node scripts/translate-docs.mjs --check",
     "test": "jest",
     "test:a11y": "jest --testPathPattern=a11y",
     "test:a11y:e2e": "playwright test"
