@@ -1,7 +1,7 @@
 use async_graphql::{
     Context, EmptyMutation, Object, Schema, Subscription, FieldResult,
 };
-use futures_util::{Stream, stream};
+use futures::{stream, Stream};
 use axum::{
     routing::get,
     Router,
@@ -177,6 +177,6 @@ pub fn create_graphql_router() -> Router {
 
     Router::new()
         .route("/graphql", get(graphiql).post(graphql_handler))
-        .route("/graphql/ws", get(GraphQLSubscription::new(schema.clone())))
+        .route_service("/graphql/ws", GraphQLSubscription::new(schema.clone()))
         .layer(axum::extract::Extension(schema))
 }

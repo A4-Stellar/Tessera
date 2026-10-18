@@ -14,3 +14,7 @@ soroban-sdk = { workspace = true }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
+
+[features]
+# Compiles the experimental `post_quantum` module, which needs soroban-sdk testutils.
+testutils = ["soroban-sdk/testutils"]

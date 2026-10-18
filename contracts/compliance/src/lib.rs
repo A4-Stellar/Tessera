@@ -15,7 +15,11 @@ use soroban_sdk::{
 mod attestation;
 mod verifiable_credentials;
 mod oracle_verifier;
+pub mod zk_aggregator;
+#[cfg(test)]
+mod zk_aggregator_test;
 pub use attestation::{IdentityAttestation, RevocationProof};
+pub use zk_aggregator::{AggregatedProof, AggregationVerifyingKey, ZkAccreditation};
 pub use verifiable_credentials::VerifiableCredential;
 pub use oracle_verifier::{OracleAttestation, OracleConfig, OracleSignature};
 
@@ -62,6 +66,17 @@ pub enum Error {
     OracleNotRegistered = 14,
     InvalidOracleStake = 15,
     InvalidOracleThreshold = 16,
+    /// Referenced by `require_admin` before `initialize` has run; appended
+    /// after the highest existing code rather than reusing the documented
+    /// gap at `2`.
+    NotInitialized = 17,
+    /// Issue #317 (aggregated ZK KYC proofs), appended after 17.
+    ZkVerifyingKeyNotSet = 18,
+    ZkInvalidVerifyingKey = 19,
+    ZkIssuerNotAuthorized = 20,
+    ZkInvalidBatch = 21,
+    ZkProofExpired = 22,
+    ZkProofRejected = 23,
 }
 
 #[derive(Clone)]
@@ -92,6 +107,12 @@ pub(crate) enum DataKey {
     OracleVote(Address, Address),
     OracleNonce(Address, Address),
     OracleRecord(Address),
+    /// Issue #317: Groth16 verification key of the aggregation circuit.
+    ZkAggVk,
+    /// Issue #317: current credential-tree root of an authorized ZK issuer.
+    ZkIssuerRoot(Address),
+    /// Issue #317: accreditation recorded by an aggregated proof.
+    ZkAccreditation(Address),
 }
 
 #[contract]
@@ -539,6 +560,86 @@ impl ComplianceContract {
     }
 
     /// Current contract ABI version, polled by the off-chain indexer.
+    // ---- Issue #317: aggregated ZK KYC proofs (see `zk_aggregator`) ----
+
+    /// Install the aggregation circuit's Groth16 verification key.
+    pub fn set_aggregation_vk(env: Env, admin: Address, vk: AggregationVerifyingKey) {
+        Self::require_admin(&env, &admin);
+        zk_aggregator::set_vk(&env, &vk);
+    }
+
+    /// Authorize `issuer` for aggregated proofs with its credential-tree root
+    /// (a BLS12-381 scalar, big-endian), or replace that root.
+    pub fn set_zk_issuer_root(env: Env, admin: Address, issuer: Address, root: BytesN<32>) {
+        Self::require_admin(&env, &admin);
+        env.storage()
+            .instance()
+            .set(&DataKey::ZkIssuerRoot(issuer), &root);
+    }
+
+    /// An authorized issuer rotates its own root, e.g. after revoking
+    /// credentials; proofs against the old root stop verifying.
+    pub fn update_zk_issuer_root(env: Env, issuer: Address, root: BytesN<32>) {
+        issuer.require_auth();
+        if zk_aggregator::issuer_root(&env, &issuer).is_none() {
+            panic_with_error!(env, Error::ZkIssuerNotAuthorized);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::ZkIssuerRoot(issuer), &root);
+    }
+
+    pub fn revoke_zk_issuer(env: Env, admin: Address, issuer: Address) {
+        Self::require_admin(&env, &admin);
+        env.storage()
+            .instance()
+            .remove(&DataKey::ZkIssuerRoot(issuer));
+    }
+
+    pub fn get_zk_issuer_root(env: Env, issuer: Address) -> Option<BytesN<32>> {
+        zk_aggregator::issuer_root(&env, &issuer)
+    }
+
+    /// Check an aggregated proof without recording anything.
+    pub fn verify_aggregated_kyc(
+        env: Env,
+        issuer: Address,
+        subjects: Vec<Address>,
+        valid_until: u32,
+        proof: AggregatedProof,
+    ) -> bool {
+        zk_aggregator::verify(&env, &issuer, &subjects, valid_until, &proof)
+    }
+
+    /// Verify an aggregated proof and record a `ZkAccreditation` for every
+    /// subject. Anyone may submit: the proof is the authority. Returns the
+    /// number of subjects accredited.
+    pub fn submit_aggregated_kyc(
+        env: Env,
+        issuer: Address,
+        subjects: Vec<Address>,
+        valid_until: u32,
+        proof: AggregatedProof,
+    ) -> u32 {
+        Self::require_not_paused(&env);
+        if !zk_aggregator::verify(&env, &issuer, &subjects, valid_until, &proof) {
+            panic_with_error!(env, Error::ZkProofRejected);
+        }
+        zk_aggregator::record(&env, &issuer, &subjects, valid_until);
+        env.events().publish(
+            (Symbol::new(&env, "zk_kyc_batch"), issuer),
+            (subjects.len(), valid_until),
+        );
+        subjects.len()
+    }
+
+    /// Accreditation recorded for `subject` by an aggregated proof, if it is
+    /// still unexpired.
+    pub fn zk_accreditation(env: Env, subject: Address) -> Option<ZkAccreditation> {
+        zk_aggregator::accreditation(&env, &subject)
+            .filter(|a| env.ledger().sequence() < a.valid_until)
+    }
+
     pub fn version(_env: Env) -> u64 {
         1
     }

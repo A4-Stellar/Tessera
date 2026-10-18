@@ -8,7 +8,9 @@ license = "Apache-2.0"
 
 [dependencies]
 async-graphql = { version = "7", features = ["chrono"] }
-async-graphql-axum = "7"
+# 7.0.13 is the last release built on axum 0.7 (this crate's axum); later
+# 7.x releases moved to axum 0.8 and their handlers no longer fit our Router.
+async-graphql-axum = "=7.0.13"
 async-nats = "0.38"
 axum = { version = "0.7", features = ["ws"] }
 tokio = { version = "1", features = ["full"] }
@@ -43,7 +45,7 @@ futures = "0.3"
 aes-gcm = "0.10"
 csv = "1.3"
 arrow = { version = "54", default-features = false, features = ["ipc"] }
-parquet = { version = "54", default-features = false, features = ["arrow"] }
+parquet = { version = "54", default-features = false, features = ["arrow", "snap"] }
 rocksdb = "0.22"
 pulsar = { version = "6.9", features = ["tokio", "lz4", "snap", "zstd", "compression"] }
 

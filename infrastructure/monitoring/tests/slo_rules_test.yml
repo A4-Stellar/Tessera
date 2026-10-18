@@ -1,0 +1,85 @@
+# promtool unit tests for slo_rules.yml (issue #312).
+# Run from infrastructure/monitoring/:  promtool test rules tests/slo_rules_test.yml
+rule_files:
+  - ../slo_rules.yml
+
+evaluation_interval: 1m
+
+tests:
+  # 1 in 11 requests fails (≈9.1% errors, burn rate ≈90.9x): every
+  # availability burn tier pages/tickets and the budget is exhausted.
+  - interval: 1m
+    input_series:
+      - series: 'rwa_http_requests_total{method="GET",route="/v1/assets",status="200"}'
+        values: '0+100x120'
+      - series: 'rwa_http_requests_total{method="GET",route="/v1/assets",status="500"}'
+        values: '0+10x120'
+      # Probe traffic must not count towards the SLI.
+      - series: 'rwa_http_requests_total{method="GET",route="/health",status="503"}'
+        values: '0+1000x120'
+    promql_expr_test:
+      - expr: tessera:api_availability:error_ratio_rate1h
+        eval_time: 70m
+        exp_samples:
+          - labels: 'tessera:api_availability:error_ratio_rate1h{slo="availability"}'
+            value: 9.09090909090909E-02
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: TesseraApiErrorBudgetFastBurn
+        exp_alerts:
+          - exp_labels: {severity: page, slo: availability, burn_rate: "14.4", window: 1h}
+            exp_annotations:
+              summary: "Tessera API availability (99.9%) SLO burning error budget at >14.4x"
+              description: "The availability error budget is burning at 90.9x the sustainable rate over 1h (confirmed over 5m). At this rate 2% of the 30-day budget is consumed within the window."
+              runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/infrastructure/monitoring/README.md#runbook
+          - exp_labels: {severity: page, slo: availability, burn_rate: "6", window: 6h}
+            exp_annotations:
+              summary: "Tessera API availability (99.9%) SLO burning error budget at >6x"
+              description: "The availability error budget is burning at 90.9x the sustainable rate over 6h (confirmed over 30m). At this rate 5% of the 30-day budget is consumed within the window."
+              runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/infrastructure/monitoring/README.md#runbook
+      - eval_time: 70m
+        alertname: TesseraApiErrorBudgetExhausted
+        exp_alerts:
+          - exp_labels: {severity: page, slo: availability}
+            exp_annotations:
+              summary: "Tessera API availability (99.9%) error budget exhausted"
+              description: The 30-day availability SLO is currently breached.
+              runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/infrastructure/monitoring/README.md#runbook
+
+  # Healthy service: no errors, everything under 100 ms -> nothing fires.
+  - interval: 1m
+    input_series:
+      - series: 'rwa_http_requests_total{method="GET",route="/v1/assets",status="200"}'
+        values: '0+100x120'
+      - series: 'rwa_http_request_duration_seconds_bucket{method="GET",route="/v1/assets",le="0.1"}'
+        values: '0+100x120'
+      - series: 'rwa_http_request_duration_seconds_count{method="GET",route="/v1/assets"}'
+        values: '0+100x120'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: TesseraApiErrorBudgetFastBurn
+        exp_alerts: []
+      - eval_time: 70m
+        alertname: TesseraApiErrorBudgetExhausted
+        exp_alerts: []
+
+  # Half of requests exceed 100 ms: latency SLI burns at 50x.
+  - interval: 1m
+    input_series:
+      - series: 'rwa_http_requests_total{method="GET",route="/v1/assets",status="200"}'
+        values: '0+100x120'
+      - series: 'rwa_http_request_duration_seconds_bucket{method="GET",route="/v1/assets",le="0.1"}'
+        values: '0+50x120'
+      - series: 'rwa_http_request_duration_seconds_count{method="GET",route="/v1/assets"}'
+        values: '0+100x120'
+    promql_expr_test:
+      - expr: tessera:error_budget:burn_rate1h{slo="latency"}
+        eval_time: 70m
+        exp_samples:
+          - labels: 'tessera:error_budget:burn_rate1h{slo="latency"}'
+            value: 50
+      - expr: tessera:error_budget:burn_rate1h{slo="availability"}
+        eval_time: 70m
+        exp_samples:
+          - labels: 'tessera:error_budget:burn_rate1h{slo="availability"}'
+            value: 0

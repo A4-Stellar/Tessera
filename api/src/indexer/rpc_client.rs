@@ -223,6 +223,65 @@ impl RpcClient {
         }
     }
 
+    /// Issue #318: the hash of ledger `sequence`, via `getLedgers` with a
+    /// one-ledger page starting at that sequence. The returned entry's
+    /// sequence is checked, so a node that has pruned the ledger (or answers
+    /// with a different one) is an error rather than a wrong commitment.
+    pub async fn ledger_hash(&self, sequence: u32) -> Result<[u8; 32], IndexError> {
+        #[derive(Deserialize)]
+        struct LedgersEnvelope {
+            result: Option<LedgersResult>,
+            error: Option<RpcError>,
+        }
+        #[derive(Deserialize)]
+        struct LedgersResult {
+            #[serde(default)]
+            ledgers: Vec<LedgerInfo>,
+        }
+        #[derive(Deserialize)]
+        struct LedgerInfo {
+            hash: String,
+            sequence: u32,
+        }
+
+        let idx = self.select_endpoint();
+        let url = {
+            let endpoints = self.endpoints.lock().unwrap();
+            endpoints[idx].url.clone()
+        };
+        let body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "getLedgers",
+            "params": { "startLedger": sequence, "pagination": { "limit": 1 } },
+        });
+        let resp = self.http.post(&url).json(&body).send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(IndexError::HttpStatus {
+                status: status.as_u16(),
+                body,
+            });
+        }
+        let envelope: LedgersEnvelope = resp.json().await?;
+        if let Some(err) = envelope.error {
+            return Err(IndexError::Rpc(err.message));
+        }
+        let ledger = envelope
+            .result
+            .and_then(|r| r.ledgers.into_iter().next())
+            .filter(|l| l.sequence == sequence)
+            .ok_or_else(|| {
+                IndexError::Rpc(format!("ledger {sequence} not returned by getLedgers"))
+            })?;
+        let bytes = hex::decode(&ledger.hash)
+            .map_err(|e| IndexError::Rpc(format!("bad ledger hash: {e}")))?;
+        bytes
+            .try_into()
+            .map_err(|_| IndexError::Rpc("ledger hash is not 32 bytes".into()))
+    }
+
     async fn read_once_inner(
         &self,
         url: &str,

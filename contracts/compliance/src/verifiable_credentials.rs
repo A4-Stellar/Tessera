@@ -28,8 +28,8 @@ pub(crate) fn verify(env: &Env, credential: &VerifiableCredential) -> bool {
     let key: Option<BytesN<32>> = env.storage().instance().get(&DataKey::IssuerKey(credential.issuer.clone()));
     let key = match key { Some(key) => key, None => return false };
     let mut message = Bytes::from_slice(env, b"TESSERA_W3C_VC_V1");
-    message.append(&credential.subject.to_xdr(env));
-    message.append(&credential.issuer.to_xdr(env));
+    message.append(&credential.subject.clone().to_xdr(env));
+    message.append(&credential.issuer.clone().to_xdr(env));
     message.append(&Bytes::from_array(env, &credential.issued_at.to_be_bytes()));
     message.append(&Bytes::from_array(env, &credential.expires_at.to_be_bytes()));
     message.append(&Bytes::from_array(env, &[credential.is_over_18 as u8]));

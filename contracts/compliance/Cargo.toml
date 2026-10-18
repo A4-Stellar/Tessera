@@ -15,3 +15,6 @@ tessera-common = { path = "../common" }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
+# Issue #317 tests load a proof fixture produced by `contracts/zk-aggregator`.
+hex = "0.4"
+serde_json = "1"

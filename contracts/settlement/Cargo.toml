@@ -1,0 +1,19 @@
+[package]
+name = "tessera-settlement"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+description = "Tessera atomic multilateral batch settlement engine for compliance-gated cross-trades (issue #316)."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+soroban-sdk = { workspace = true }
+tessera-common = { path = "../common" }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+tessera-asset-token = { path = "../asset-token" }
+tessera-compliance = { path = "../compliance" }
