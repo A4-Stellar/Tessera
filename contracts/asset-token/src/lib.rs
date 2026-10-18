@@ -11,6 +11,7 @@
 
 pub mod stock_split;
 pub mod redemption_pool;
+pub mod buyback;
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, Address,
