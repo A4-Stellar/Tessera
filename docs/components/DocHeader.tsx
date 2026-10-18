@@ -4,12 +4,14 @@ import Link from "next/link";
 import { useState, useEffect, useRef } from "react";
 import { Sidebar } from "./Sidebar";
 import { LanguageSwitcher } from "./LanguageSwitcher";
+import { NotificationModal } from "./NotificationModal";
 
 const REPO_URL = "https://github.com/A4-Stellar/Tessera";
 
-/** Top navigation bar with an accessible mobile-only slide-in sidebar drawer. */
+/** Top navigation bar with an accessible mobile-only slide-in sidebar drawer and PWA push notifications. */
 export function DocHeader() {
   const [open, setOpen] = useState(false);
+  const [notifOpen, setNotifOpen] = useState(false);
   const toggleButtonRef = useRef<HTMLButtonElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const drawerRef = useRef<HTMLDivElement>(null);
@@ -94,6 +96,17 @@ export function DocHeader() {
           </div>
 
           <div className="flex items-center gap-2 text-sm">
+            <button
+              type="button"
+              onClick={() => setNotifOpen(true)}
+              aria-label="Open push notification settings"
+              className="rounded-lg p-2 text-base-300 hover:bg-white/5 hover:text-base-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" strokeLinecap="round" strokeLinejoin="round" />
+                <path d="M13.73 21a2 2 0 0 1-3.46 0" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
             <LanguageSwitcher />
             <Link href="/docs/getting-started" className="hidden rounded-lg px-3 py-2 text-base-200/90 hover:text-base-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 sm:block">
               Docs
@@ -110,6 +123,9 @@ export function DocHeader() {
           </div>
         </div>
       </header>
+
+      {/* Push notification settings modal */}
+      <NotificationModal isOpen={notifOpen} onClose={() => setNotifOpen(false)} />
 
       {/* Mobile drawer with focus trap and ARIA dialog */}
       {open && (

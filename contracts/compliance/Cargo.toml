@@ -10,6 +10,7 @@ description = "Tessera RWA compliance contract: KYC allowlist and jurisdiction g
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+curve25519-dalek = { version = "5.0.0", default-features = false }
 soroban-sdk = { workspace = true }
 tessera-common = { path = "../common" }
 

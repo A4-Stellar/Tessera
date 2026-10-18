@@ -1,0 +1,20 @@
+{
+  "name": "tessera-visual-tests",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Automated Visual Regression Testing Suite with Playwright and Pixelmatch (Issue #244)",
+  "scripts": {
+    "test:visual": "playwright test --config=playwright.config.ts",
+    "test:visual:update": "playwright test --config=playwright.config.ts --update-snapshots",
+    "test:visual:report": "playwright show-report test-results/html-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@types/node": "^20.14.0",
+    "@types/pixelmatch": "^5.2.6",
+    "@types/pngjs": "^6.0.5",
+    "pixelmatch": "^5.3.0",
+    "pngjs": "^7.0.0",
+    "typescript": "^5.8.0"
+  }
+}
