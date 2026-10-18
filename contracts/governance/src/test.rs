@@ -310,3 +310,261 @@ fn constructor_rejects_threshold_above_board_size() {
     let board = vec![&env, Address::generate(&env)];
     env.register(GovernanceContract, (board, 2u32));
 }
+
+// ========================================================================== //
+// Vote-Escrowed Staking Vault (veTESSERA) Tests
+// ========================================================================== //
+
+mod ve_tests {
+    use soroban_sdk::{
+        contract, contractimpl, contracttype,
+        testutils::{Address as _, Ledger as _},
+        Address, Env,
+    };
+
+    use crate::ve_vault::{
+        VeError, VeVaultContract, VeVaultContractClient, DEFAULT_MAX_PENALTY_BPS,
+        MAX_LOCK_DURATION, SECONDS_PER_DAY,
+    };
+
+    #[derive(Clone)]
+    #[contracttype]
+    enum TokenKey {
+        Balance(Address),
+    }
+
+    #[contract]
+    pub struct MockTesseraToken;
+
+    #[contractimpl]
+    impl MockTesseraToken {
+        pub fn mint(env: Env, to: Address, amount: i128) {
+            let bal = Self::balance(env.clone(), to.clone());
+            env.storage()
+                .persistent()
+                .set(&TokenKey::Balance(to), &(bal + amount));
+        }
+
+        pub fn balance(env: Env, id: Address) -> i128 {
+            env.storage()
+                .persistent()
+                .get(&TokenKey::Balance(id))
+                .unwrap_or(0)
+        }
+
+        pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
+            from.require_auth();
+            let from_bal = Self::balance(env.clone(), from.clone());
+            assert!(from_bal >= amount, "insufficient token balance");
+            let to_bal = Self::balance(env.clone(), to.clone());
+            env.storage()
+                .persistent()
+                .set(&TokenKey::Balance(from), &(from_bal - amount));
+            env.storage()
+                .persistent()
+                .set(&TokenKey::Balance(to), &(to_bal + amount));
+        }
+    }
+
+    struct VeSetup {
+        env: Env,
+        admin: Address,
+        staker: Address,
+        treasury: Address,
+        vault_id: Address,
+        vault: VeVaultContractClient<'static>,
+        token: MockTesseraTokenClient<'static>,
+    }
+
+    fn setup_ve() -> VeSetup {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000_000);
+
+        let admin = Address::generate(&env);
+        let staker = Address::generate(&env);
+        let treasury = Address::generate(&env);
+
+        let token_id = env.register(MockTesseraToken, ());
+        let vault_id = env.register(VeVaultContract, ());
+
+        let token = MockTesseraTokenClient::new(&env, &token_id);
+        let vault = VeVaultContractClient::new(&env, &vault_id);
+
+        token.mint(&staker, &1_000_000);
+        vault.initialize_vault(&admin, &token_id, &treasury);
+
+        VeSetup {
+            env,
+            admin,
+            staker,
+            treasury,
+            vault_id,
+            vault,
+            token,
+        }
+    }
+
+    #[test]
+    fn voting_weight_and_non_linear_dividend_weight_computation() {
+        let s = setup_ve();
+        let amount = 100_000i128;
+        let one_year = 365 * SECONDS_PER_DAY;
+        let two_years = 2 * one_year;
+        let four_years = MAX_LOCK_DURATION;
+
+        // 1 year (25% of T_max): W = 100,000 * 0.25 = 25,000; D = 100,000 * (0.25)^2 = 6,250
+        assert_eq!(s.vault.compute_voting_weight(&amount, &one_year), 25_000);
+        assert_eq!(s.vault.compute_dividend_weight(&amount, &one_year), 6_250);
+
+        // 2 years (50% of T_max): W = 50,000; D = 100,000 * (0.50)^2 = 25,000
+        assert_eq!(s.vault.compute_voting_weight(&amount, &two_years), 50_000);
+        assert_eq!(s.vault.compute_dividend_weight(&amount, &two_years), 25_000);
+
+        // 4 years (100% of T_max): W = 100,000; D = 100,000
+        assert_eq!(s.vault.compute_voting_weight(&amount, &four_years), 100_000);
+        assert_eq!(
+            s.vault.compute_dividend_weight(&amount, &four_years),
+            100_000
+        );
+    }
+
+    #[test]
+    fn linear_voting_power_decay_preserves_locked_balance() {
+        let s = setup_ve();
+        let amount = 400_000i128;
+        let start = s.env.ledger().timestamp();
+
+        let lock = s
+            .vault
+            .create_lock(&s.staker, &amount, &MAX_LOCK_DURATION);
+        assert_eq!(lock.initial_voting_power, 400_000);
+        assert_eq!(lock.initial_dividend_weight, 400_000);
+        assert_eq!(s.vault.voting_power(&s.staker), 400_000);
+        assert_eq!(s.token.balance(&s.vault_id), 400_000);
+
+        // 1 year elapsed (75% time remaining): W = 300,000, D = 400,000 * (0.75)^2 = 225,000
+        s.env.ledger().set_timestamp(start + MAX_LOCK_DURATION / 4);
+        assert_eq!(s.vault.voting_power(&s.staker), 300_000);
+        assert_eq!(s.vault.dividend_weight(&s.staker), 225_000);
+        assert_eq!(s.vault.get_lock(&s.staker).amount, 400_000);
+        assert_eq!(s.token.balance(&s.vault_id), 400_000);
+
+        // 2 years elapsed (50% time remaining): W = 200,000, D = 100,000
+        s.env.ledger().set_timestamp(start + MAX_LOCK_DURATION / 2);
+        assert_eq!(s.vault.voting_power(&s.staker), 200_000);
+        assert_eq!(s.vault.dividend_weight(&s.staker), 100_000);
+
+        // 3 years elapsed (25% time remaining): W = 100,000, D = 25,000
+        s.env
+            .ledger()
+            .set_timestamp(start + (MAX_LOCK_DURATION * 3) / 4);
+        assert_eq!(s.vault.voting_power(&s.staker), 100_000);
+        assert_eq!(s.vault.dividend_weight(&s.staker), 25_000);
+
+        // At expiration: voting power is 0, but principal remains safely escrowed until withdrawal
+        s.env.ledger().set_timestamp(start + MAX_LOCK_DURATION);
+        assert_eq!(s.vault.voting_power(&s.staker), 0);
+        assert_eq!(s.vault.dividend_weight(&s.staker), 0);
+        assert_eq!(s.token.balance(&s.vault_id), 400_000);
+
+        // Full withdrawal at maturity returns 100% of principal with zero penalty
+        let withdrawn = s.vault.withdraw(&s.staker);
+        assert_eq!(withdrawn, 400_000);
+        assert_eq!(s.token.balance(&s.staker), 1_000_000);
+        assert_eq!(s.token.balance(&s.treasury), 0);
+        assert_eq!(s.vault.total_locked(), 0);
+    }
+
+    #[test]
+    fn early_withdrawal_applies_progressive_penalty_to_treasury() {
+        let s = setup_ve();
+        let amount = 200_000i128;
+        let start = s.env.ledger().timestamp();
+        let duration = 2 * 365 * SECONDS_PER_DAY; // 2 years
+
+        s.vault.create_lock(&s.staker, &amount, &duration);
+        assert_eq!(s.vault.max_penalty_bps(), DEFAULT_MAX_PENALTY_BPS); // 50% max penalty
+
+        // Immediately at t = start (100% of lock remaining): penalty is 50% = 100,000
+        assert_eq!(s.vault.calculate_early_exit_penalty(&s.staker), 100_000);
+
+        // At 25% of lock elapsed (75% remaining): penalty is 50% * 0.75 = 37.5% = 75,000
+        s.env.ledger().set_timestamp(start + duration / 4);
+        assert_eq!(s.vault.calculate_early_exit_penalty(&s.staker), 75_000);
+
+        // At 50% of lock elapsed (50% remaining): penalty is 50% * 0.50 = 25% = 50,000
+        s.env.ledger().set_timestamp(start + duration / 2);
+        assert_eq!(s.vault.calculate_early_exit_penalty(&s.staker), 50_000);
+
+        let (payout, penalty) = s.vault.early_withdraw(&s.staker);
+        assert_eq!(payout, 150_000);
+        assert_eq!(penalty, 50_000);
+        assert_eq!(s.token.balance(&s.staker), 800_000 + 150_000);
+        assert_eq!(s.token.balance(&s.treasury), 50_000);
+        assert_eq!(s.vault.total_penalties_collected(), 50_000);
+        assert_eq!(s.vault.total_locked(), 0);
+        assert_eq!(s.vault.voting_power(&s.staker), 0);
+    }
+
+    #[test]
+    fn increase_amount_and_extend_duration_and_ttl_bump() {
+        let s = setup_ve();
+        let one_year = 365 * SECONDS_PER_DAY;
+        let two_years = 2 * one_year;
+
+        s.vault.create_lock(&s.staker, &100_000, &one_year);
+        assert_eq!(s.vault.voting_power(&s.staker), 25_000);
+
+        // Increase amount to 200,000 without changing unlock_time
+        let updated = s.vault.increase_amount(&s.staker, &100_000);
+        assert_eq!(updated.amount, 200_000);
+        assert_eq!(s.vault.voting_power(&s.staker), 50_000);
+
+        // Extend duration to 2 years
+        let extended = s.vault.extend_lock_duration(&s.staker, &two_years);
+        assert_eq!(extended.lock_duration, two_years);
+        assert_eq!(s.vault.voting_power(&s.staker), 100_000);
+
+        // Bump persistent storage TTL for long-lived 4-year state expiry protection
+        let ttl = s.vault.extend_lock_ttl(&s.staker, &s.staker);
+        assert!(ttl > 0);
+
+        s.vault.set_max_penalty_bps(&s.admin, &4_000);
+        assert_eq!(s.vault.max_penalty_bps(), 4_000);
+    }
+
+    #[test]
+    fn enforces_duration_bounds_and_withdrawal_guards() {
+        let s = setup_ve();
+        let one_year = 365 * SECONDS_PER_DAY;
+
+        assert_eq!(
+            s.vault.try_create_lock(&s.staker, &100_000, &0),
+            Err(Ok(VeError::InvalidDuration.into()))
+        );
+        assert_eq!(
+            s.vault
+                .try_create_lock(&s.staker, &100_000, &(MAX_LOCK_DURATION + 1)),
+            Err(Ok(VeError::InvalidDuration.into()))
+        );
+        assert_eq!(
+            s.vault.try_create_lock(&s.staker, &0, &one_year),
+            Err(Ok(VeError::InvalidAmount.into()))
+        );
+
+        s.vault.create_lock(&s.staker, &100_000, &one_year);
+
+        // Cannot create duplicate active lock
+        assert_eq!(
+            s.vault.try_create_lock(&s.staker, &50_000, &one_year),
+            Err(Ok(VeError::LockAlreadyExists.into()))
+        );
+
+        // Cannot standard-withdraw before maturity
+        assert_eq!(
+            s.vault.try_withdraw(&s.staker),
+            Err(Ok(VeError::LockNotExpired.into()))
+        );
+    }
+}
