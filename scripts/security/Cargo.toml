@@ -8,8 +8,14 @@ description = "Soroban contract AST vulnerability scanner (Issue #299)"
 name = "ast-scanner"
 path = "ast_scanner.rs"
 
+[[bin]]
+name = "analyze-soroban-ast"
+path = "analyze_soroban_ast.rs"
+
 [dependencies]
 syn = { version = "2", features = ["full", "visit"] }
 quote = "1"
-proc-macro2 = "1"
+proc-macro2 = { version = "1", features = ["span-locations"] }
 walkdir = "2"
+serde_json = "1"
+serde = { version = "1", features = ["derive"] }
