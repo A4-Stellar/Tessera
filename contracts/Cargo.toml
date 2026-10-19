@@ -19,6 +19,8 @@ members = [
     "governance",
     "flash-loan",
     "lease-token",
+    "escrow",
+    "emergency-liquidation",
 ]
 # `fuzz/` is a self-contained sub-tree of three independent packages:
 #

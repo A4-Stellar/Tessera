@@ -1,0 +1,17 @@
+[package]
+name = "tessera-emergency-liquidation"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+description = "Immutable 4-of-6 emergency liquidation and settlement vault."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+soroban-sdk = { workspace = true }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+tessera-asset-token = { path = "../asset-token" }

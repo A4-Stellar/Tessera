@@ -1,16 +1,15 @@
 //! Issue #90 — forward / reverse share splits via a global multiplier.
 //!
-//! Executing a split is O(1): it appends `(num, den)` to a split history,
-//! updates the cumulative multiplier and rescales total supply. Holder
-//! balances are *not* iterated; each holder records the number of splits
+//! A split appends `(num, den)` to a split history and updates the multiplier.
+//! Stored balances are settled lazily: each holder records the number of splits
 //! already applied to their stored balance (`HolderEpoch`) and is settled
 //! lazily by replaying the missed splits the next time the balance is read
 //! or written. Each step is `floor(balance * num / den)`.
 //!
-//! Precision note: forward splits (`den == 1`) are exact. Reverse splits
-//! floor fractional shares per holder, so the sum of settled balances can be
-//! slightly below the (also floored) total supply. Fractional-share cash-out
-//! is out of scope.
+//! Supply is computed by summing the individually rounded new balances in
+//! a scan of all holders and their pending split histories, rather than
+//! rounding the aggregate. This preserves exact conservation even for reverse
+//! splits. Fractional units are extinguished.
 use soroban_sdk::{panic_with_error, Address, Env, Symbol};
 
 use crate::{DataKey, Error};
@@ -60,19 +59,42 @@ pub fn execute(env: &Env, num: u32, den: u32) {
     let g = gcd(n, d);
     let (n, d) = (n / g, d / g);
 
-    let supply: i128 = env
+    // Upgrades from versions without a complete holder index need an explicit
+    // migration; silently counting only newly touched accounts loses supply.
+    if !env
         .storage()
         .instance()
-        .get(&DataKey::TotalSupply)
+        .get(&DataKey::HoldersComplete)
+        .unwrap_or(false)
+    {
+        panic_with_error!(env, Error::AccountingMigrationRequired);
+    }
+    let holders: u32 = env
+        .storage()
+        .instance()
+        .get(&DataKey::HolderCount)
         .unwrap_or(0);
-    let new_supply = scale(env, supply, num, den);
+    let mut new_supply = 0i128;
+    for i in 0..holders {
+        let holder: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::HolderAt(i))
+            .unwrap();
+        new_supply = new_supply
+            .checked_add(scale(env, effective_balance(env, &holder), num, den))
+            .unwrap_or_else(|| panic_with_error!(env, Error::Overflow));
+    }
+    let new_count = count
+        .checked_add(1)
+        .unwrap_or_else(|| panic_with_error!(env, Error::Overflow));
 
     env.storage()
         .persistent()
         .set(&DataKey::Split(count), &(num, den));
     env.storage()
         .instance()
-        .set(&DataKey::SplitCount, &(count + 1));
+        .set(&DataKey::SplitCount, &new_count);
     env.storage()
         .instance()
         .set(&DataKey::SplitMultiplier, &(n, d));
@@ -113,6 +135,27 @@ pub fn effective_balance(env: &Env, holder: &Address) -> i128 {
 
 /// Store an already-effective balance and mark the holder as fully settled.
 pub fn set_balance(env: &Env, holder: &Address, value: i128) {
+    if !env
+        .storage()
+        .persistent()
+        .has(&DataKey::HolderIndexed(holder.clone()))
+    {
+        let count: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::HolderCount)
+            .unwrap_or(0);
+        let next = count
+            .checked_add(1)
+            .unwrap_or_else(|| panic_with_error!(env, Error::Overflow));
+        env.storage()
+            .persistent()
+            .set(&DataKey::HolderAt(count), holder);
+        env.storage()
+            .persistent()
+            .set(&DataKey::HolderIndexed(holder.clone()), &true);
+        env.storage().instance().set(&DataKey::HolderCount, &next);
+    }
     env.storage()
         .persistent()
         .set(&DataKey::Balance(holder.clone()), &value);
@@ -178,9 +221,10 @@ mod test {
         let env = Env::default();
         let (c, admin, alice, bob) = setup(&env);
         c.execute_share_split(&admin, &1, &5);
-        assert_eq!(c.total_supply(), 200);
+        assert_eq!(c.total_supply(), 199);
         assert_eq!(c.balance(&alice), 60);
         assert_eq!(c.balance(&bob), 20); // 101/5 floored
+        assert_eq!(c.balance(&admin), 119);
     }
 
     #[test]
@@ -193,7 +237,7 @@ mod test {
         assert_eq!(c.balance(&alice), 450);
         c.transfer(&alice, &bob, &50);
         assert_eq!(c.balance(&alice), 400);
-        assert_eq!(c.balance(&bob), 101 * 3 / 1 / 2 + 50);
+        assert_eq!(c.balance(&bob), 101 * 3 / 2 + 50);
         c.execute_share_split(&admin, &2, &1);
         assert_eq!(c.balance(&alice), 800);
     }
