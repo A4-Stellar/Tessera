@@ -1,0 +1,18 @@
+[package]
+name = "tessera-orderbook"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+description = "Secondary Market Orderbook DEX for SEC Rule 144 Restricted Shares (issue #220)."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+soroban-sdk = { workspace = true }
+tessera-common = { path = "../common" }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+tessera-compliance = { path = "../compliance" }

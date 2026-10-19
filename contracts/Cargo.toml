@@ -19,6 +19,7 @@ members = [
     "governance",
     "flash-loan",
     "lease-token",
+    "orderbook",
 ]
 # `fuzz/` is a self-contained sub-tree of three independent packages:
 #
@@ -60,6 +61,7 @@ tessera-registry = { path = "registry" }
 bridge = { path = "bridge" }
 vaults = { path = "vaults" }
 debt-token = { path = "debt-token" }
+tessera-orderbook = { path = "orderbook" }
 
 # Standard Soroban contract release profile: small, deterministic wasm.
 [profile.release]
