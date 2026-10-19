@@ -18,6 +18,7 @@ import { ResourceBudgetVisualizer } from "@/components/ResourceBudgetVisualizer"
 import { ExemptionChecker } from "@/components/ExemptionChecker";
 import RegulatoryMatrix from "@/components/RegulatoryMatrix";
 import { NetworkGraph } from "@/components/NetworkGraph";
+import { WasmSandbox } from "@/components/WasmSandbox";
 
 /**
  * Global MDX component map. Custom components (CalloutBox, ApiEndpoint,
@@ -60,6 +61,7 @@ export function useMDXComponents(components: MDXComponents): MDXComponents {
     ExemptionChecker,
     RegulatoryMatrix,
     NetworkGraph,
+    WasmSandbox,
     ...components,
   };
 }
