@@ -69,7 +69,13 @@ jobs:
           cd "$RUNNER_TEMP"
           echo '111385b834c19571fbcfe8e60ddacd392e64ab3ebbe353bc5c8fc2299c179eaf  kframework_7.1.337_amd64_ubuntu_jammy.deb' | sha256sum --check
           sudo apt-get update
-          sudo apt-get install -y ./kframework_7.1.337_amd64_ubuntu_jammy.deb
+          # The full package pulls LLVM development libraries that conflict
+          # with the hosted runner's libunwind packages. Only the Haskell
+          # proof backend and scanner/runtime dependencies are needed here.
+          sudo apt-get install -y flex bison gcc g++ openjdk-17-jre-headless \
+            libsecp256k1-0 libyaml-0-2 libgmp10 libtinfo6
+          dpkg-deb -x kframework_7.1.337_amd64_ubuntu_jammy.deb "$RUNNER_TEMP/kframework"
+          echo "$RUNNER_TEMP/kframework/usr/bin" >> "$GITHUB_PATH"
           python -m pip install z3-solver==4.8.15.0
       - name: Prove mint and burn claims
         run: |
