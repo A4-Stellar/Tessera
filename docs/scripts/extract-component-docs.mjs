@@ -168,7 +168,7 @@ ${BANNER}
 
 ${doc.description ? prose(doc.description) : ""}
 
-Source: \`${relative(DOCS_ROOT, doc.filePath)}\` · available in every MDX page as \`<${doc.displayName} />\`.
+Source: \`${relative(DOCS_ROOT, doc.filePath).replace(/\\/g, "/")}\` · available in every MDX page as \`<${doc.displayName} />\`.
 
 ## Props
 
