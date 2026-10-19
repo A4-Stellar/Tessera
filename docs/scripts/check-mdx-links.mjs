@@ -17,6 +17,7 @@
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const args = process.argv.slice(2);
 const SKIP_EXTERNAL = args.includes("--skip-external");
@@ -24,7 +25,7 @@ const rootArg = args.find((a) => a.startsWith("--root="))?.split("=")[1];
 const timeoutArg = Number(args.find((a) => a.startsWith("--timeout="))?.split("=")[1]);
 const concurrencyArg = Number(args.find((a) => a.startsWith("--concurrency="))?.split("=")[1]);
 
-const DOCS_ROOT = resolve(rootArg ?? join(dirname(new URL(import.meta.url).pathname), ".."));
+const DOCS_ROOT = resolve(rootArg ?? fileURLToPath(new URL("..", import.meta.url)));
 const TIMEOUT_MS = Number.isFinite(timeoutArg) && timeoutArg > 0 ? timeoutArg : 10000;
 const CONCURRENCY = Number.isFinite(concurrencyArg) && concurrencyArg > 0 ? concurrencyArg : 10;
 const LOCALES = ["en", "es", "fr", "ja", "pt"];

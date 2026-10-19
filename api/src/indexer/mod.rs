@@ -33,6 +33,7 @@ pub mod price_feed;
 pub mod pulsar_producer;
 pub mod replay;
 pub mod rpc_client;
+pub mod state_reconstitution;
 pub mod stream_processor;
 pub mod flink_pipeline;
 
@@ -352,7 +353,16 @@ impl IndexError {
     /// transient. XDR, strkey and decode errors stem from our own request or
     /// response handling and will fail identically on every attempt.
     fn is_transient(&self) -> bool {
-        matches!(self, IndexError::Http(_) | IndexError::Rpc(_))
+        matches!(
+            self,
+            IndexError::Http(_)
+                | IndexError::Rpc(_)
+                | IndexError::RateLimited { .. }
+                | IndexError::HttpStatus {
+                    status: 408 | 429 | 500..=599,
+                    ..
+                }
+        )
     }
 }
 
@@ -618,6 +628,12 @@ impl Indexer {
     /// `main.rs`), at which point the loop halts rather than starting
     /// another refresh cycle.
     pub async fn run(self, mut shutdown: tokio::sync::watch::Receiver<bool>) {
+        let health_client = self.rpc.clone();
+        let health_shutdown = shutdown.clone();
+        tokio::spawn(async move {
+            health_client.monitor(health_shutdown).await;
+        });
+
         let mut role = self.state.node_role.clone();
         loop {
             if *shutdown.borrow() {

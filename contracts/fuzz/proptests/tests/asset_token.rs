@@ -1,14 +1,6 @@
-//! Property: the asset token conserves supply, and a self-transfer is a no-op.
-//!
-//! This is the test that found the self-transfer bug. The old `transfer` wrote
-//! `from_balance - amount` and then `from_balance + amount` to the *same* key,
-//! so a holder could inflate their own balance arbitrarily while
-//! `total_supply` stayed put. A test that only asserted
-//! `sum(balances) == total_supply` would *not* have caught it, because
-//! `initialize` already violated that law by handing the admin the whole
-//! supply while the fan-out mint handed out the same units again — so the
-//! target has to check the self-transfer's effect on a single balance
-//! directly, not just the aggregate.
+//! Stateful conservation properties for actual asset-token invocations.
+//! Track every holder (including the issuer), then require exact equality
+//! between all balances and supply after every successful or rejected call.
 
 use proptest::prelude::*;
 use soroban_sdk::{testutils::Address as _, Address, Env, String as SdkString};
@@ -80,20 +72,19 @@ fn total_balances(f: &Fixture) -> i128 {
 proptest! {
     #![proptest_config(ProptestConfig { cases: 96, ..ProptestConfig::default() })]
 
-    /// After any sequence of token operations, the sum of tracked balances is
-    /// never below zero and never exceeds the recorded total supply.
+    /// After every operation, balances are nonnegative and sum exactly to
+    /// outstanding supply, including recovered units credited to the issuer.
     ///
     /// A negative balance is the signature of an underflow that was written
     /// rather than reported; a sum above supply is the signature of units
     /// created out of nothing.
     #[test]
-    fn balances_never_exceed_supply(
+    fn balances_always_equal_supply(
         supply in 0i128..1_000_000i128,
         ops in op_sequence(HOLDERS, 6),
     ) {
         let f = setup(supply);
         let mut total_supply = supply;
-        let mut clawbacked = 0i128;
 
         for op in &ops {
             match op {
@@ -111,9 +102,9 @@ proptest! {
                         total_supply += amount;
                     } else {
                         prop_assert!(
-                            is_err(&r, TokenError::InvalidAmount)
-                                || is_err(&r, TokenError::Overflow)
-                                || is_err(&r, TokenError::InsufficientBalance),
+                            is_err(&r, TokenError::InvalidAmount.into())
+                                || is_err(&r, TokenError::Overflow.into())
+                                || is_err(&r, TokenError::InsufficientBalance.into()),
                             "mint rejected for an unexpected reason: {} -> {r:?}",
                             op.label()
                         );
@@ -125,10 +116,10 @@ proptest! {
                         total_supply -= amount;
                     } else {
                         prop_assert!(
-                            is_err(&r, TokenError::InvalidAmount)
-                                || is_err(&r, TokenError::InsufficientBalance)
-                                || is_err(&r, TokenError::Overflow)
-                                || is_err(&r, TokenError::Locked),
+                            is_err(&r, TokenError::InvalidAmount.into())
+                                || is_err(&r, TokenError::InsufficientBalance.into())
+                                || is_err(&r, TokenError::Overflow.into())
+                                || is_err(&r, TokenError::Locked.into()),
                             "burn rejected for an unexpected reason: {} -> {r:?}",
                             op.label()
                         );
@@ -136,14 +127,10 @@ proptest! {
                 }
                 Op::Clawback { from, amount } => {
                     let r = f.token.try_clawback(&f.admin, &f.holders[*from], amount);
-                    if is_ok(&r) {
-                        // Clawback removes from the holder but deliberately
-                        // leaves total supply alone.
-                        clawbacked += amount;
-                    } else {
+                    if !is_ok(&r) {
                         prop_assert!(
-                            is_err(&r, TokenError::InvalidAmount)
-                                || is_err(&r, TokenError::InsufficientBalance),
+                            is_err(&r, TokenError::InvalidAmount.into())
+                                || is_err(&r, TokenError::InsufficientBalance.into()),
                             "clawback rejected for an unexpected reason: {} -> {r:?}",
                             op.label()
                         );
@@ -158,8 +145,8 @@ proptest! {
                 op.label()
             );
             prop_assert!(
-                sum + clawbacked <= total_supply,
-                "balances exceed supply after {}: sum {sum} + clawed {clawbacked} > supply {total_supply}",
+                sum == total_supply,
+                "supply diverged after {}: sum {sum} != supply {total_supply}",
                 op.label()
             );
         }
@@ -187,7 +174,7 @@ proptest! {
         // Whether it is accepted or refused, the balance must not move. The
         // contract returns early for `from == to`, so it is accepted, but the
         // property holds either way and that is what is asserted.
-        if is_ok(&r) || is_err(&r, TokenError::InsufficientBalance) {
+        if is_ok(&r) || is_err(&r, TokenError::InsufficientBalance.into()) {
             prop_assert_eq!(
                 f.token.balance(who),
                 before,
@@ -207,7 +194,7 @@ proptest! {
         let r = f.token.try_mint(&f.admin, &f.holders[1], &amount);
         if !is_ok(&r) {
             prop_assert!(
-                is_err(&r, TokenError::Overflow) || is_err(&r, TokenError::InvalidAmount),
+                is_err(&r, TokenError::Overflow.into()) || is_err(&r, TokenError::InvalidAmount.into()),
                 "an overflowing mint must report Overflow, got {r:?}"
             );
         }
@@ -230,7 +217,7 @@ proptest! {
         ] {
             prop_assert!(!is_ok(&r), "{label} accepted a non-positive amount {amount}");
             prop_assert!(
-                is_err(&r, TokenError::InvalidAmount),
+                is_err(&r, TokenError::InvalidAmount.into()),
                 "{label} should report InvalidAmount for {amount}, got {r:?}"
             );
         }

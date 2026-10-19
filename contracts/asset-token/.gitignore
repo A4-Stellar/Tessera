@@ -1,0 +1,2 @@
+# Soroban host diagnostic dumps; assertions do not read these generated files.
+test_snapshots/
