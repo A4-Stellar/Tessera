@@ -63,7 +63,9 @@ impl DatabaseNode {
 }
 
 /// Logical Log Sequence Number representation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
+)]
 pub struct WalLsn(pub u64);
 
 impl fmt::Display for WalLsn {
@@ -436,18 +438,16 @@ impl ActiveActiveSyncCoordinator {
         if self.is_gcp_online && mutation.metadata().origin_node_id != self.gcp_node.id {
             if let Some(existing_gcp) = self.record_store_gcp.get(&pk) {
                 // Conflict resolution needed
-                let verdict = self.resolver.resolve(
-                    existing_gcp,
-                    &mutation,
-                    &self.gcp_node,
-                    &self.aws_node,
-                );
+                let verdict =
+                    self.resolver
+                        .resolve(existing_gcp, &mutation, &self.gcp_node, &self.aws_node);
                 self.record_store_gcp.insert(pk, verdict.winning_mutation);
             } else {
                 self.record_store_gcp.insert(pk, mutation);
             }
             self.gcp_wal.0 += 128;
-            self.latency_monitor.record_sample(Duration::from_millis(150)); // Simulated 150ms cross-cloud sync
+            self.latency_monitor
+                .record_sample(Duration::from_millis(150)); // Simulated 150ms cross-cloud sync
         }
     }
 
@@ -460,18 +460,16 @@ impl ActiveActiveSyncCoordinator {
         // Replicate to AWS if online and non-loop origin
         if self.is_aws_online && mutation.metadata().origin_node_id != self.aws_node.id {
             if let Some(existing_aws) = self.record_store_aws.get(&pk) {
-                let verdict = self.resolver.resolve(
-                    existing_aws,
-                    &mutation,
-                    &self.aws_node,
-                    &self.gcp_node,
-                );
+                let verdict =
+                    self.resolver
+                        .resolve(existing_aws, &mutation, &self.aws_node, &self.gcp_node);
                 self.record_store_aws.insert(pk, verdict.winning_mutation);
             } else {
                 self.record_store_aws.insert(pk, mutation);
             }
             self.aws_wal.0 += 128;
-            self.latency_monitor.record_sample(Duration::from_millis(165)); // Simulated 165ms cross-cloud sync
+            self.latency_monitor
+                .record_sample(Duration::from_millis(165)); // Simulated 165ms cross-cloud sync
         }
     }
 
@@ -631,7 +629,10 @@ mod tests {
         // When timestamps are tied, AWS (priority 200) wins over GCP (priority 100)
         let verdict = resolver.resolve(&mut_gcp, &mut_aws, &gcp_node, &aws_node);
         assert_eq!(verdict.winner_origin, aws_node.id);
-        assert_eq!(verdict.strategy_applied, ConflictStrategy::HighestNodePriority);
+        assert_eq!(
+            verdict.strategy_applied,
+            ConflictStrategy::HighestNodePriority
+        );
     }
 
     #[test]
