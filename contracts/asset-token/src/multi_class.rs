@@ -87,7 +87,6 @@ fn policy(env: &Env, class: ShareClass) -> ClassPolicy {
 }
 
 fn require_holder(env: &Env, holder: &Address) {
-    holder.require_auth();
     AssetTokenContract::require_not_paused(env);
     AssetTokenContract::require_active(env);
     AssetTokenContract::require_not_locked(env, holder);
@@ -208,6 +207,7 @@ impl AssetTokenContract {
 
     pub fn transfer_class(env: Env, class: ShareClass, from: Address, to: Address, amount: i128) {
         require_enabled(&env);
+        from.require_auth();
         require_holder(&env, &from);
         if amount <= 0 {
             panic_with_error!(env, Error::InvalidAmount);
@@ -256,6 +256,7 @@ impl AssetTokenContract {
     /// Irreversible 1:1 Class A -> B conversion. No B -> A voting upgrade exists.
     pub fn convert_class(env: Env, holder: Address, amount: i128) {
         require_enabled(&env);
+        holder.require_auth();
         require_holder(&env, &holder);
         require_compliant(&env, &holder, Error::SenderNotCompliant);
         let held = balance(&env, ShareClass::ClassA, &holder);
@@ -281,6 +282,7 @@ impl AssetTokenContract {
     }
 
     pub fn burn_class(env: Env, holder: Address, class: ShareClass, amount: i128) {
+        holder.require_auth();
         require_holder(&env, &holder);
         burn(&env, &holder, class, amount);
     }

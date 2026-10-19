@@ -55,6 +55,8 @@ jobs:
   k-proofs:
     runs-on: ubuntu-22.04
     timeout-minutes: 20
+    env:
+      K_OPTS: -Xmx2048m
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -76,9 +78,12 @@ jobs:
             libsecp256k1-0 libyaml-0-2 libgmp10 libtinfo6
           dpkg-deb -x kframework_7.1.337_amd64_ubuntu_jammy.deb "$RUNNER_TEMP/kframework"
           echo "$RUNNER_TEMP/kframework/usr/bin" >> "$GITHUB_PATH"
+          echo "/usr/lib/jvm/java-17-openjdk-amd64/bin" >> "$GITHUB_PATH"
+          echo "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> "$GITHUB_ENV"
           python -m pip install z3-solver==4.8.15.0
       - name: Prove mint and burn claims
         run: |
+          java -version
           kompile --version
           z3 --version
           contracts/asset-token/verification/verify.sh

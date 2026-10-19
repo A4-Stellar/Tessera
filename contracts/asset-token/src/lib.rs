@@ -16,6 +16,7 @@ pub mod redemption_pool;
 pub mod stock_split;
 
 #[cfg(test)]
+#[path = "test.rs"]
 mod tests;
 
 use soroban_sdk::{

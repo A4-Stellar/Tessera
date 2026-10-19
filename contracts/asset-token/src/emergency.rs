@@ -31,7 +31,6 @@ fn require_vault(env: &Env, vault: &Address) {
     if vault != &configured {
         panic_with_error!(env, Error::InvalidVault);
     }
-    vault.require_auth();
 }
 
 /// floor(units * proceeds / supply), without narrowing the intermediate product.
@@ -75,6 +74,7 @@ impl AssetTokenContract {
 
     pub fn activate_liquidation(env: Env, vault: Address) {
         require_vault(&env, &vault);
+        vault.require_auth();
         Self::require_active(&env);
         if Self::total_supply(env.clone()) <= 0 {
             panic_with_error!(env, Error::InvalidAmount);
@@ -95,6 +95,7 @@ impl AssetTokenContract {
         share_class: Option<u32>,
     ) {
         require_vault(&env, &vault);
+        vault.require_auth();
         holder.require_auth();
         if Self::status(env.clone()) != AssetStatus::Liquidated {
             panic_with_error!(env, Error::NotLiquidated);
