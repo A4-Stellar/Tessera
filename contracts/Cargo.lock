@@ -2073,6 +2073,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "tessera-orderbook"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+ "tessera-common",
+ "tessera-compliance",
+]
+
+[[package]]
 name = "tessera-registry"
 version = "0.1.0"
 dependencies = [
