@@ -1,0 +1,78 @@
+name: Token security
+
+on:
+  pull_request:
+    paths:
+      - "contracts/**"
+      - ".github/workflows/token-security.yml"
+  push:
+    paths:
+      - "contracts/**"
+      - ".github/workflows/token-security.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contract-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CARGO_BUILD_JOBS: 2
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32v1-none
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: contracts
+      - name: Formatting
+        run: >-
+          cargo +stable fmt --manifest-path contracts/Cargo.toml --check
+          -p tessera-asset-token -p tessera-emergency-liquidation
+      - name: Contract and authorization tests
+        run: >-
+          cargo +stable test --manifest-path contracts/Cargo.toml --locked
+          -p tessera-asset-token -p tessera-escrow -p tessera-emergency-liquidation
+      - name: Clippy
+        # Existing event APIs are deprecated in SDK 25; generated argument
+        # builders inherit the existing multi-argument initialization ABI.
+        run: >-
+          cargo +stable clippy --manifest-path contracts/Cargo.toml --locked
+          -p tessera-asset-token -p tessera-emergency-liquidation
+          --all-targets -- -D warnings -A deprecated -A clippy::too_many_arguments
+      - name: Build deployable contracts
+        run: >-
+          cargo +stable build --manifest-path contracts/Cargo.toml --locked --release
+          --target wasm32v1-none -p tessera-asset-token -p tessera-escrow
+          -p tessera-emergency-liquidation
+
+  k-proofs:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install pinned K Framework
+        env:
+          GH_TOKEN: "${{ github.token }}"
+        run: |
+          gh release download v7.1.337 --repo runtimeverification/k \
+            --pattern kframework_7.1.337_amd64_ubuntu_jammy.deb --dir "$RUNNER_TEMP"
+          cd "$RUNNER_TEMP"
+          echo '111385b834c19571fbcfe8e60ddacd392e64ab3ebbe353bc5c8fc2299c179eaf  kframework_7.1.337_amd64_ubuntu_jammy.deb' | sha256sum --check
+          sudo apt-get update
+          sudo apt-get install -y ./kframework_7.1.337_amd64_ubuntu_jammy.deb
+          python -m pip install z3-solver==4.8.15.0
+      - name: Prove mint and burn claims
+        run: |
+          kompile --version
+          z3 --version
+          contracts/asset-token/verification/verify.sh

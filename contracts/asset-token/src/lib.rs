@@ -9,9 +9,14 @@
 //! reconstruction caveat.
 #![no_std]
 
-pub mod stock_split;
-pub mod redemption_pool;
 pub mod buyback;
+pub mod emergency;
+pub mod multi_class;
+pub mod redemption_pool;
+pub mod stock_split;
+
+#[cfg(test)]
+mod tests;
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, Address,
@@ -55,6 +60,15 @@ pub enum Error {
     AlreadyLiquidated = 13,
     StablecoinNotConfigured = 14,
     RedemptionExceedsAllocation = 15,
+    VaultConfigured = 16,
+    InvalidVault = 17,
+    MultiClassDisabled = 40,
+    MultiClassEnabled = 41,
+    InvalidShareClass = 42,
+    ClassTransferDisabled = 43,
+    InvalidConversion = 44,
+    NonZeroSupply = 45,
+    AccountingMigrationRequired = 46,
 }
 
 #[contracttype]
@@ -94,6 +108,11 @@ enum DataKey {
     LiquidationSupply,
     LiquidationProceeds,
     Redeemed(Address),
+    EmergencyVault,
+    HoldersComplete,
+    HolderCount,
+    HolderAt(u32),
+    HolderIndexed(Address),
 }
 
 #[contract]
@@ -148,6 +167,9 @@ impl AssetTokenContract {
         env.storage()
             .instance()
             .set(&DataKey::AssetStatus, &AssetStatus::Active);
+        env.storage()
+            .instance()
+            .set(&DataKey::HoldersComplete, &true);
 
         stock_split::set_balance(&env, &admin.clone(), total_supply);
 
@@ -157,6 +179,7 @@ impl AssetTokenContract {
     }
 
     pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
+        multi_class::require_single_class(&env);
         from.require_auth();
         Self::require_not_paused(&env);
         Self::require_active(&env);
@@ -199,13 +222,14 @@ impl AssetTokenContract {
             .unwrap_or_else(|| panic_with_error!(env, Error::Overflow));
 
         stock_split::set_balance(&env, &from.clone(), from_balance - amount);
-        stock_split::set_balance(&env, &to.clone(), to_balance + amount);
+        stock_split::set_balance(&env, &to.clone(), new_to_balance);
 
         env.events()
             .publish((symbol_short!("transfer"), from, to), amount);
     }
 
     pub fn mint(env: Env, admin: Address, to: Address, amount: i128) {
+        multi_class::require_single_class(&env);
         Self::require_admin(&env, &admin);
         Self::require_not_paused(&env);
         Self::require_active(&env);
@@ -227,12 +251,17 @@ impl AssetTokenContract {
             .set(&DataKey::TotalSupply, &new_total);
 
         let to_balance = Self::balance(env.clone(), to.clone());
-        stock_split::set_balance(&env, &to.clone(), to_balance + amount);
+        let new_balance = to_balance
+            .checked_add(amount)
+            .unwrap_or_else(|| panic_with_error!(env, Error::Overflow));
+        stock_split::set_balance(&env, &to.clone(), new_balance);
 
         env.events().publish((symbol_short!("mint"), to), amount);
     }
 
     pub fn burn(env: Env, from: Address, amount: i128) {
+        multi_class::require_single_class(&env);
+        Self::require_active(&env);
         from.require_auth();
         Self::require_not_locked(&env, &from);
         if amount <= 0 {
@@ -268,8 +297,8 @@ impl AssetTokenContract {
     }
 
     /// Issue #90 - execute a forward (`num > den`) or reverse (`num < den`)
-    /// split. O(1): only a global multiplier changes; holder balances are
-    /// settled lazily on next read/write. Admin-authenticated.
+    /// split. Balances settle lazily; supply is the sum of individually
+    /// rounded balances, scanning holders and pending history. Admin-authenticated.
     pub fn execute_share_split(
         env: Env,
         admin: Address,
@@ -277,6 +306,9 @@ impl AssetTokenContract {
         ratio_denominator: u32,
     ) {
         Self::require_admin(&env, &admin);
+        multi_class::require_single_class(&env);
+        Self::require_active(&env);
+        Self::require_not_paused(&env);
         stock_split::execute(&env, ratio_numerator, ratio_denominator);
     }
 
@@ -284,7 +316,10 @@ impl AssetTokenContract {
     pub fn set_liquidation_stablecoin(env: Env, admin: Address, stablecoin: Address) {
         Self::require_admin(&env, &admin);
         Self::require_active(&env);
-        env.storage().instance().set(&DataKey::Stablecoin, &stablecoin);
+        emergency::require_no_vault(&env);
+        env.storage()
+            .instance()
+            .set(&DataKey::Stablecoin, &stablecoin);
     }
 
     /// Deposit the cash proceeds from an asset sale and permanently close the
@@ -293,6 +328,7 @@ impl AssetTokenContract {
     pub fn deposit_liquidation_proceeds(env: Env, admin: Address, stablecoin_amount: i128) {
         Self::require_admin(&env, &admin);
         Self::require_active(&env);
+        emergency::require_no_vault(&env);
         if stablecoin_amount <= 0 {
             panic_with_error!(env, Error::InvalidAmount);
         }
@@ -303,7 +339,16 @@ impl AssetTokenContract {
         if supply <= 0 {
             panic_with_error!(env, Error::InvalidAmount);
         }
-        env.storage().instance().set(&DataKey::LiquidationSupply, &supply);
+        let stablecoin: Address = env.storage().instance().get(&DataKey::Stablecoin).unwrap();
+        if soroban_sdk::token::Client::new(&env, &stablecoin)
+            .balance(&env.current_contract_address())
+            < stablecoin_amount
+        {
+            panic_with_error!(env, Error::InsufficientBalance);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::LiquidationSupply, &supply);
         env.storage()
             .instance()
             .set(&DataKey::LiquidationProceeds, &stablecoin_amount);
@@ -317,6 +362,8 @@ impl AssetTokenContract {
     /// Burn asset tokens and pay the holder's pro-rata share of the deposited
     /// proceeds. Transfers and minting are disabled after liquidation.
     pub fn redeem_liquidation_proceeds(env: Env, holder: Address, token_amount: i128) -> i128 {
+        emergency::require_no_vault(&env);
+        multi_class::require_single_class(&env);
         holder.require_auth();
         if Self::status(env.clone()) != AssetStatus::Liquidated {
             panic_with_error!(env, Error::NotLiquidated);
@@ -333,23 +380,43 @@ impl AssetTokenContract {
         if balance < token_amount {
             panic_with_error!(env, Error::InsufficientBalance);
         }
-        let supply: i128 = env.storage().instance().get(&DataKey::LiquidationSupply).unwrap();
-        let proceeds: i128 = env.storage().instance().get(&DataKey::LiquidationProceeds).unwrap();
-        let payout = ((token_amount as u128 * proceeds as u128) / supply as u128) as i128;
-        let new_redeemed = redeemed.checked_add(token_amount).unwrap_or_else(|| panic_with_error!(env, Error::Overflow));
+        let supply: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::LiquidationSupply)
+            .unwrap();
+        let proceeds: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::LiquidationProceeds)
+            .unwrap();
+        let new_redeemed = redeemed
+            .checked_add(token_amount)
+            .unwrap_or_else(|| panic_with_error!(env, Error::Overflow));
+        let payout = emergency::pro_rata(&env, new_redeemed, proceeds, supply)
+            - emergency::pro_rata(&env, redeemed, proceeds, supply);
         stock_split::set_balance(&env, &holder.clone(), balance - token_amount);
-        env.storage().persistent().set(&DataKey::Redeemed(holder.clone()), &new_redeemed);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Redeemed(holder.clone()), &new_redeemed);
         let total = Self::total_supply(env.clone());
-        env.storage().instance().set(&DataKey::TotalSupply, &(total - token_amount));
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalSupply, &(total - token_amount));
         let stablecoin: Address = env.storage().instance().get(&DataKey::Stablecoin).unwrap();
-        let args: Vec<Val> = (env.current_contract_address(), holder.clone(), payout).into_val(&env);
+        let args: Vec<Val> =
+            (env.current_contract_address(), holder.clone(), payout).into_val(&env);
         env.invoke_contract::<()>(&stablecoin, &Symbol::new(&env, "transfer"), args);
-        env.events().publish((symbol_short!("redeem"), holder), (token_amount, payout));
+        env.events()
+            .publish((symbol_short!("redeem"), holder), (token_amount, payout));
         payout
     }
 
     pub fn status(env: Env) -> AssetStatus {
-        env.storage().instance().get(&DataKey::AssetStatus).unwrap_or(AssetStatus::Active)
+        env.storage()
+            .instance()
+            .get(&DataKey::AssetStatus)
+            .unwrap_or(AssetStatus::Active)
     }
 
     /// Issue #90 - cumulative split multiplier as `(numerator, denominator)`.
@@ -461,11 +528,12 @@ impl AssetTokenContract {
     /// identical to a transfer's — see the PR description for why a new
     /// error code was not added here), and emits a dedicated `clawback`
     /// event so the recovery is fully auditable on-chain. Total supply is
-    /// intentionally left unchanged: the clawed-back balance is removed
-    /// from `from` only; re-issuing or burning it is a separate, later
-    /// admin action (e.g. `mint`/`burn`) and out of scope for this engine.
+    /// unchanged: recovered units are credited to the administrator so
+    /// every unit of supply remains backed by an account balance.
     pub fn clawback(env: Env, admin: Address, from: Address, amount: i128) {
         Self::require_admin(&env, &admin);
+        multi_class::require_single_class(&env);
+        Self::require_active(&env);
         if amount <= 0 {
             panic_with_error!(env, Error::InvalidAmount);
         }
@@ -474,7 +542,13 @@ impl AssetTokenContract {
         if from_balance < amount {
             panic_with_error!(env, Error::InsufficientBalance);
         }
-        stock_split::set_balance(&env, &from.clone(), from_balance - amount);
+        if from != admin {
+            let recovered = Self::balance(env.clone(), admin.clone())
+                .checked_add(amount)
+                .unwrap_or_else(|| panic_with_error!(env, Error::Overflow));
+            stock_split::set_balance(&env, &from, from_balance - amount);
+            stock_split::set_balance(&env, &admin, recovered);
+        }
 
         env.events()
             .publish((symbol_short!("clawback"), from), amount);
@@ -486,6 +560,8 @@ impl AssetTokenContract {
     /// error code is needed.
     pub fn upgrade(env: Env, admin: Address, new_wasm_hash: BytesN<32>) {
         Self::require_admin(&env, &admin);
+        Self::require_active(&env);
+        emergency::require_no_vault(&env);
         tessera_common::upgrade(&env, new_wasm_hash);
     }
 

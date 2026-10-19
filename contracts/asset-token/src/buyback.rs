@@ -8,9 +8,9 @@
 //!    budget, and an expiration ledger.
 //! 2. Verified (compliant) holders tender tokens in exchange for treasury
 //!    stablecoins at the fixed offer price.
-//! 3. At or after expiration, the admin finalizes the buyback: tendered tokens
-//!    are burned (reducing circulating supply) and a `CapitalReduction` audit
-//!    event is emitted.
+//! 3. Each tender atomically burns the shares and pays the holder. Finalization
+//!    closes the round and emits the `CapitalReduction` audit event. Supply
+//!    remains exactly equal to balances throughout the round.
 //!
 //! # Storage layout
 //!
@@ -29,9 +29,11 @@
 #![allow(dead_code)]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, Address,
-    Env, Symbol, Val, Vec,
+    contracterror, contractimpl, contracttype, panic_with_error, symbol_short, Address, Env,
+    IntoVal, Symbol, Val, Vec,
 };
+
+use crate::{AssetTokenContract, AssetTokenContractArgs, AssetTokenContractClient};
 
 // ---- Error codes --------------------------------------------------------- //
 // Placed above 10 (the highest `Error` code in `lib.rs`) to avoid collisions.
@@ -78,14 +80,12 @@ enum BuybackKey {
 
 // ---- Contract ------------------------------------------------------------ //
 
-/// Stand-alone buyback contract.  In practice this logic is intended to be
-/// deployed alongside (or composed into) the `AssetTokenContract`; it is
-/// isolated here for clarity and testability.
-#[contract]
-pub struct BuybackContract;
+/// Backwards-compatible names for the buyback entrypoints on the asset token.
+pub use crate::AssetTokenContract as BuybackContract;
+pub use crate::AssetTokenContractClient as BuybackContractClient;
 
 #[contractimpl]
-impl BuybackContract {
+impl AssetTokenContract {
     // ------------------------------------------------------------------
     // Admin operations
     // ------------------------------------------------------------------
@@ -111,6 +111,8 @@ impl BuybackContract {
         treasury_contract: Address,
     ) {
         Self::require_admin(&env, &admin);
+        crate::multi_class::require_single_class(&env);
+        Self::require_active(&env);
 
         // Reject a second concurrent buyback.
         let active: bool = env
@@ -156,12 +158,14 @@ impl BuybackContract {
     /// Allow a compliant holder to tender `amount` tokens at the fixed offer
     /// price in exchange for stablecoins from the treasury.
     ///
-    /// The holder's token balance is reduced immediately (acting as a
-    /// provisional burn); the treasury stablecoin contract is called to
-    /// transfer the equivalent payment to the holder. The final, permanent
-    /// supply reduction is recorded in `finalize_buyback`.
+    /// Shares are burned atomically with the stablecoin payment. Finalization
+    /// records the aggregate capital reduction without burning a second time.
     pub fn tender(env: Env, holder: Address, amount: i128) {
         holder.require_auth();
+        crate::multi_class::require_single_class(&env);
+        Self::require_active(&env);
+        Self::require_not_paused(&env);
+        Self::require_not_locked(&env, &holder);
 
         let active: bool = env
             .storage()
@@ -195,19 +199,18 @@ impl BuybackContract {
             panic_with_error!(env, BuybackError::TenderNotCompliant);
         }
 
-        // Deduct the holder's token balance.
-        let balance_key = super::DataKey::Balance(holder.clone());
-        let current_balance: i128 = env
-            .storage()
-            .persistent()
-            .get(&balance_key)
-            .unwrap_or(0);
-        if current_balance < amount {
+        // Burn atomically with payment so no unowned supply exists between
+        // tender and finalization. A failed payment reverts the burn, too.
+        let me = env.current_contract_address();
+        let current_balance = Self::balance(env.clone(), holder.clone());
+        let total_supply = Self::total_supply(env.clone());
+        if current_balance < amount || total_supply < amount {
             panic_with_error!(env, super::Error::InsufficientBalance);
         }
+        crate::stock_split::set_balance(&env, &holder, current_balance - amount);
         env.storage()
-            .persistent()
-            .set(&balance_key, &(current_balance - amount));
+            .instance()
+            .set(&super::DataKey::TotalSupply, &(total_supply - amount));
 
         // Compute the stablecoin payout.
         let offer_price: i128 = env
@@ -247,12 +250,8 @@ impl BuybackContract {
 
         // Disburse payout via the treasury stablecoin contract:
         // call `transfer(treasury_contract_address, holder, payout)`.
-        let treasury: Address = env
-            .storage()
-            .instance()
-            .get(&BuybackKey::Treasury)
-            .unwrap();
-        let args: Vec<Val> = (treasury.clone(), holder.clone(), payout).into_val(&env);
+        let treasury: Address = env.storage().instance().get(&BuybackKey::Treasury).unwrap();
+        let args: Vec<Val> = (me, holder.clone(), payout).into_val(&env);
         env.invoke_contract::<()>(&treasury, &Symbol::new(&env, "transfer"), args);
 
         env.events()
@@ -261,9 +260,9 @@ impl BuybackContract {
 
     /// Finalize the buyback after expiration (or immediately by the admin to
     /// force an early close).
-
     pub fn finalize_buyback(env: Env, admin: Address) {
         Self::require_admin(&env, &admin);
+        crate::multi_class::require_single_class(&env);
 
         let active: bool = env
             .storage()
@@ -290,18 +289,8 @@ impl BuybackContract {
             .get(&BuybackKey::Tendered)
             .unwrap_or(0);
 
-        // Burn the tendered tokens: reduce total supply.
-        if tendered > 0 {
-            let total_supply: i128 = env
-                .storage()
-                .instance()
-                .get(&super::DataKey::TotalSupply)
-                .unwrap_or(0);
-            let new_supply = (total_supply - tendered).max(0);
-            env.storage()
-                .instance()
-                .set(&super::DataKey::TotalSupply, &new_supply);
-        }
+        // Tenders already burned the shares together with each payment.
+        // Finalization is an audit/round-close operation, never a second burn.
 
         // Clear buyback state.
         env.storage().instance().set(&BuybackKey::Active, &false);
@@ -312,10 +301,8 @@ impl BuybackContract {
         env.storage().instance().remove(&BuybackKey::Treasury);
 
         // Emit the CapitalReduction audit log (issue #40 requirement).
-        env.events().publish(
-            (Symbol::new(&env, "CapitalReduction"), admin),
-            tendered,
-        );
+        env.events()
+            .publish((Symbol::new(&env, "CapitalReduction"), admin), tendered);
     }
 
     // ------------------------------------------------------------------
@@ -356,34 +343,13 @@ impl BuybackContract {
             .unwrap_or(0);
         (active, offer_price, budget, expiration, tendered)
     }
-
-    // ------------------------------------------------------------------
-    // Internal helpers
-    // ------------------------------------------------------------------
-
-    fn require_admin(env: &Env, admin: &Address) {
-        let stored_admin: Address = env
-            .storage()
-            .instance()
-            .get(&super::DataKey::Admin)
-            .unwrap();
-        admin.require_auth();
-        if admin != &stored_admin {
-            panic_with_error!(env, super::Error::Unauthorized);
-        }
-    }
-
-    fn compliance_allows(env: &Env, compliance: &Address, who: &Address) -> bool {
-        let args: Vec<Val> = (who.clone(),).into_val(env);
-        env.invoke_contract(compliance, &Symbol::new(env, "is_allowed"), args)
-    }
 }
 
 // ---- Unit tests ---------------------------------------------------------- //
 
 #[cfg(test)]
 mod tests {
-    use soroban_sdk::{testutils::Ledger, Address, Env};
+    use soroban_sdk::{testutils::Ledger, Env};
 
     /// Smoke-test: `initiate_buyback` panics when called with an expired ledger.
     #[test]
