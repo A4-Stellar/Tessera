@@ -178,6 +178,9 @@ pub fn router(state: AppState) -> Router {
         .layer(middleware::from_fn_with_state(state.clone(), cache_headers));
 
     Router::new()
+        // GraphQL lives at the API root so Apollo Router can use the standard
+        // `/graphql` service endpoint (including Federation `_service`).
+        .merge(crate::graphql::create_graphql_router())
         .route("/", get(index))
         .route("/version", get(version))
         .route("/health", get(health))

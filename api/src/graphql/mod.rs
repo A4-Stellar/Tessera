@@ -1,5 +1,5 @@
 use async_graphql::{
-    Context, EmptyMutation, Object, Schema, Subscription, FieldResult,
+    Context, EmptyMutation, Object, Schema, Subscription, FieldResult, Json,
 };
 use futures::{stream, Stream};
 use axum::{
@@ -10,6 +10,7 @@ use async_graphql_axum::{GraphQLRequest, GraphQLResponse, GraphQLSubscription};
 use serde::{Deserialize, Serialize};
 
 pub mod complexity;
+pub mod federation;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Asset {
@@ -107,6 +108,19 @@ pub struct QueryRoot;
 
 #[Object]
 impl QueryRoot {
+    #[graphql(name = "_service")]
+    async fn federation_service(&self) -> federation::Service {
+        federation::Service
+    }
+
+    #[graphql(name = "_entities")]
+    async fn federation_entities(
+        &self,
+        representations: Vec<Json<serde_json::Value>>,
+    ) -> Vec<Option<federation::Entity>> {
+        federation::resolve_entities(representations.into_iter().map(|value| value.0).collect())
+    }
+
     async fn asset(&self, _ctx: &Context<'_>, id: String) -> FieldResult<Asset> {
         // Stub implementation
         Ok(Asset {
