@@ -14,7 +14,9 @@ pub const FEDERATION_V2_SDL: &str = r#"
 extend schema @link(url: "https://specs.apollo.dev/federation/v2.5", import: ["@key", "@shareable", "@external"])
 
 type Asset @key(fields: "id") {
-  id: ID!
+  # Asset identity is supplied by the registry subgraph when this service is
+  # composed as an extension in an enterprise graph.
+  id: ID! @external
   name: String! @shareable
   tvl: Float! @shareable
 }
@@ -22,12 +24,6 @@ type Asset @key(fields: "id") {
 type Holder @key(fields: "address") {
   address: ID!
   balance: Float! @shareable
-}
-
-# Entity extensions in a consuming subgraph use this v2 directive. Keeping it
-# in the service SDL makes the contract explicit for schema composition tools.
-extend type Asset @key(fields: "id") {
-  id: ID! @external
 }
 "#;
 
@@ -78,6 +74,7 @@ mod tests {
         assert!(FEDERATION_V2_SDL.contains("federation/v2.5"));
         assert!(FEDERATION_V2_SDL.contains("type Asset @key(fields: \"id\")"));
         assert!(FEDERATION_V2_SDL.contains("type Holder @key(fields: \"address\")"));
+        assert!(FEDERATION_V2_SDL.contains("@external"));
     }
 
     #[test]
