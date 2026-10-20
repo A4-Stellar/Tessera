@@ -2052,6 +2052,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "tessera-fx-hedge"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "tessera-governance"
 version = "0.1.0"
 dependencies = [
@@ -2066,19 +2073,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "tessera-lease-token"
+name = "tessera-insurance"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",
 ]
 
 [[package]]
-name = "tessera-orderbook"
+name = "tessera-lease-token"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",
- "tessera-common",
- "tessera-compliance",
 ]
 
 [[package]]

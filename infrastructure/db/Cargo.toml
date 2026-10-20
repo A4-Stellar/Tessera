@@ -15,3 +15,8 @@ thiserror = "1.0"
 [lib]
 name = "active_active_sync"
 path = "active_active_sync.rs"
+
+[[bin]]
+name = "cross_region_sync"
+path = "cross_region_sync.rs"
+
