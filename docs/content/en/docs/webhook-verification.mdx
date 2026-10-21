@@ -1,0 +1,204 @@
+export const metadata = {
+  title: "Webhook Signature Verification",
+  description: "Verify Tessera webhook payloads using HMAC-SHA256 signatures and handle key rotation.",
+  canonical: "/docs/webhooks/verification",
+};
+
+# Webhook Signature Verification
+
+Every outbound webhook request from Tessera includes one or more
+`X-Tessera-Signature` headers so you can verify that the payload is authentic
+and has not been tampered with.
+
+## Header format
+
+```
+X-Tessera-Signature: t=<key-id>,sha256=<hex-digest>
+```
+
+- **`t`** — the signing key ID that produced this signature.
+- **`sha256`** — the HMAC-SHA256 hex digest of the raw request body using the
+  corresponding secret.
+
+## Key rotation & dual signatures
+
+Tessera rotates webhook signing keys every **30 days**.  During the **24-hour
+grace period** that follows a rotation, each request carries **two**
+`X-Tessera-Signature` headers — one signed with the new key, one with the
+retiring key.
+
+When a rotation occurs you will receive a `key.rotated` event containing the
+new key ID and grace window.  Update your verification secret within the grace
+period to avoid rejected deliveries.
+
+> **Verification rule:** accept the webhook if *any* of the supplied signatures
+> match your current or previous secret.
+
+## Verification examples
+
+### Node.js
+
+```js
+import crypto from "node:crypto";
+
+function verifyWebhook(secret, payload, signatureHeaders) {
+  const expected = crypto
+    .createHmac("sha256", secret)
+    .update(payload)
+    .digest("hex");
+
+  for (const header of signatureHeaders) {
+    const match = header.match(/sha256=([a-f0-9]{64})/);
+    if (!match) continue;
+    const sig = match[1];
+    if (crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Express example
+app.post("/webhook", (req, res) => {
+  const payload = req.body; // raw body buffer
+  const signatures = req.headers["x-tessera-signature"];
+  const sigArray = Array.isArray(signatures) ? signatures : [signatures];
+
+  if (!verifyWebhook(process.env.TESSERA_WEBHOOK_SECRET, payload, sigArray)) {
+    return res.status(401).send("Invalid signature");
+  }
+  // Process event...
+  res.status(200).send("OK");
+});
+```
+
+### Python
+
+```python
+import hashlib
+import hmac
+import re
+
+
+def verify_webhook(
+    secret: str, payload: bytes, signature_headers: list[str]
+) -> bool:
+    expected = hmac.new(
+        secret.encode(), payload, hashlib.sha256
+    ).hexdigest()
+
+    for header in signature_headers:
+        match = re.search(r"sha256=([a-f0-9]{64})", header)
+        if match and hmac.compare_digest(match.group(1), expected):
+            return True
+    return False
+
+
+# Flask example
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    payload = request.get_data()
+    signatures = request.headers.getlist("X-Tessera-Signature")
+
+    if not verify_webhook(WEBHOOK_SECRET, payload, signatures):
+        return "Invalid signature", 401
+    # Process event...
+    return "OK", 200
+```
+
+### Rust
+
+```rust
+use sha2::Sha256;
+
+fn verify_webhook(secret: &[u8], payload: &[u8], signature_headers: &[&str]) -> bool {
+    use sha2::Digest;
+
+    // HMAC-SHA256 (RFC 2104)
+    let block_size = 64;
+    let mut k = secret.to_vec();
+    if k.len() > block_size {
+        k = Sha256::digest(&k).to_vec();
+    }
+    k.resize(block_size, 0);
+
+    let mut i_pad = vec![0x36u8; block_size];
+    let mut o_pad = vec![0x5cu8; block_size];
+    for i in 0..block_size {
+        i_pad[i] ^= k[i];
+        o_pad[i] ^= k[i];
+    }
+
+    let mut inner = Sha256::new();
+    inner.update(&i_pad);
+    inner.update(payload);
+    let inner_hash = inner.finalize();
+
+    let mut outer = Sha256::new();
+    outer.update(&o_pad);
+    outer.update(inner_hash);
+    let expected = hex::encode(outer.finalize());
+
+    for header in signature_headers {
+        if let Some(sig) = header.strip_prefix("sha256=").or_else(|| {
+            header.split(",sha256=").nth(1)
+        }) {
+            if constant_time_eq(sig.as_bytes(), expected.as_bytes()) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() { return false; }
+    a.iter().zip(b.iter()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+```
+
+### Go
+
+```go
+package main
+
+import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"io"
+	"net/http"
+	"os"
+	"strings"
+)
+
+func verifyWebhook(secret string, payload []byte, signatureHeaders []string) bool {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(payload)
+	expected := hex.EncodeToString(mac.Sum(nil))
+
+	for _, header := range signatureHeaders {
+		for _, part := range strings.Split(header, ",") {
+			if strings.HasPrefix(part, "sha256=") {
+				sig := strings.TrimPrefix(part, "sha256=")
+				if hmac.Equal([]byte(sig), []byte(expected)) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func webhookHandler(w http.ResponseWriter, r *http.Request) {
+	payload, _ := io.ReadAll(r.Body)
+	signatures := r.Header.Values("X-Tessera-Signature")
+
+	if !verifyWebhook(os.Getenv("TESSERA_WEBHOOK_SECRET"), payload, signatures) {
+		http.Error(w, "Invalid signature", http.StatusUnauthorized)
+		return
+	}
+	// Process event...
+	w.WriteHeader(http.StatusOK)
+}
+```

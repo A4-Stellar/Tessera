@@ -1,0 +1,105 @@
+name: OWASP ZAP Penetration Test
+
+on:
+  schedule:
+    # Nightly at 02:00 UTC
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+    inputs:
+      fail_on:
+        description: "Fail threshold (critical, high, medium, low, none)"
+        required: false
+        default: "high"
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  zap-scan:
+    name: OWASP ZAP Security Scan
+    runs-on: ubuntu-latest
+    services:
+      tessera-api:
+        image: ghcr.io/a4-stellar/tessera-api:latest
+        ports:
+          - 8080:8080
+        env:
+          RUST_LOG: tessera_api=info
+          SOROBAN_RPC_URL: https://soroban-testnet.stellar.org
+        options: >-
+          --health-cmd "curl -f http://localhost:8080/health || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Start OWASP ZAP Daemon
+        run: |
+          docker run -d --name zap \
+            --network host \
+            -e ZAP_PORT=8090 \
+            ghcr.io/zaproxy/zaproxy:2.15.0 \
+            zap.sh -daemon \
+              -port 8090 \
+              -host 0.0.0.0 \
+              -config api.disablekey=true \
+              -config api.addrs.addr.name=.* \
+              -config api.addrs.addr.regex=true \
+              -config scanner.threadPerHost=4 \
+              -config connection.timeoutInSecs=30
+
+          echo "Waiting for ZAP to start..."
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8090/JSON/core/view/version/ > /dev/null 2>&1; then
+              echo "ZAP is ready."
+              break
+            fi
+            sleep 2
+          done
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run OWASP ZAP Scan
+        env:
+          ZAP_API_URL: http://localhost:8090
+        run: |
+          python tests/pen-test/zap_scan.py \
+            --zap-url "$ZAP_API_URL" \
+            --api-target http://localhost:8080 \
+            --output zap-report.sarif \
+            --fail-on ${{ github.event.inputs.fail_on || 'high' }} \
+            --verbose
+
+      - name: Upload ZAP SARIF Report
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: zap-report.sarif
+          category: tessera-zap-pen-test
+
+      - name: Stop ZAP
+        if: always()
+        run: docker rm -f zap || true
+
+  # Run unit tests for the pen-test module (no ZAP needed)
+  pen-test-unit:
+    name: Pen Test Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run unit tests
+        run: python -I -m pytest tests/pen-test/test_zap_scan.py -v

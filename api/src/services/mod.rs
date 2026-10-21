@@ -3,3 +3,4 @@
 pub mod anomaly_detector;
 pub mod cdn_invalidator;
 pub mod webhook;
+pub mod webhook_signer;

@@ -1,0 +1,132 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: {{ include "tessera-api.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "tessera-api.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      {{- include "tessera-api.selectorLabels" . | nindent 6 }}
+  {{- if eq .Values.strategy "blueGreen" }}
+  strategy:
+    blueGreen:
+      activeService: {{ include "tessera-api.fullname" . }}
+      previewService: {{ include "tessera-api.fullname" . }}-preview
+      autoPromotionEnabled: {{ .Values.blueGreen.autoPromotionEnabled }}
+      {{- if .Values.blueGreen.autoPromotionEnabled }}
+      autoPromotionSeconds: {{ .Values.blueGreen.autoPromotionSeconds }}
+      {{- end }}
+      scaleDownDelaySeconds: {{ .Values.blueGreen.scaleDownDelaySeconds }}
+      {{- if and .Values.blueGreen.prePromotionAnalysis .Values.analysis.enabled }}
+      prePromotionAnalysis:
+        templates:
+          - templateName: {{ include "tessera-api.fullname" . }}-error-rate
+          - templateName: {{ include "tessera-api.fullname" . }}-p95-latency
+        args:
+          - name: service-name
+            value: {{ include "tessera-api.fullname" . }}-preview
+      {{- end }}
+      {{- if and .Values.blueGreen.postPromotionAnalysis .Values.analysis.enabled }}
+      postPromotionAnalysis:
+        templates:
+          - templateName: {{ include "tessera-api.fullname" . }}-error-rate
+          - templateName: {{ include "tessera-api.fullname" . }}-p95-latency
+        args:
+          - name: service-name
+            value: {{ include "tessera-api.fullname" . }}
+      {{- end }}
+      abortScaleDownDelaySeconds: 30
+  {{- else if eq .Values.strategy "canary" }}
+  strategy:
+    canary:
+      canaryService: {{ include "tessera-api.fullname" . }}-preview
+      stableService: {{ include "tessera-api.fullname" . }}
+      maxSurge: {{ .Values.canary.maxSurge | quote }}
+      maxUnavailable: {{ .Values.canary.maxUnavailable }}
+      {{- if .Values.analysis.enabled }}
+      analysis:
+        templates:
+          - templateName: {{ include "tessera-api.fullname" . }}-error-rate
+          - templateName: {{ include "tessera-api.fullname" . }}-p95-latency
+        args:
+          - name: service-name
+            value: {{ include "tessera-api.fullname" . }}-preview
+        startingStep: 1
+      {{- end }}
+      steps:
+        {{- range .Values.canary.steps }}
+        {{- if .setWeight }}
+        - setWeight: {{ .setWeight }}
+        {{- end }}
+        {{- if .pause }}
+        - pause:
+            duration: {{ .pause.duration }}
+        {{- end }}
+        {{- end }}
+  {{- end }}
+  template:
+    metadata:
+      labels:
+        {{- include "tessera-api.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        rollme: {{ randAlphaNum 5 | quote }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "tessera-api.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.targetPort }}
+              protocol: TCP
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+          {{- with .Values.env }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.envFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          livenessProbe:
+            {{- toYaml .Values.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.readinessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
