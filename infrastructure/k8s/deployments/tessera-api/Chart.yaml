@@ -1,0 +1,11 @@
+apiVersion: v2
+name: tessera-api
+description: Helm chart for Tessera API with Argo Rollouts blue-green and canary deployments
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+dependencies:
+  - name: argo-rollouts
+    version: "2.x"
+    repository: https://argoproj.github.io/argo-helm
+    condition: argo-rollouts.enabled

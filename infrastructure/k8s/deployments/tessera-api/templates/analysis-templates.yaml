@@ -1,0 +1,69 @@
+{{- if .Values.analysis.enabled -}}
+# AnalysisTemplate: HTTP 5xx error rate check.
+# Queries Prometheus for the ratio of 5xx responses over the analysis window.
+# Aborts the rollout if the error rate exceeds the configured threshold.
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: {{ include "tessera-api.fullname" . }}-error-rate
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "tessera-api.labels" . | nindent 4 }}
+spec:
+  args:
+    - name: service-name
+  metrics:
+    - name: error-rate
+      interval: {{ .Values.analysis.intervalSeconds }}s
+      count: {{ .Values.analysis.count }}
+      failureLimit: {{ .Values.analysis.failureLimit }}
+      successCondition: result[0] < {{ .Values.analysis.errorRateThreshold }}
+      failureCondition: result[0] >= {{ .Values.analysis.errorRateThreshold }}
+      provider:
+        prometheus:
+          address: {{ .Values.analysis.prometheusAddress }}
+          query: |
+            sum(rate(
+              http_requests_total{
+                service="{{`{{args.service-name}}`}}",
+                status=~"5.."
+              }[2m]
+            )) /
+            sum(rate(
+              http_requests_total{
+                service="{{`{{args.service-name}}`}}"
+              }[2m]
+            )) * 100
+---
+# AnalysisTemplate: p95 latency check.
+# Queries Prometheus for the 95th percentile request duration.
+# Aborts the rollout if p95 latency exceeds the configured threshold.
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: {{ include "tessera-api.fullname" . }}-p95-latency
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "tessera-api.labels" . | nindent 4 }}
+spec:
+  args:
+    - name: service-name
+  metrics:
+    - name: p95-latency
+      interval: {{ .Values.analysis.intervalSeconds }}s
+      count: {{ .Values.analysis.count }}
+      failureLimit: {{ .Values.analysis.failureLimit }}
+      successCondition: result[0] < {{ .Values.analysis.p95LatencyThresholdMs }}
+      failureCondition: result[0] >= {{ .Values.analysis.p95LatencyThresholdMs }}
+      provider:
+        prometheus:
+          address: {{ .Values.analysis.prometheusAddress }}
+          query: |
+            histogram_quantile(0.95,
+              sum(rate(
+                http_request_duration_milliseconds_bucket{
+                  service="{{`{{args.service-name}}`}}"
+                }[2m]
+              )) by (le)
+            )
+{{- end }}
