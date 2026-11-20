@@ -12,6 +12,7 @@
 pub mod buyback;
 pub mod emergency;
 pub mod multi_class;
+pub mod permit;
 pub mod redemption_pool;
 pub mod stock_split;
 
@@ -70,6 +71,12 @@ pub enum Error {
     InvalidConversion = 44,
     NonZeroSupply = 45,
     AccountingMigrationRequired = 46,
+    VelocityExceeded = 47,
+    PermitInvalidNonce = 48,
+    PermitExpired = 49,
+    PermitInvalidOwnerKey = 50,
+    InsufficientAllowance = 51,
+    AllowanceExpired = 52,
 }
 
 #[contracttype]
@@ -114,6 +121,8 @@ enum DataKey {
     HolderCount,
     HolderAt(u32),
     HolderIndexed(Address),
+    PermitNonceV1(Address, Address),
+    PermitAllowanceV1(Address, Address),
 }
 
 #[contract]
@@ -182,51 +191,55 @@ impl AssetTokenContract {
     pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
         multi_class::require_single_class(&env);
         from.require_auth();
-        Self::require_not_paused(&env);
-        Self::require_active(&env);
-        Self::require_not_locked(&env, &from);
-        if amount <= 0 {
+        Self::require_transferable(&env, &from, &to, amount);
+        Self::execute_transfer(&env, &from, &to, amount);
+    }
+
+    pub fn permit(
+        env: Env,
+        owner: Address,
+        spender: Address,
+        amount: i128,
+        deadline_ledger: u32,
+        signature: BytesN<64>,
+    ) {
+        permit::permit(&env, &owner, &spender, amount, deadline_ledger, &signature);
+    }
+
+    pub fn allowance(env: Env, owner: Address, spender: Address) -> i128 {
+        permit::allowance(&env, &owner, &spender)
+    }
+
+    pub fn approve(
+        env: Env,
+        owner: Address,
+        spender: Address,
+        amount: i128,
+        expiration_ledger: u32,
+    ) {
+        owner.require_auth();
+        if amount < 0 {
             panic_with_error!(env, Error::InvalidAmount);
         }
+        env.storage().persistent().set(
+            &DataKey::PermitAllowanceV1(owner.clone(), spender.clone()),
+            &permit::AllowanceValue {
+                amount,
+                expiration_ledger,
+            },
+        );
+        env.events().publish(
+            (symbol_short!("approve"), owner, spender),
+            (amount, expiration_ledger),
+        );
+    }
 
-        let compliance: Address = env.storage().instance().get(&DataKey::Compliance).unwrap();
-        if !Self::compliance_allows(&env, &compliance, &from) {
-            panic_with_error!(env, Error::SenderNotCompliant);
-        }
-        if !Self::compliance_allows(&env, &compliance, &to) {
-            panic_with_error!(env, Error::RecipientNotCompliant);
-        }
-
-        let from_balance = Self::balance(env.clone(), from.clone());
-        if from_balance < amount {
-            panic_with_error!(env, Error::InsufficientBalance);
-        }
-
-        // A self-transfer is a no-op, and must be handled before the two
-        // balance writes below. Those writes read `to_balance` *before*
-        // `from_balance` is written, so with `from == to` they would store
-        // `from_balance - amount` and then immediately overwrite it with
-        // `from_balance + amount` — inflating the holder by `amount` while
-        // `total_supply` stayed put. Since the excess is not backed by supply,
-        // a holder with a small balance could transfer `amount` to themselves
-        // repeatedly to manufacture an arbitrarily large balance, which
-        // `clawback`/`burn` then treats as real. Guard it explicitly.
-        if from == to {
-            env.events()
-                .publish((symbol_short!("transfer"), from, to), amount);
-            return;
-        }
-
-        let to_balance = Self::balance(env.clone(), to.clone());
-        let new_to_balance = to_balance
-            .checked_add(amount)
-            .unwrap_or_else(|| panic_with_error!(env, Error::Overflow));
-
-        stock_split::set_balance(&env, &from.clone(), from_balance - amount);
-        stock_split::set_balance(&env, &to.clone(), new_to_balance);
-
-        env.events()
-            .publish((symbol_short!("transfer"), from, to), amount);
+    pub fn transfer_from(env: Env, spender: Address, from: Address, to: Address, amount: i128) {
+        multi_class::require_single_class(&env);
+        spender.require_auth();
+        Self::require_transferable(&env, &from, &to, amount);
+        permit::spend(&env, &from, &spender, amount);
+        Self::execute_transfer(&env, &from, &to, amount);
     }
 
     pub fn mint(env: Env, admin: Address, to: Address, amount: i128) {
@@ -567,6 +580,64 @@ impl AssetTokenContract {
     }
 
     // ---- internal ----
+
+    fn require_transferable(env: &Env, from: &Address, to: &Address, amount: i128) {
+        Self::require_not_paused(env);
+        Self::require_active(env);
+        Self::require_not_locked(env, from);
+        if amount <= 0 {
+            panic_with_error!(env, Error::InvalidAmount);
+        }
+
+        let compliance: Address = env.storage().instance().get(&DataKey::Compliance).unwrap();
+        if !Self::compliance_allows(env, &compliance, from) {
+            panic_with_error!(env, Error::SenderNotCompliant);
+        }
+        if !Self::compliance_allows(env, &compliance, to) {
+            panic_with_error!(env, Error::RecipientNotCompliant);
+        }
+        if !Self::velocity_allows(env, &compliance, from, amount) {
+            panic_with_error!(env, Error::VelocityExceeded);
+        }
+    }
+
+    fn execute_transfer(env: &Env, from: &Address, to: &Address, amount: i128) {
+        let from_balance = Self::balance(env.clone(), from.clone());
+        if from_balance < amount {
+            panic_with_error!(env, Error::InsufficientBalance);
+        }
+        if from == to {
+            env.events().publish(
+                (symbol_short!("transfer"), from.clone(), to.clone()),
+                amount,
+            );
+            return;
+        }
+
+        let to_balance = Self::balance(env.clone(), to.clone());
+        let new_to_balance = to_balance
+            .checked_add(amount)
+            .unwrap_or_else(|| panic_with_error!(env, Error::Overflow));
+
+        stock_split::set_balance(env, from, from_balance - amount);
+        stock_split::set_balance(env, to, new_to_balance);
+
+        env.events().publish(
+            (symbol_short!("transfer"), from.clone(), to.clone()),
+            amount,
+        );
+    }
+
+    pub(crate) fn velocity_allows(
+        env: &Env,
+        compliance: &Address,
+        from: &Address,
+        amount: i128,
+    ) -> bool {
+        let jurisdiction = String::from_str(env, "");
+        let args: Vec<Val> = (from.clone(), amount, jurisdiction).into_val(env);
+        env.invoke_contract(compliance, &Symbol::new(env, "check_velocity"), args)
+    }
 
     fn require_admin(env: &Env, admin: &Address) {
         let stored_admin: Address = env

@@ -1983,7 +1983,9 @@ dependencies = [
 name = "tessera-asset-token"
 version = "0.1.0"
 dependencies = [
+ "ed25519-dalek",
  "proptest",
+ "sha2",
  "soroban-sdk",
  "tessera-common",
 ]

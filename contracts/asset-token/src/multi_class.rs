@@ -218,6 +218,10 @@ impl AssetTokenContract {
         }
         require_compliant(&env, &from, Error::SenderNotCompliant);
         require_compliant(&env, &to, Error::RecipientNotCompliant);
+        let compliance: Address = env.storage().instance().get(&DataKey::Compliance).unwrap();
+        if !AssetTokenContract::velocity_allows(&env, &compliance, &from, amount) {
+            panic_with_error!(env, Error::VelocityExceeded);
+        }
         let held = balance(&env, class, &from);
         if held < amount {
             panic_with_error!(env, Error::InsufficientBalance);

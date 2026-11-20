@@ -176,6 +176,14 @@ mod test {
         pub fn is_allowed(_env: Env, _who: Address) -> bool {
             true
         }
+        pub fn check_velocity(
+            _env: Env,
+            _who: Address,
+            _amount: i128,
+            _jurisdiction: String,
+        ) -> bool {
+            true
+        }
     }
 
     fn setup(env: &Env) -> (AssetTokenContractClient<'_>, Address, Address, Address) {

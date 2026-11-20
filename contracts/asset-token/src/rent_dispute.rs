@@ -131,11 +131,15 @@ impl RentDisputeContract {
         env.storage()
             .instance()
             .set(&RentDisputeKey::State, &STATE_NORMAL);
-        env.storage().instance().set(&RentDisputeKey::Escrow, &0_i128);
+        env.storage()
+            .instance()
+            .set(&RentDisputeKey::Escrow, &0_i128);
         env.storage()
             .instance()
             .set(&RentDisputeKey::Arbiters, &Vec::<Address>::new(&env));
-        env.storage().instance().set(&RentDisputeKey::Threshold, &0_u32);
+        env.storage()
+            .instance()
+            .set(&RentDisputeKey::Threshold, &0_u32);
         env.storage()
             .instance()
             .set(&RentDisputeKey::Votes, &Vec::<(Address, bool)>::new(&env));
@@ -146,9 +150,7 @@ impl RentDisputeContract {
         // Store the admin and compliance addresses in instance storage so
         // `require_admin` and the resolve functions work without
         // cross-contract calls.
-        env.storage()
-            .instance()
-            .set(&super::DataKey::Admin, &admin);
+        env.storage().instance().set(&super::DataKey::Admin, &admin);
         env.storage()
             .instance()
             .set(&super::DataKey::Compliance, &compliance);
@@ -236,10 +238,8 @@ impl RentDisputeContract {
             .instance()
             .set(&RentDisputeKey::Votes, &Vec::<(Address, bool)>::new(&env));
 
-        env.events().publish(
-            (symbol_short!("rdispute"), admin),
-            dividend_per_share,
-        );
+        env.events()
+            .publish((symbol_short!("rdispute"), admin), dividend_per_share);
     }
 
     /// Record an arbiter's vote on the active dispute.
@@ -280,9 +280,7 @@ impl RentDisputeContract {
             panic_with_error!(env, RentDisputeError::AlreadyVoted);
         }
         votes.push_back((arbiter.clone(), for_holders));
-        env.storage()
-            .instance()
-            .set(&RentDisputeKey::Votes, &votes);
+        env.storage().instance().set(&RentDisputeKey::Votes, &votes);
 
         env.events()
             .publish((symbol_short!("rvote"), arbiter), for_holders);
@@ -325,8 +323,7 @@ impl RentDisputeContract {
     pub fn resolve_for_maintenance(env: Env, admin: Address) {
         Self::require_admin(&env, &admin);
         Self::resolve_for_maintenance_internal(env.clone());
-        env.events()
-            .publish((symbol_short!("rarb"), admin), ());
+        env.events().publish((symbol_short!("rarb"), admin), ());
     }
 
     /// Reset the dispute state back to `Normal` after a dispute has been
@@ -525,7 +522,7 @@ impl RentDisputeContract {
 
 #[cfg(test)]
 mod tests {
-    use soroban_sdk::{testutils::Address as _, Address, Env, Vec};
+    use soroban_sdk::{testutils::Address as _, Address, Env, String, Vec};
 
     use super::*;
 
@@ -571,6 +568,14 @@ mod tests {
     #[contractimpl]
     impl MockCompliance {
         pub fn is_allowed(_env: Env, _who: Address) -> bool {
+            true
+        }
+        pub fn check_velocity(
+            _env: Env,
+            _who: Address,
+            _amount: i128,
+            _jurisdiction: String,
+        ) -> bool {
             true
         }
         pub fn release_escrow(_env: Env, _amount: i128, _for_holders: bool) {}

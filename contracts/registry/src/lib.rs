@@ -8,6 +8,10 @@
 //! present in this repository.
 #![no_std]
 
+pub mod mpt;
+#[cfg(test)]
+mod mpt_benchmark;
+
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, Address,
     BytesN, Env, String, Vec,
@@ -15,7 +19,7 @@ use soroban_sdk::{
 
 /// A registered tokenized real-world asset.
 #[contracttype]
-#[derive(Clone)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AssetEntry {
     pub id: u64,
     pub token_contract: Address,
@@ -41,6 +45,7 @@ pub enum Error {
     /// Placed after the highest pre-existing error code (5) rather than
     /// renumbering anything.
     Paused = 6,
+    InvalidMptProof = 7,
 }
 
 #[derive(Clone)]
@@ -50,6 +55,9 @@ enum DataKey {
     NextId,
     AllIds,
     Asset(u64),
+    MptRoot,
+    MptRootCache,
+    MptNode(BytesN<32>),
 }
 
 #[contract]
@@ -98,6 +106,7 @@ impl RegistryContract {
             active: true,
         };
         env.storage().persistent().set(&DataKey::Asset(id), &entry);
+        mpt::insert(&env, &entry);
 
         let mut all_ids: Vec<u64> = env.storage().instance().get(&DataKey::AllIds).unwrap();
         all_ids.push_back(id);
@@ -110,6 +119,48 @@ impl RegistryContract {
 
     pub fn get_asset(env: Env, asset_id: u64) -> AssetEntry {
         Self::asset_or_panic(&env, asset_id)
+    }
+
+    pub fn get_proof(env: Env, asset_id: u64) -> mpt::MptProof {
+        let entry = Self::asset_or_panic(&env, asset_id);
+        let proof = mpt::proof(&env, asset_id, &entry);
+        mpt::assert_valid_proof(&env, &proof);
+        proof
+    }
+
+    pub fn verify_mpt_proof(env: Env, proof: mpt::MptProof) -> bool {
+        mpt::verify(&env, &proof)
+    }
+
+    pub fn get_mpt_root(env: Env) -> BytesN<32> {
+        mpt::sync_root_cache(&env);
+        mpt::cached_root(&env)
+    }
+
+    pub fn get_assets_page(env: Env, start: u64, limit: u64) -> Vec<AssetEntry> {
+        let all_ids: Vec<u64> = env
+            .storage()
+            .instance()
+            .get(&DataKey::AllIds)
+            .unwrap_or(Vec::new(&env));
+        let mut out = Vec::new(&env);
+        if start >= all_ids.len() as u64 || limit == 0 {
+            return out;
+        }
+        let end = ((start + limit) as u64).min(all_ids.len() as u64);
+        let mut index = start;
+        while index < end {
+            let id = all_ids.get(index as u32).unwrap();
+            if let Some(entry) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, AssetEntry>(&DataKey::Asset(id))
+            {
+                out.push_back(entry);
+            }
+            index += 1;
+        }
+        out
     }
 
     pub fn get_assets_by_issuer(env: Env, issuer: Address) -> Vec<AssetEntry> {
@@ -133,6 +184,7 @@ impl RegistryContract {
         env.storage()
             .persistent()
             .set(&DataKey::Asset(asset_id), &entry);
+        mpt::insert(&env, &entry);
 
         env.events()
             .publish((symbol_short!("deactvate"),), asset_id);
