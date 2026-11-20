@@ -29,6 +29,8 @@ use soroban_sdk::{
 
 /// 100 % in basis points.
 const BPS_SCALE: i128 = 10_000;
+/// Upper bound on the minimum collateral ratio (1000%).
+const MAX_LIQUIDATION_THRESHOLD_BPS: i128 = 100_000;
 /// The auction opens at 110 % of the outstanding debt.
 const DEFAULT_START_PRICE_BPS: i128 = 11_000;
 
@@ -110,7 +112,6 @@ enum DataKey {
     EmergencyLiquidation,
     Config,
     Price(Address),
-    Frozen(Address),
     Vault(u64),
     NextVaultId,
 }
@@ -139,8 +140,9 @@ impl LiquidationAuctionContract {
         if env.storage().instance().has(&DataKey::Admin) {
             panic_with_error!(env, AuctionError::AlreadyInitialized);
         }
-        if liquidation_threshold_bps <= 0
-            || liquidation_threshold_bps > BPS_SCALE
+        // A minimum collateral ratio: below 100% a vault is only liquidatable once insolvent.
+        if liquidation_threshold_bps < BPS_SCALE
+            || liquidation_threshold_bps > MAX_LIQUIDATION_THRESHOLD_BPS
             || auction_duration_ledgers == 0
             || max_oracle_staleness_ledgers == 0
         {
@@ -184,44 +186,29 @@ impl LiquidationAuctionContract {
                 updated_ledger: now,
             },
         );
-        // A fresh update is the recovery path out of a circuit-breaker freeze.
-        if env
-            .storage()
-            .persistent()
-            .get::<_, bool>(&DataKey::Frozen(token.clone()))
-            .unwrap_or(false)
-        {
-            env.storage()
-                .persistent()
-                .set(&DataKey::Frozen(token.clone()), &false);
-            env.events()
-                .publish((Symbol::new(&env, "OracleRecovered"), token.clone()), now);
-        }
         env.events()
             .publish((symbol_short!("price"), token), (price, now));
     }
 
     /// Current price of `token`, or an error if the feed is missing or stale.
-    /// A stale feed flips the token into the frozen state and emits
-    /// `OracleStale` once per outage.
     pub fn price(env: Env, token: Address) -> i128 {
         Self::checked_price(&env, &token)
     }
 
     /// Whether vault operations for `token` are currently frozen.
+    /// Frozen while the feed is older than `max_oracle_staleness_ledgers`; the
+    /// next `update_price` unfreezes it. Derived, not stored: a flag written on
+    /// the failing path would be rolled back with the failed call.
     pub fn is_frozen(env: Env, token: Address) -> bool {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Frozen(token))
-            .unwrap_or(false)
+        Self::is_stale(&env, &token)
     }
 
     /// Admin-only rewrite of the risk parameters. Tightening the threshold or
     /// staleness bound takes effect on the next operation.
     pub fn set_config(env: Env, admin: Address, config: AuctionConfig) {
         Self::require_admin(&env, &admin);
-        if config.liquidation_threshold_bps <= 0
-            || config.liquidation_threshold_bps > BPS_SCALE
+        if config.liquidation_threshold_bps < BPS_SCALE
+            || config.liquidation_threshold_bps > MAX_LIQUIDATION_THRESHOLD_BPS
             || config.auction_duration_ledgers == 0
             || config.max_oracle_staleness_ledgers == 0
             || config.start_price_bps < BPS_SCALE
@@ -447,11 +434,7 @@ impl LiquidationAuctionContract {
         VaultSnapshot {
             collateral_ratio_bps: Self::ratio_bps(&vault, price),
             current_auction_price: Self::price_at(&env, &vault),
-            oracle_frozen: env
-                .storage()
-                .persistent()
-                .get(&DataKey::Frozen(vault.collateral_token))
-                .unwrap_or(false),
+            oracle_frozen: Self::is_stale(&env, &vault.collateral_token),
         }
     }
 
@@ -498,18 +481,20 @@ impl LiquidationAuctionContract {
         let config = Self::load_config(env);
         let now = env.ledger().sequence();
         if now.saturating_sub(record.updated_ledger) > config.max_oracle_staleness_ledgers {
-            let key = DataKey::Frozen(token.clone());
-            let frozen: bool = env.storage().persistent().get(&key).unwrap_or(false);
-            if !frozen {
-                env.storage().persistent().set(&key, &true);
-                env.events().publish(
-                    (Symbol::new(env, "OracleStale"), token.clone()),
-                    (record.updated_ledger, now),
-                );
-            }
             panic_with_error!(env, AuctionError::OracleStale);
         }
         record.price
+    }
+
+    fn is_stale(env: &Env, token: &Address) -> bool {
+        let record: Option<PriceRecord> = env.storage().persistent().get(&DataKey::Price(token.clone()));
+        match record {
+            Some(record) => {
+                env.ledger().sequence().saturating_sub(record.updated_ledger)
+                    > Self::load_config(env).max_oracle_staleness_ledgers
+            }
+            None => false,
+        }
     }
 
     fn ratio_bps(vault: &AuctionVault, price: i128) -> i128 {

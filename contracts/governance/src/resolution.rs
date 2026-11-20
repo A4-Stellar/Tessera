@@ -26,7 +26,7 @@ use soroban_sdk::{
 
 /// The contract call a resolution executes once approved.
 #[contracttype]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ExecutionPayload {
     pub contract: Address,
     pub function: Symbol,

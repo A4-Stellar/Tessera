@@ -647,7 +647,7 @@ mod tests {
         let mut keys = Vec::new(&env);
         for seed in 1u8..=2 {
             let secret = BytesN::from_array(&env, &[seed; 32]);
-            keys.push_back(env.crypto().ed25519_public_key(&secret));
+            keys.push_back(test_public_key(&env, &secret));
             secrets.push_back(secret);
         }
 
@@ -693,11 +693,13 @@ mod tests {
     }
 
     fn signatures(s: &Setup, proposal_id: u64, action: &str) -> Vec<BytesN<64>> {
-        let hash = GovernanceTimelockContract::domain_hash(&s.env, action, proposal_id);
+        let hash = s.env.as_contract(&s.client.address, || {
+            GovernanceTimelockContract::domain_hash(&s.env, action, proposal_id)
+        });
         let mut sigs = Vec::new(&s.env);
         for i in 0..s.secrets.len() {
             let secret = s.secrets.get(i).unwrap();
-            sigs.push_back(s.env.crypto().ed25519_sign(&secret, &hash));
+            sigs.push_back(test_sign(&s.env, &secret, &hash));
         }
         sigs
     }
@@ -714,8 +716,8 @@ mod tests {
 
         s.env.ledger().set_sequence_number(200);
         assert_eq!(
-            s.client.try_execute(&id),
-            Err(Ok(err(TimelockError::Vetoed)))
+            s.client.try_execute(&id).err(),
+            Some(Ok(err(TimelockError::Vetoed)))
         );
         assert_eq!(s.target.value(), 0);
     }
@@ -730,15 +732,15 @@ mod tests {
 
         // Delay has not elapsed.
         assert_eq!(
-            s.client.try_execute(&id),
-            Err(Ok(err(TimelockError::TimelockActive)))
+            s.client.try_execute(&id).err(),
+            Some(Ok(err(TimelockError::TimelockActive)))
         );
         s.env.ledger().set_sequence_number(117);
         s.client.execute(&id);
         assert_eq!(s.target.value(), 42);
         assert_eq!(
-            s.client.try_execute(&id),
-            Err(Ok(err(TimelockError::AlreadyExecuted)))
+            s.client.try_execute(&id).err(),
+            Some(Ok(err(TimelockError::AlreadyExecuted)))
         );
     }
 
@@ -752,8 +754,8 @@ mod tests {
 
         // No delay, but guardian co-signatures are mandatory.
         assert_eq!(
-            s.client.try_execute_emergency(&id, &Vec::new(&s.env)),
-            Err(Ok(err(TimelockError::InsufficientGuardianSignatures)))
+            s.client.try_execute_emergency(&id, &Vec::new(&s.env)).err(),
+            Some(Ok(err(TimelockError::InsufficientGuardianSignatures)))
         );
         s.client
             .execute_emergency(&id, &signatures(&s, id, "emergency"));
@@ -770,8 +772,8 @@ mod tests {
         s.client.finalize(&id);
         assert_eq!(
             s.client
-                .try_execute_emergency(&id, &signatures(&s, id, "emergency")),
-            Err(Ok(err(TimelockError::NotEmergencyEligible)))
+                .try_execute_emergency(&id, &signatures(&s, id, "emergency")).err(),
+            Some(Ok(err(TimelockError::NotEmergencyEligible)))
         );
     }
 
@@ -789,8 +791,8 @@ mod tests {
             ProposalEnvelope::V1(_) => panic!("migration did not upgrade"),
         }
         assert_eq!(
-            s.client.try_migrate_proposal(&s.admin, &id),
-            Err(Ok(err(TimelockError::AlreadyMigrated)))
+            s.client.try_migrate_proposal(&s.admin, &id).err(),
+            Some(Ok(err(TimelockError::AlreadyMigrated)))
         );
     }
 
@@ -801,9 +803,11 @@ mod tests {
         vote(&s, id, [true, true, false]);
         s.env.ledger().set_sequence_number(106);
         s.client.finalize(&id);
-        let hash = GovernanceTimelockContract::domain_hash(&s.env, "veto", id);
+        let hash = s.env.as_contract(&s.client.address, || {
+            GovernanceTimelockContract::domain_hash(&s.env, "veto", id)
+        });
         let mut one = Vec::new(&s.env);
-        one.push_back(s.env.crypto().ed25519_sign(&s.secrets.get(0).unwrap(), &hash));
+        one.push_back(test_sign(&s.env, &s.secrets.get(0).unwrap(), &hash));
         assert_eq!(
             s.client.try_veto(&id, &one),
             Err(Ok(err(
@@ -814,5 +818,17 @@ mod tests {
 
     fn err(e: TimelockError) -> soroban_sdk::Error {
         e.into()
+    }
+
+    // The SDK only verifies Ed25519; tests produce real keys and signatures with ed25519-dalek.
+    fn test_public_key(env: &Env, secret: &BytesN<32>) -> BytesN<32> {
+        let key = ed25519_dalek::SigningKey::from_bytes(&secret.to_array());
+        BytesN::from_array(env, &key.verifying_key().to_bytes())
+    }
+
+    fn test_sign(env: &Env, secret: &BytesN<32>, message: &BytesN<32>) -> BytesN<64> {
+        use ed25519_dalek::Signer;
+        let key = ed25519_dalek::SigningKey::from_bytes(&secret.to_array());
+        BytesN::from_array(env, &key.sign(&message.to_array()).to_bytes())
     }
 }
