@@ -23,6 +23,8 @@ pub struct VestingSchedule {
     pub claimed: i128,
     pub revocable: bool,
     pub revoked_at: Option<u64>,
+    /// #388: amount slashed from unvested balance (in base units).
+    pub slashed_amount: i128,
 }
 
 #[contracterror]
@@ -39,6 +41,10 @@ pub enum Error {
     NotRevocable = 8,
     AlreadyRevoked = 9,
     Overflow = 10,
+    /// #388: claim is already in progress (reentrancy guard).
+    ReentrantClaim = 11,
+    /// #388: slash bps exceeds maximum (10_000).
+    InvalidSlashBps = 12,
 }
 
 #[derive(Clone)]
@@ -49,6 +55,8 @@ enum DataKey {
     Treasury,
     NextId,
     Schedule(u64),
+    /// #388: reentrancy guard for claim_vested_tokens.
+    ClaimInProgress(u64),
 }
 
 #[contract]
@@ -106,6 +114,7 @@ impl VestingContract {
             claimed: 0,
             revocable,
             revoked_at: None,
+            slashed_amount: 0, // #388
         };
 
         // Funding is atomic with recording the schedule: a failed token transfer reverts both.
@@ -128,10 +137,20 @@ impl VestingContract {
     }
 
     /// Claim all currently vested but previously unclaimed tokens for one schedule.
+    /// #388: guarded against reentrancy via a TemporaryStorage mutex flag.
     pub fn claim_vested_tokens(env: Env, beneficiary: Address, schedule_id: u64) -> i128 {
         beneficiary.require_auth();
+
+        // #388: reentrancy guard
+        let guard_key = DataKey::ClaimInProgress(schedule_id);
+        if env.storage().temporary().has(&guard_key) {
+            panic_with_error!(env, Error::ReentrantClaim);
+        }
+        env.storage().temporary().set(&guard_key, &true);
+
         let mut schedule = Self::schedule(&env, schedule_id);
         if schedule.beneficiary != beneficiary {
+            env.storage().temporary().remove(&guard_key);
             panic_with_error!(env, Error::NotBeneficiary);
         }
 
@@ -147,11 +166,69 @@ impl VestingContract {
                 .persistent()
                 .set(&DataKey::Schedule(schedule_id), &schedule);
             env.events().publish(
-                (symbol_short!("claimed"), beneficiary),
+                (symbol_short!("claimed"), beneficiary.clone()),
                 (schedule_id, claimable),
             );
         }
+
+        env.storage().temporary().remove(&guard_key);
         claimable
+    }
+
+    /// #388: Slash unvested tokens by `bps` basis points (100 = 1%).
+    /// Slashed tokens are transferred to the governance treasury, not destroyed.
+    /// `reason_hash` is a governance proposal ID for auditability.
+    pub fn slash(
+        env: Env,
+        admin: Address,
+        schedule_id: u64,
+        reason_hash: soroban_sdk::BytesN<32>,
+        bps: u32,
+    ) -> i128 {
+        Self::require_admin(&env, &admin);
+        if bps > 10_000 {
+            panic_with_error!(env, Error::InvalidSlashBps);
+        }
+
+        let mut schedule = Self::schedule(&env, schedule_id);
+        // Revoke already returned the unvested balance to the treasury.
+        if schedule.revoked_at.is_some() {
+            panic_with_error!(env, Error::AlreadyRevoked);
+        }
+        let now = env.ledger().timestamp();
+        let vested = Self::vested_at(&env, &schedule, now);
+        let unvested = schedule.amount.saturating_sub(vested);
+
+        // Slash only the unvested portion.
+        let slash_amount = (unvested as u128 * bps as u128 / 10_000u128) as i128;
+        if slash_amount <= 0 {
+            return 0;
+        }
+
+        schedule.slashed_amount = schedule
+            .slashed_amount
+            .checked_add(slash_amount)
+            .unwrap_or_else(|| panic_with_error!(env, Error::Overflow));
+        // Reduce total amount so future vesting reflects the slash.
+        schedule.amount = schedule
+            .amount
+            .checked_sub(slash_amount)
+            .unwrap_or_else(|| panic_with_error!(env, Error::Overflow));
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Schedule(schedule_id), &schedule);
+
+        // Transfer slashed tokens to the governance treasury.
+        let treasury: Address = env.storage().instance().get(&DataKey::Treasury).unwrap();
+        Self::transfer_from_contract(&env, &treasury, slash_amount);
+
+        env.events().publish(
+            (symbol_short!("slashed"), admin),
+            (schedule_id, slash_amount, reason_hash),
+        );
+
+        slash_amount
     }
 
     /// Revoke an active schedule and return its unvested balance to the treasury.
@@ -222,11 +299,11 @@ impl VestingContract {
             return 0;
         }
         let elapsed = core::cmp::min(effective_now - schedule.start_time, schedule.total_duration);
-        let numerator = schedule
-            .amount
+        // Vest on the original curve; a slash only removes unvested tokens, so cap at the remaining amount.
+        let numerator = (schedule.amount + schedule.slashed_amount)
             .checked_mul(elapsed as i128)
             .unwrap_or_else(|| panic_with_error!(env, Error::Overflow));
-        numerator / schedule.total_duration as i128
+        core::cmp::min(numerator / schedule.total_duration as i128, schedule.amount)
     }
 
     fn transfer_from_contract(env: &Env, to: &Address, amount: i128) {
