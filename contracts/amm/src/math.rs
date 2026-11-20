@@ -51,6 +51,19 @@ fn ratio(env: &Env, numerator: U256, denominator: U256) -> u128 {
     from_u256(env, numerator.div(&denominator))
 }
 
+fn ceil_div_u256(env: &Env, numerator: U256, denominator: U256) -> u128 {
+    if denominator == u256(env, 0) {
+        soroban_sdk::panic_with_error!(env, Error::DivisionByZero);
+    }
+    let q = numerator.div(&denominator);
+    let rounded = if q.mul(&denominator) == numerator { q } else { q.add(&u256(env, 1)) };
+    from_u256(env, rounded)
+}
+
+fn ratio_up(env: &Env, numerator: U256, denominator: U256) -> u128 {
+    ceil_div_u256(env, numerator, denominator)
+}
+
 /// `a * b / denominator` with a 256-bit intermediate product.
 pub fn mul_div(env: &Env, a: u128, b: u128, denominator: u128) -> u128 {
     if denominator == 0 {
@@ -192,14 +205,10 @@ pub fn sqrt_price_after_amount0_in(
     liquidity: u128,
     amount_in: u128,
 ) -> u128 {
-    let denominator = u256(env, liquidity)
-        .mul(&u256(env, Q64))
-        .add(&u256(env, amount_in).mul(&u256(env, sqrt_price)));
-    ratio(
-        env,
-        u256(env, liquidity).mul(&u256(env, sqrt_price)),
-        denominator,
-    )
+    // S' = L * Q * S / (L * Q + in * S), rounded up so the pool never overpays.
+    let lq = u256(env, liquidity).mul(&u256(env, Q64));
+    let denominator = lq.add(&u256(env, amount_in).mul(&u256(env, sqrt_price)));
+    ratio_up(env, lq.mul(&u256(env, sqrt_price)), denominator)
 }
 
 /// Price after adding `amount_in` of token1 to a range with `liquidity`.
@@ -246,26 +255,37 @@ pub fn amount1_in_for_price_move(
     ceil_div(env, liquidity.saturating_mul(sqrt_target - sqrt_price), Q64)
 }
 
-/// Token0 output released while moving from `sqrt_price` down to
-/// `sqrt_target`.
+/// Token0 output released while the price moves up from `sqrt_price` to
+/// `sqrt_target` (token1 in). Rounded down so the pool never overpays.
 pub fn amount0_out_for_price_move(
     env: &Env,
     sqrt_price: u128,
     sqrt_target: u128,
     liquidity: u128,
 ) -> u128 {
-    amount0_in_for_price_move(env, sqrt_price, sqrt_target, liquidity)
+    if sqrt_target <= sqrt_price || liquidity == 0 {
+        return 0;
+    }
+    // L * (St - S) / (S * St) in Q64.64.
+    let numerator = u256(env, liquidity)
+        .mul(&u256(env, sqrt_target - sqrt_price))
+        .mul(&u256(env, Q64));
+    let denominator = u256(env, sqrt_price).mul(&u256(env, sqrt_target));
+    ratio(env, numerator, denominator)
 }
 
-/// Token1 output released while moving from `sqrt_price` up to
-/// `sqrt_target`.
+/// Token1 output released while the price moves down from `sqrt_price` to
+/// `sqrt_target` (token0 in). Rounded down so the pool never overpays.
 pub fn amount1_out_for_price_move(
     env: &Env,
     sqrt_price: u128,
     sqrt_target: u128,
     liquidity: u128,
 ) -> u128 {
-    amount1_in_for_price_move(env, sqrt_price, sqrt_target, liquidity)
+    if sqrt_target >= sqrt_price {
+        return 0;
+    }
+    mul_div(env, liquidity, sqrt_price - sqrt_target, Q64)
 }
 
 /// Price that sells exactly `amount_out` of token1 for `liquidity` when
@@ -277,16 +297,14 @@ pub fn sqrt_price_after_amount1_out(
     amount_out: u128,
 ) -> u128 {
     if liquidity == 0 {
-        return sqrt_price;
+        soroban_sdk::panic_with_error!(env, Error::InsufficientLiquidity);
     }
-    // S' = L * S / (L + out * S / Q)
-    let denominator = u256(env, liquidity)
-        .add(&u256(env, mul_div(env, amount_out, sqrt_price, Q64)));
-    ratio(
-        env,
-        u256(env, liquidity).mul(&u256(env, sqrt_price)),
-        denominator,
-    )
+    // S' = S - out * Q / L, rounded down so the trader pays enough.
+    let drop = ceil_div_u256(env, u256(env, amount_out).mul(&u256(env, Q64)), u256(env, liquidity));
+    if drop >= sqrt_price {
+        soroban_sdk::panic_with_error!(env, Error::InsufficientLiquidity);
+    }
+    sqrt_price - drop
 }
 
 /// Price that sells exactly `amount_out` of token0 for `liquidity` when
@@ -297,17 +315,13 @@ pub fn sqrt_price_after_amount0_out(
     liquidity: u128,
     amount_out: u128,
 ) -> u128 {
-    if liquidity == 0 {
-        return sqrt_price;
+    // S' = L * Q * S / (L * Q - out * S), rounded up so the trader pays enough.
+    let lq = u256(env, liquidity).mul(&u256(env, Q64));
+    let taken = u256(env, amount_out).mul(&u256(env, sqrt_price));
+    if taken >= lq {
+        soroban_sdk::panic_with_error!(env, Error::InsufficientLiquidity);
     }
-    // S' = S + out * S^2 / (L * Q)
-    let bump = mul_div(
-        env,
-        amount_out,
-        mul_div(env, sqrt_price, sqrt_price, Q64),
-        liquidity,
-    );
-    sqrt_price.saturating_add(bump)
+    ratio_up(env, lq.mul(&u256(env, sqrt_price)), lq.sub(&taken))
 }
 
 fn order(a: u128, b: u128) -> (u128, u128) {

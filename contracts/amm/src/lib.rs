@@ -31,8 +31,8 @@ use soroban_sdk::{
 };
 
 use math::{
-    amount0_for_liquidity, amount0_in_for_price_move, amount1_for_liquidity,
-    amount1_in_for_price_move, fee_growth_delta, liquidity_for_amount0, liquidity_for_amount1,
+    amount0_for_liquidity, amount0_in_for_price_move, amount0_out_for_price_move,
+    amount1_for_liquidity, amount1_in_for_price_move, amount1_out_for_price_move, fee_growth_delta, liquidity_for_amount0, liquidity_for_amount1,
     mul_div, sqrt_price_at_tick, sqrt_price_after_amount0_in, sqrt_price_after_amount0_out,
     sqrt_price_after_amount1_in, sqrt_price_after_amount1_out, tick_at_sqrt_price, MAX_SQRT_PRICE,
     MAX_TICK, MIN_SQRT_PRICE, MIN_TICK, Q64,
@@ -42,7 +42,8 @@ use math::{
 const BPS_SCALE: u128 = 10_000;
 /// Hard cap on the number of ticks a single swap may inspect, independent of
 /// the caller's limit. Keeps the loop bounded even on a hostile pool.
-const MAX_SCAN_TICKS: u32 = 1_000;
+// Each scanned tick is a ledger read; Soroban caps a call's footprint at 100 entries.
+const MAX_SCAN_TICKS: u32 = 64;
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -543,14 +544,13 @@ impl ConcentratedLiquidityAmm {
         let mut ticks_crossed: u32 = 0;
 
         while remaining > 0 {
-            let next = Self::next_initialized_tick(
+            let boundary_tick = Self::next_boundary_tick(
                 &env,
                 current_tick,
                 spacing,
                 zero_for_one,
-                MAX_SCAN_TICKS,
+                tick_at_sqrt_price(&env, sqrt_price_limit),
             );
-            let boundary_tick = next.unwrap_or(if zero_for_one { MIN_TICK } else { MAX_TICK });
             let mut target_tick = boundary_tick;
             let mut target_sqrt = sqrt_price_at_tick(&env, boundary_tick);
             let mut limit_hit = false;
@@ -900,13 +900,17 @@ impl ConcentratedLiquidityAmm {
         )
     }
 
-    fn next_initialized_tick(
+    /// Next tick the swap steps to: the nearest initialised tick, or, if none is
+    /// found before the price limit or within `MAX_SCAN_TICKS`, the last tick
+    /// scanned (crossing an uninitialised tick is a no-op), so no initialised
+    /// tick is ever skipped.
+    fn next_boundary_tick(
         env: &Env,
         from: i32,
         spacing: i32,
         zero_for_one: bool,
-        max_scan: u32,
-    ) -> Option<i32> {
+        limit_tick: i32,
+    ) -> i32 {
         // Initialised ticks are multiples of `spacing`; the current tick is
         // the floor of the price and may not be aligned after a partial swap.
         let mut tick = if zero_for_one {
@@ -920,22 +924,20 @@ impl ConcentratedLiquidityAmm {
         if !zero_for_one && tick <= from {
             tick += spacing;
         }
-        let mut scanned = 0u32;
-        while scanned < max_scan {
-            if tick < MIN_TICK || tick > MAX_TICK {
-                return None;
+        for _ in 0..MAX_SCAN_TICKS {
+            if tick <= MIN_TICK {
+                return MIN_TICK;
             }
-            if Self::read_tick(env, tick).liquidity_gross > 0 {
-                return Some(tick);
+            if tick >= MAX_TICK {
+                return MAX_TICK;
             }
-            scanned += 1;
-            tick = if zero_for_one {
-                tick - spacing
-            } else {
-                tick + spacing
-            };
+            let past_limit = if zero_for_one { tick <= limit_tick } else { tick >= limit_tick };
+            if past_limit || Self::read_tick(env, tick).liquidity_gross > 0 {
+                return tick;
+            }
+            tick = if zero_for_one { tick - spacing } else { tick + spacing };
         }
-        None
+        tick
     }
 
     fn fee_part(env: &Env, amount: u128, fee_bps: u128) -> u128 {

@@ -321,3 +321,45 @@ proptest! {
         prop_assert!(product <= l_squared + tolerance);
     }
 }
+
+#[test]
+fn swap_one_for_zero_pays_out_token_a() {
+    let s = setup();
+    s.client
+        .add_liquidity(&s.lp, &-1000, &1000, &5_000_000, &5_000_000);
+    let limit = sqrt_price_at_tick(&s.env, 100);
+    let result = s.client.swap(&s.trader, &false, &10_000, &limit, &10);
+    assert_eq!(result.amount_in, 10_000);
+    assert!(result.amount_out > 9_900 && result.amount_out < 10_000);
+    assert_eq!(s.token_a.balance(&s.trader), 10_000_000 + result.amount_out);
+}
+
+#[test]
+fn exact_output_charges_at_least_the_exact_input_price() {
+    let s = setup();
+    s.client
+        .add_liquidity(&s.lp, &-1000, &1000, &5_000_000, &5_000_000);
+    let limit = sqrt_price_at_tick(&s.env, -100);
+    let exact_in = s.client.swap(&s.trader, &true, &10_000, &limit, &10);
+    let s2 = setup();
+    s2.client
+        .add_liquidity(&s2.lp, &-1000, &1000, &5_000_000, &5_000_000);
+    let exact_out = s2
+        .client
+        .swap(&s2.trader, &true, &-exact_in.amount_out, &limit, &10);
+    assert_eq!(exact_out.amount_out, exact_in.amount_out);
+    assert!(exact_out.amount_in >= exact_in.amount_in - 1);
+    assert!(exact_out.amount_in <= exact_in.amount_in + 1);
+}
+
+#[test]
+fn round_trip_swap_never_creates_value() {
+    let s = setup();
+    s.client
+        .add_liquidity(&s.lp, &-1000, &1000, &5_000_000, &5_000_000);
+    let down = sqrt_price_at_tick(&s.env, -100);
+    let first = s.client.swap(&s.trader, &true, &50_000, &down, &10);
+    let up = sqrt_price_at_tick(&s.env, 100);
+    let back = s.client.swap(&s.trader, &false, &first.amount_out, &up, &10);
+    assert!(back.amount_out < 50_000, "round trip returned {}", back.amount_out);
+}

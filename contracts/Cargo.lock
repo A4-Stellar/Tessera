@@ -18,6 +18,7 @@ dependencies = [
 name = "amm"
 version = "0.1.0"
 dependencies = [
+ "proptest",
  "soroban-sdk",
 ]
 
@@ -2064,6 +2065,7 @@ dependencies = [
 name = "tessera-governance"
 version = "0.1.0"
 dependencies = [
+ "ed25519-dalek",
  "soroban-sdk",
 ]
 

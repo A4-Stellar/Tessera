@@ -180,7 +180,8 @@ fn auction_price_decays_from_110_percent_of_debt() {
 #[test]
 fn bid_pays_current_price_and_receives_collateral() {
     let s = setup();
-    s.client.update_price(&s.admin, &s.token_id, &10);
+    // Open at a healthy 200 % ratio (threshold is 150 %), then drop the price.
+    s.client.update_price(&s.admin, &s.token_id, &20);
     let vault_id = s.client.create_vault(&s.owner, &s.token_id, &100, &1_000);
     s.client.update_price(&s.admin, &s.token_id, &5);
     s.client.start_auction(&vault_id);
@@ -208,7 +209,8 @@ fn bid_pays_current_price_and_receives_collateral() {
 #[test]
 fn expired_auction_calls_emergency_backstop() {
     let s = setup();
-    s.client.update_price(&s.admin, &s.token_id, &10);
+    // Open at a healthy 200 % ratio (threshold is 150 %), then drop the price.
+    s.client.update_price(&s.admin, &s.token_id, &20);
     let vault_id = s.client.create_vault(&s.owner, &s.token_id, &100, &1_000);
     s.client.update_price(&s.admin, &s.token_id, &5);
     s.client.start_auction(&vault_id);
