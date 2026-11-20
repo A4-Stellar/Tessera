@@ -20,6 +20,8 @@
 //! ```
 #![no_std]
 
+pub mod position_nft;
+
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, Address,
     BytesN, Env, IntoVal, String, Symbol, Val, Vec,
