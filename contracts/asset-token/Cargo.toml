@@ -14,5 +14,7 @@ soroban-sdk = { workspace = true }
 tessera-common = { path = "../common" }
 
 [dev-dependencies]
-soroban-sdk = { workspace = true, features = ["testutils"] }
+soroban-sdk = { workspace = true, features = ["testutils", "alloc"] }
 proptest = "1"
+ed25519-dalek = { version = "2.2", default-features = false, features = ["alloc"] }
+sha2 = "0.10"

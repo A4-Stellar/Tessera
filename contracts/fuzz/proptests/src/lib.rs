@@ -42,7 +42,7 @@ pub fn amount() -> impl Strategy<Value = i128> {
     prop_oneof![
         3 => boundary_i128(),
         2 => any::<i16>().prop_map(i128::from),
-        5 => (0i128..1_000_000).any::<i128>(),
+        5 => 0i128..1_000_000,
     ]
 }
 
@@ -84,7 +84,7 @@ pub fn jurisdiction() -> impl Strategy<Value = String> {
 
 /// The index of a holder, for choosing a participant out of a fixed set.
 pub fn slot(len: usize) -> impl Strategy<Value = usize> {
-    (0..len).any::<usize>()
+    0..len
 }
 
 /// An operation to apply in a stateful sequence. Deliberately a simple enum
@@ -92,10 +92,23 @@ pub fn slot(len: usize) -> impl Strategy<Value = usize> {
 /// as "transfer 5 from 1 to 3", not as a byte blob.
 #[derive(Clone, Debug)]
 pub enum Op {
-    Transfer { from: usize, to: usize, amount: i128 },
-    Mint { to: usize, amount: i128 },
-    Burn { from: usize, amount: i128 },
-    Clawback { from: usize, amount: i128 },
+    Transfer {
+        from: usize,
+        to: usize,
+        amount: i128,
+    },
+    Mint {
+        to: usize,
+        amount: i128,
+    },
+    Burn {
+        from: usize,
+        amount: i128,
+    },
+    Clawback {
+        from: usize,
+        amount: i128,
+    },
 }
 
 impl Op {

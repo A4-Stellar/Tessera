@@ -13,15 +13,16 @@ use soroban_sdk::{
 };
 
 mod attestation;
-mod verifiable_credentials;
 mod oracle_verifier;
+pub mod velocity;
+mod verifiable_credentials;
 pub mod zk_aggregator;
 #[cfg(test)]
 mod zk_aggregator_test;
 pub use attestation::{IdentityAttestation, RevocationProof};
-pub use zk_aggregator::{AggregatedProof, AggregationVerifyingKey, ZkAccreditation};
-pub use verifiable_credentials::VerifiableCredential;
 pub use oracle_verifier::{OracleAttestation, OracleConfig, OracleSignature};
+pub use verifiable_credentials::VerifiableCredential;
+pub use zk_aggregator::{AggregatedProof, AggregationVerifyingKey, ZkAccreditation};
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -77,6 +78,9 @@ pub enum Error {
     ZkInvalidBatch = 21,
     ZkProofExpired = 22,
     ZkProofRejected = 23,
+    VelocityWindowInvalid = 24,
+    VelocityCapInvalid = 25,
+    VelocityReentrant = 26,
 }
 
 #[derive(Clone)]
@@ -246,6 +250,48 @@ impl ComplianceContract {
         !Self::is_jurisdiction_blocked(env.clone(), record.jurisdiction)
     }
 
+    pub fn set_velocity_window(env: Env, admin: Address, window_ledgers: u32) {
+        Self::require_not_paused(&env);
+        Self::require_admin(&env, &admin);
+        velocity::set_window_ledgers(&env, window_ledgers);
+        env.events().publish(
+            (symbol_short!("velwin"),),
+            (window_ledgers, env.ledger().sequence()),
+        );
+    }
+
+    pub fn set_velocity_cap(env: Env, admin: Address, jurisdiction: String, cap: i128) {
+        Self::require_not_paused(&env);
+        Self::require_admin(&env, &admin);
+        velocity::set_jurisdiction_cap(&env, jurisdiction.clone(), cap);
+        env.events()
+            .publish((symbol_short!("velcap"), jurisdiction), cap);
+    }
+
+    pub fn set_default_velocity_cap(env: Env, admin: Address, cap: i128) {
+        Self::require_not_paused(&env);
+        Self::require_admin(&env, &admin);
+        velocity::set_default_cap(&env, cap);
+        env.events().publish((symbol_short!("veldc"),), cap);
+    }
+
+    pub fn get_velocity_config(env: Env) -> (u32, i128) {
+        (velocity::window_ledgers(&env), velocity::default_cap(&env))
+    }
+
+    pub fn get_velocity_state(
+        env: Env,
+        account: Address,
+        jurisdiction: String,
+    ) -> Option<velocity::VelocityAccumulator> {
+        velocity::state(&env, &account, &jurisdiction)
+    }
+
+    pub fn check_velocity(env: Env, account: Address, amount: i128, jurisdiction: String) -> bool {
+        Self::require_not_paused(&env);
+        velocity::check_and_record(&env, &account, amount, &jurisdiction)
+    }
+
     /// Verify a W3C-style credential transiently; no credential or claim is stored.
     pub fn verify_verifiable_credential(env: Env, credential: VerifiableCredential) -> bool {
         verifiable_credentials::verify(&env, &credential)
@@ -340,12 +386,7 @@ impl ComplianceContract {
     }
 
     /// Register an oracle after it authorizes depositing its bond.
-    pub fn register_oracle(
-        env: Env,
-        oracle: Address,
-        public_key: BytesN<32>,
-        stake_amount: i128,
-    ) {
+    pub fn register_oracle(env: Env, oracle: Address, public_key: BytesN<32>, stake_amount: i128) {
         Self::require_not_paused(&env);
         oracle_verifier::register(&env, oracle, public_key, stake_amount);
     }
@@ -733,7 +774,11 @@ impl ComplianceContract {
     /// Checks if `holder` has an active, unexpired balance verification at or above `min_threshold`.
     pub fn is_balance_threshold_verified(env: Env, holder: Address, min_threshold: u64) -> bool {
         let key = (symbol_short!("zk_range"), holder);
-        if let Some(record) = env.storage().persistent().get::<_, zk_range_proof::BalanceThresholdRecord>(&key) {
+        if let Some(record) = env
+            .storage()
+            .persistent()
+            .get::<_, zk_range_proof::BalanceThresholdRecord>(&key)
+        {
             env.ledger().sequence() <= record.expires_at && record.min_threshold >= min_threshold
         } else {
             false
@@ -743,4 +788,3 @@ impl ComplianceContract {
 pub mod zk_balance_verifier;
 pub mod zk_range_proof;
 pub mod zk_verifier;
-

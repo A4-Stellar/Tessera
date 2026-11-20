@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, Env, Bytes, BytesN};
+use soroban_sdk::{contracttype, BytesN, Env};
 
 /// Represents the elements of a Groth16 proof.
 #[contracttype]

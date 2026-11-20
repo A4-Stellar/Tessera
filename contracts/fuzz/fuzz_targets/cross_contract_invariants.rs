@@ -80,19 +80,44 @@ fuzz_target!(|data: &[u8]| {
 
     check_no_trap(
         &asset.try_initialize(
-            &admin, &name, &name, &kind, &SUPPLY, &6, &compliance_id, &name, &0i128,
+            &admin,
+            &name,
+            &name,
+            &kind,
+            &SUPPLY,
+            &6,
+            &compliance_id,
+            &name,
+            &0i128,
         ),
         "xcontract::asset.initialize",
     );
     check_no_trap(
         &payment.try_initialize(
-            &admin, &name, &name, &kind, &SUPPLY, &6, &compliance_id, &name, &0i128,
+            &admin,
+            &name,
+            &name,
+            &kind,
+            &SUPPLY,
+            &6,
+            &compliance_id,
+            &name,
+            &0i128,
         ),
         "xcontract::payment.initialize",
     );
-    check_no_trap(&registry.try_initialize(&admin), "xcontract::registry.initialize");
-    check_no_trap(&dividend.try_initialize(&admin), "xcontract::dividend.initialize");
-    check_no_trap(&cap.try_initialize(&admin), "xcontract::cap_table.initialize");
+    check_no_trap(
+        &registry.try_initialize(&admin),
+        "xcontract::registry.initialize",
+    );
+    check_no_trap(
+        &dividend.try_initialize(&admin),
+        "xcontract::dividend.initialize",
+    );
+    check_no_trap(
+        &cap.try_initialize(&admin),
+        "xcontract::cap_table.initialize",
+    );
     check_no_trap(&debt.try_initialize(&admin), "xcontract::debt.initialize");
 
     // Register the asset and fan the supply out.
@@ -156,15 +181,20 @@ fuzz_target!(|data: &[u8]| {
                 let res = compliance.try_suspend(&admin, &from);
                 check_no_trap(&res, "xcontract::compliance.suspend");
                 if succeeded(&res) {
-                    assert!(!compliance.is_allowed(&from), "a suspended holder is still allowed");
+                    assert!(
+                        !compliance.is_allowed(&from),
+                        "a suspended holder is still allowed"
+                    );
                     let gate = asset.try_transfer(&from, &to, &1);
                     check_no_trap(&gate, "xcontract::asset.transfer(suspended)");
-                    assert!(
-                        !succeeded(&gate),
-                        "a suspended holder could still transfer"
-                    );
+                    assert!(!succeeded(&gate), "a suspended holder could still transfer");
                     // Restore, so later iterations are not all blocked.
-                    let _ = compliance.try_add_to_allowlist(&admin, &from, &SdkString::from_str(&env, "US"), 0);
+                    let _ = compliance.try_add_to_allowlist(
+                        &admin,
+                        &from,
+                        &SdkString::from_str(&env, "US"),
+                        0,
+                    );
                 }
             }
             4 => {
@@ -175,8 +205,7 @@ fuzz_target!(|data: &[u8]| {
                 let _ = compliance.try_unblock_jurisdiction(&admin, &j);
             }
             5 | 6 => {
-                let res =
-                    dividend.try_create_distribution(&admin, &asset_id, &payment_id, &amount);
+                let res = dividend.try_create_distribution(&admin, &asset_id, &payment_id, &amount);
                 check_no_trap(&res, "xcontract::dividend.create_distribution");
                 if let Ok(Ok(id)) = res {
                     // Track the id the contract actually assigned, not the
@@ -200,7 +229,7 @@ fuzz_target!(|data: &[u8]| {
                 for (id, total) in escrowed.iter().copied() {
                     for h in &holders {
                         if !dividend.has_claimed(&id, h) {
-                            let res = dividend.try_claim(&id, h);
+                            let res = dividend.try_claim_legacy(&id, h);
                             check_no_trap(&res, "xcontract::dividend.claim");
                         }
                     }
@@ -228,8 +257,7 @@ fuzz_target!(|data: &[u8]| {
                 if cap_published {
                     continue;
                 }
-                let balances: Vec<i128> =
-                    holders.iter().map(|h| asset.balance(h)).collect();
+                let balances: Vec<i128> = holders.iter().map(|h| asset.balance(h)).collect();
                 let mut leaves: Vec<BytesN<32>> = Vec::new();
                 for (h, b) in holders.iter().zip(balances.iter()) {
                     let mut li = Bytes::new(&env);
@@ -280,13 +308,16 @@ fuzz_target!(|data: &[u8]| {
                 // A dividend amount far beyond anything escrowed, to prove the
                 // escrow pull is the binding constraint rather than a check that
                 // happens to line up.
-                let res = dividend.try_create_distribution(&admin, &asset_id, &payment_id, &i128::MAX);
+                let res =
+                    dividend.try_create_distribution(&admin, &asset_id, &payment_id, &i128::MAX);
                 check_no_trap(&res, "xcontract::dividend.create_distribution(i128::MAX)");
             }
         }
 
         // ---- end-to-end supply conservation --------------------------------
-        let sum: i128 = holders.iter().fold(0i128, |a, h| a.saturating_add(asset.balance(h)));
+        let sum: i128 = holders
+            .iter()
+            .fold(0i128, |a, h| a.saturating_add(asset.balance(h)));
         let supply = asset.total_supply();
         assert_eq!(
             sum + clawbacked,
@@ -298,7 +329,9 @@ fuzz_target!(|data: &[u8]| {
         }
 
         // ---- escrow is bounded by what was actually escrowed ---------------
-        let total_escrowed: i128 = escrowed.iter().fold(0i128, |a, (_, t)| a.saturating_add(*t));
+        let total_escrowed: i128 = escrowed
+            .iter()
+            .fold(0i128, |a, (_, t)| a.saturating_add(*t));
         let total_paid: i128 = escrowed
             .iter()
             .map(|(id, _)| dividend.get_distribution(id).distributed)
@@ -314,7 +347,11 @@ fuzz_target!(|data: &[u8]| {
         );
 
         // ---- the debt ledger never goes negative ---------------------------
-        let live = [debt.senior_owed(), debt.mezzanine_owed(), debt.equity_owed()];
+        let live = [
+            debt.senior_owed(),
+            debt.mezzanine_owed(),
+            debt.equity_owed(),
+        ];
         for i in 0..3 {
             assert!(live[i] >= 0, "a debt tranche went negative: {}", live[i]);
             assert_eq!(live[i], owed[i], "debt mirror disagrees with the contract");

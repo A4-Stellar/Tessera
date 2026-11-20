@@ -113,7 +113,7 @@ impl TaxWithholdingContract {
             .instance()
             .get(&DataKey::DefaultTaxRate)
             .unwrap_or(0);
-        let rate = match residency_hash {
+        let rate: u32 = match residency_hash {
             // `or(Some(default))` rather than `or_else`: a missing per-hash rate
             // falls back to the default, and a stored rate of 0 is a legitimate
             // "this investor is exempt", not a signal to fall back.
@@ -121,17 +121,8 @@ impl TaxWithholdingContract {
                 .storage()
                 .persistent()
                 .get(&DataKey::TaxRate(hash))
-                .unwrap_or_else(|| {
-                    env.storage()
-                        .instance()
-                        .get(&DataKey::DefaultTaxRate)
-                        .unwrap()
-                }),
-            None => env
-                .storage()
-                .instance()
-                .get(&DataKey::DefaultTaxRate)
-                .unwrap(),
+                .unwrap_or(default),
+            None => default,
         };
 
         // The rate is validated to be at most 10_000 bps on every write, so

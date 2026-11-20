@@ -11,19 +11,45 @@ license = "Apache-2.0"
 publish = false
 description = "Property tests for the Tessera Soroban contract suite."
 
+[features]
+default = []
+bridge = ["dep:bridge"]
+debt-token = ["dep:debt-token"]
+cap-table = ["dep:tessera-cap-table"]
+vaults = ["dep:vaults"]
+tax-withholding = []
+
 [dependencies]
-soroban-sdk = { version = "25.0.0", features = ["testutils"] }
+soroban-sdk = { version = "=25.0.0", features = ["testutils", "alloc"] }
 proptest = "1"
+ed25519-dalek = { version = "2.2", default-features = false, features = ["alloc"] }
+sha2 = "0.10"
 
 tessera-asset-token = { path = "../../asset-token" }
-tessera-cap-table = { path = "../../cap-table" }
+tessera-cap-table = { path = "../../cap-table", optional = true }
 tessera-common = { path = "../../common" }
 tessera-compliance = { path = "../../compliance" }
 tessera-dividend = { path = "../../dividend" }
 tessera-registry = { path = "../../registry" }
-bridge = { path = "../../bridge" }
-debt-token = { path = "../../debt-token" }
-vaults = { path = "../../vaults" }
+bridge = { path = "../../bridge", optional = true }
+debt-token = { path = "../../debt-token", optional = true }
+vaults = { path = "../../vaults", optional = true }
+
+[[test]]
+name = "bridge"
+required-features = ["bridge"]
+
+[[test]]
+name = "debt_token"
+required-features = ["debt-token"]
+
+[[test]]
+name = "cap_table"
+required-features = ["cap-table"]
+
+[[test]]
+name = "tax_withholding"
+required-features = ["tax-withholding"]
 
 # Mirrors the fuzz profile: these are arithmetic-invariant tests, so an
 # optimization that skips a bounds check could hide exactly the bug being

@@ -131,7 +131,8 @@ fuzz_target!(|data: &[u8]| {
         step_ledger(&env, &mut input);
 
         // Amount still escrowed but not yet paid out, per the contract.
-        let paid_out = |d: &DividendContractClient, i: usize| d.get_distribution(&(i as u64)).distributed;
+        let paid_out =
+            |d: &DividendContractClient, i: usize| d.get_distribution(&(i as u64)).distributed;
 
         match input.below(10) {
             0 | 1 | 2 => {
@@ -149,7 +150,10 @@ fuzz_target!(|data: &[u8]| {
                     let dist = d.get_distribution(&id);
                     assert_eq!(dist.id, id, "distribution id must be dense");
                     assert_eq!(dist.total_amount, amount, "total_amount mismatch");
-                    assert_eq!(dist.distributed, 0, "a new distribution starts undistributed");
+                    assert_eq!(
+                        dist.distributed, 0,
+                        "a new distribution starts undistributed"
+                    );
                     assert_eq!(dist.completed, false, "a new distribution is not completed");
                     assert_eq!(dist.asset_token, asset_id, "asset_token mismatch");
                     assert_eq!(dist.payment_token, payment_id, "payment_token mismatch");
@@ -183,7 +187,7 @@ fuzz_target!(|data: &[u8]| {
                 let claimed_before = d.has_claimed(&id, &holder);
                 let distributed_before = paid_out(&d, idx);
 
-                let res = d.try_claim(&id, &holder);
+                let res = d.try_claim_legacy(&id, &holder);
                 check_no_trap(&res, "dividend::claim");
 
                 if succeeded(&res) {
@@ -216,7 +220,7 @@ fuzz_target!(|data: &[u8]| {
 
                 // Re-claiming must always be refused and must always be free.
                 let after_first = paid_out(&d, idx);
-                let second = d.try_claim(&id, &holder);
+                let second = d.try_claim_legacy(&id, &holder);
                 check_no_trap(&second, "dividend::claim(repeat)");
                 assert!(
                     !succeeded(&second),
@@ -286,10 +290,16 @@ fuzz_target!(|data: &[u8]| {
                 );
                 let res = d.try_get_distribution(&missing);
                 check_no_trap(&res, "dividend::get_distribution(missing)");
-                assert!(!succeeded(&res), "get_distribution on a missing id must fail");
-                let res = d.try_claim(&missing, &holder);
+                assert!(
+                    !succeeded(&res),
+                    "get_distribution on a missing id must fail"
+                );
+                let res = d.try_claim_legacy(&missing, &holder);
                 check_no_trap(&res, "dividend::claim(missing)");
-                assert!(!succeeded(&res), "claiming a missing distribution must fail");
+                assert!(
+                    !succeeded(&res),
+                    "claiming a missing distribution must fail"
+                );
             }
             8 => {
                 let _ = d.try_pause(&admin);
@@ -332,9 +342,11 @@ fuzz_target!(|data: &[u8]| {
             "dividend contract's payment balance must equal escrowed minus paid out"
         );
 
-        let accounted: i128 = holders.iter().fold(payment.balance(&dividend_id), |acc, h| {
-            acc.saturating_add(payment.balance(h))
-        });
+        let accounted: i128 = holders
+            .iter()
+            .fold(payment.balance(&dividend_id), |acc, h| {
+                acc.saturating_add(payment.balance(h))
+            });
         assert_eq!(
             accounted, payment_supply,
             "payment units must be fully accounted for across the dividend contract \
