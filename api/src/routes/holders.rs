@@ -2,11 +2,17 @@
 
 use axum::{
     extract::{Path, Query, State},
+    http::HeaderMap,
+    response::{IntoResponse, Response},
     Json,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
+use super::privacy::{api_key, privacy_headers};
 use super::ApiError;
+use crate::analytics::differential_privacy::{
+    clipped_transfer_volume_24h, Aggregate, PrivateEndpoint,
+};
 use crate::indexer::AppState;
 use crate::models::{AddressHolding, Holder};
 
@@ -53,6 +59,98 @@ pub async fn list(
         .take(limit)
         .collect();
     Ok(Json(holders))
+}
+
+/// `?view=` selector for `GET /assets/:id/holders`.
+#[derive(Debug, Default, Deserialize, PartialEq, Eq, Clone, Copy)]
+#[serde(rename_all = "lowercase")]
+pub enum HolderView {
+    /// One row per holder (default).
+    #[default]
+    List,
+    /// Differentially private aggregates over the holder set (issue #26).
+    Aggregate,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct HolderViewQuery {
+    #[serde(default)]
+    pub view: HolderView,
+}
+
+/// Differentially private holder aggregates for one asset.
+#[derive(Debug, Serialize)]
+pub struct HolderAggregates {
+    pub asset_id: u64,
+    /// Number of holders, released with `Lap(1/ε')`.
+    pub holder_count: usize,
+    /// 24 h transfer volume in base units (string, like other balances),
+    /// released with `Lap(C/ε')` over per-sender volumes clipped to `C`.
+    pub transfer_volume_24h: String,
+    /// `true` when the values above carry differential-privacy noise.
+    pub noisy: bool,
+}
+
+/// Aggregates `?view=aggregate` releases under differential privacy.
+const PRIVATE_AGGREGATES: usize = 2;
+
+/// Route handler for `GET /assets/:id/holders`: the row-level list, or with
+/// `?view=aggregate` the differentially private aggregates.
+pub async fn list_or_aggregate(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<u64>,
+    Query(view): Query<HolderViewQuery>,
+    query: Query<HolderQuery>,
+) -> Response {
+    match view.view {
+        HolderView::List => list(State(state), Path(id), query).await.into_response(),
+        HolderView::Aggregate => aggregate(state, &headers, id).await,
+    }
+}
+
+async fn aggregate(state: AppState, headers: &HeaderMap, id: u64) -> Response {
+    let snap = state.snapshot();
+    let Some(asset) = snap.asset(id) else {
+        return ApiError::NotFound(format!("no asset with id {id}")).into_response();
+    };
+    let holder_count = snap.holders.get(&id).map_or(0, Vec::len);
+    let bounds = state.privacy.config.bounds;
+    let volume = clipped_transfer_volume_24h(
+        &snap.events,
+        &asset.token_contract,
+        chrono::Utc::now(),
+        bounds.transfer_volume_clip,
+    );
+
+    let query = match state
+        .privacy
+        .begin(PrivateEndpoint::Holders, api_key(headers), PRIVATE_AGGREGATES)
+        .await
+    {
+        Ok(query) => query,
+        Err(rejection) => return rejection.into_response(),
+    };
+    let Some(query) = query else {
+        return Json(HolderAggregates {
+            asset_id: id,
+            holder_count,
+            transfer_volume_24h: format!("{volume:.0}"),
+            noisy: false,
+        })
+        .into_response();
+    };
+    let mut rng = rand::rng();
+    let body = HolderAggregates {
+        asset_id: id,
+        holder_count: query.release_count(Aggregate::HolderCount, holder_count, &mut rng),
+        transfer_volume_24h: format!(
+            "{:.0}",
+            query.release(Aggregate::TransferVolume, volume, &mut rng).round()
+        ),
+        noisy: true,
+    };
+    (privacy_headers(&query), Json(body)).into_response()
 }
 
 /// Portfolio of assets held by a single address, sorted by balance descending.

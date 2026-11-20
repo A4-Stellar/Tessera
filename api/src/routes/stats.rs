@@ -1,19 +1,51 @@
 //! `GET /stats`.
+//!
+//! With differential privacy enabled (issue #26) the holder count and TVL
+//! are released through the Laplace mechanism and each request is charged
+//! against the caller's privacy budget; see
+//! [`crate::analytics::differential_privacy`].
 
-use axum::{extract::State, Json};
+use axum::{extract::State, http::HeaderMap, Json};
 
+use super::privacy::{api_key, privacy_headers};
+use crate::analytics::differential_privacy::{
+    clipped_tvl_cents, distinct_holders, Aggregate, PrivacyRejection, PrivateEndpoint,
+};
 use crate::indexer::AppState;
 use crate::models::Stats;
 
+/// Aggregates `/stats` releases under differential privacy.
+const PRIVATE_AGGREGATES: usize = 2;
+
 /// Platform-wide statistics: asset count, TVL, holders, distributions.
-pub async fn get(State(state): State<AppState>) -> Json<Stats> {
+pub async fn get(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(HeaderMap, Json<Stats>), PrivacyRejection> {
     let snap = state.snapshot();
-    Json(snap.stats)
+    let Some(query) = state
+        .privacy
+        .begin(PrivateEndpoint::Stats, api_key(&headers), PRIVATE_AGGREGATES)
+        .await?
+    else {
+        return Ok((HeaderMap::new(), Json(snap.stats)));
+    };
+
+    let mut stats = snap.stats;
+    let mut rng = rand::rng();
+    let bounds = state.privacy.config.bounds;
+    let tvl = clipped_tvl_cents(&snap.assets, &snap.holders, bounds.tvl_clip_cents);
+    let noisy_tvl_cents = query.release(Aggregate::TvlSum, tvl, &mut rng).round();
+    stats.tvl_cents = format!("{noisy_tvl_cents:.0}");
+    stats.tvl_usd = noisy_tvl_cents / 100.0;
+    stats.total_holders =
+        query.release_count(Aggregate::HolderCount, distinct_holders(&snap.holders), &mut rng);
+    Ok((privacy_headers(&query), Json(stats)))
 }
 
 #[cfg(test)]
 mod tests {
-    use axum::extract::State;
+    use axum::{extract::State, http::HeaderMap};
     use serde_json::json;
 
     use super::get;
@@ -38,7 +70,7 @@ mod tests {
         };
         let state = state_with(snap);
 
-        let body = get(State(state)).await.0;
+        let body = get(State(state), HeaderMap::new()).await.unwrap().1 .0;
         let value = serde_json::to_value(&body).expect("serialize stats");
 
         assert!(value["tvl_cents"].is_string());
@@ -52,7 +84,7 @@ mod tests {
     async fn stats_empty_snapshot_reports_zeroed_defaults() {
         let state = state_with(Snapshot::default());
 
-        let body = get(State(state)).await.0;
+        let body = get(State(state), HeaderMap::new()).await.unwrap().1 .0;
         let value = serde_json::to_value(&body).expect("serialize stats");
 
         assert!(
@@ -89,7 +121,7 @@ mod tests {
         };
         let state = state_with(snap);
 
-        let body = get(State(state)).await.0;
+        let body = get(State(state), HeaderMap::new()).await.unwrap().1 .0;
         let value = serde_json::to_value(&body).expect("serialize stats");
 
         let openapi: serde_json::Value =

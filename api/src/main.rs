@@ -96,6 +96,15 @@ async fn main() {
 
     let mut state = AppState::new(config, metrics_handle);
 
+    // Issue #26: differential privacy for aggregate endpoints.
+    match analytics::differential_privacy::PrivacyEngine::from_env() {
+        Ok(engine) => state.privacy = Arc::new(engine),
+        Err(e) => {
+            tracing::error!(error = %e, "differential-privacy config validation failed; exiting");
+            std::process::exit(1);
+        }
+    }
+
     // Shared shutdown flag: flipped once by `shutdown_signal` and observed
     // by the indexer's poll loop so it stops issuing new refresh cycles
     // once the process is terminating, rather than racing shutdown.
