@@ -248,3 +248,109 @@ mod test {
         c.set_rate_params(&Address::generate(&env), &params());
     }
 }
+
+// ─── #386: Liquidation & total_debt invariant ──────────────────────────────
+
+/// Liquidation parameters (#386).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LiquidationParams {
+    /// Liquidation incentive in WAD (e.g. 1.05e18 = 5% bonus).
+    pub liquidation_bonus: i128,
+    /// Max fraction of a position that can be liquidated in one call (WAD).
+    pub close_factor: i128,
+}
+
+/// Compute the repay amount for a liquidation, capped by close_factor.
+///
+/// Returns `(repay_amount, seize_collateral)` where:
+///   repay_amount = min(debt * close_factor, repay_amount_requested)
+///   seize_collateral = repay_amount * (WAD + liquidation_bonus) / WAD
+pub fn liquidate_amount(
+    env: &Env,
+    debt: i128,
+    collateral_price: i128,
+    collateral_decimals: i128,
+    requested_repay: i128,
+    liq: &LiquidationParams,
+) -> (i128, i128) {
+    if debt <= 0 || collateral_price <= 0 || collateral_decimals <= 0 {
+        return (0, 0);
+    }
+    let max_repay = mul_div(env, debt, liq.close_factor, WAD);
+    let repay = requested_repay.min(max_repay);
+    if repay <= 0 {
+        return (0, 0);
+    }
+    // Seize collateral = repay * (1 + bonus) / price, adjusted for decimals
+    let seize_value = mul_div(env, repay, liq.liquidation_bonus + WAD, WAD);
+    let seize_collateral = mul_div(env, seize_value, collateral_decimals, collateral_price);
+    (repay, seize_collateral)
+}
+
+/// Property: total_debt >= total_borrows invariant (#386).
+/// After accruing interest, the index grows, so each borrower's share of
+/// total_debt (sum of individual debts scaled by index) is always >= the
+/// raw sum of principal borrows. This function verifies the invariant.
+pub fn verify_total_debt_invariant(
+    _env: &Env,
+    total_debt: i128,
+    total_borrows: i128,
+) -> bool {
+    total_debt >= total_borrows
+}
+
+#[cfg(test)]
+mod liquidation_tests {
+    use super::*;
+
+    #[test]
+    fn liquidate_caps_at_close_factor() {
+        let env = Env::default();
+        let liq = LiquidationParams {
+            liquidation_bonus: 5 * WAD / 100, // 5%
+            close_factor: 50 * WAD / 100,     // 50%
+        };
+        let debt = 1_000 * WAD;
+        let price = WAD; // 1:1
+        let decimals = WAD;
+        let (repay, seize) = liquidate_amount(&env, debt, price, decimals, debt, &liq);
+        assert_eq!(repay, 500 * WAD); // capped at 50%
+        // seize = 500 * 1.05 / 1 = 525
+        assert_eq!(seize, 525 * WAD);
+    }
+
+    #[test]
+    fn liquidate_full_request_under_close_factor() {
+        let env = Env::default();
+        let liq = LiquidationParams {
+            liquidation_bonus: 10 * WAD / 100,
+            close_factor: WAD, // 100%
+        };
+        let debt = 100 * WAD;
+        let (repay, seize) = liquidate_amount(&env, debt, WAD, WAD, 50 * WAD, &liq);
+        assert_eq!(repay, 50 * WAD);
+        assert_eq!(seize, 55 * WAD); // 50 * 1.10
+    }
+
+    #[test]
+    fn total_debt_invariant_holds_after_accrual() {
+        let env = Env::default();
+        let borrows = 1_000 * WAD;
+        // After one year at 5% the debt index grows to 1.05
+        let index = accrue(&env, WAD, 5 * WAD / 100, SECONDS_PER_YEAR);
+        let total_debt = mul_div(&env, borrows, index, WAD);
+        assert!(verify_total_debt_invariant(&env, total_debt, borrows));
+    }
+
+    #[test]
+    fn zero_debt_returns_zero() {
+        let env = Env::default();
+        let liq = LiquidationParams {
+            liquidation_bonus: WAD / 10,
+            close_factor: WAD,
+        };
+        let (repay, seize) = liquidate_amount(&env, 0, WAD, WAD, 100, &liq);
+        assert_eq!((repay, seize), (0, 0));
+    }
+}
