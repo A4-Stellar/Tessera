@@ -1,0 +1,126 @@
+export const metadata = {
+  title: "Differential Privacy Analysis",
+  description: "Formal (ε, δ)-differential privacy analysis for the Tessera aggregate analytics endpoints.",
+  canonical: "/docs/privacy-analysis",
+};
+
+# Differential Privacy Analysis
+
+`GET /v1/stats` and `GET /v1/assets/:id/holders?view=aggregate` release
+aggregates computed over every holder. Exact answers to repeated, narrow
+queries can reveal an individual holder's position by difference. Tessera
+perturbs these aggregates with calibrated Laplace noise and meters the
+cumulative privacy loss per API key.
+
+## Unit of privacy
+
+Two datasets `D` and `D'` are **neighbours** when they differ in the presence
+or absence of one holder (all of that holder's positions and transfers).
+A randomized mechanism `M` is `(ε, δ)`-differentially private if, for all
+neighbours `D, D'` and all output sets `S`:
+
+```
+Pr[M(D) ∈ S] ≤ e^ε · Pr[M(D') ∈ S] + δ
+```
+
+## Aggregates and global sensitivity
+
+| Aggregate | Endpoint | Definition | Sensitivity `Δ` |
+|---|---|---|---|
+| Holder count | `/stats` (`total_holders`), holders aggregate (`holder_count`) | Distinct holder addresses | `1` |
+| TVL sum | `/stats` (`tvl_cents`, `tvl_usd`) | `Σ min(valuation × share, C_tvl)` over each holder position of active assets | `C_tvl` |
+| Transfer volume | holders aggregate (`transfer_volume_24h`) | `Σ min(volume_24h(sender), C_vol)` over senders | `C_vol` |
+
+The TVL and transfer-volume sums have unbounded per-holder contribution in
+raw form, so each holder's contribution is **clipped** to `C` before summing.
+Removing one holder then changes the clipped sum by at most `C`, so `Δ = C`.
+Clipping is applied to the data, not assumed. Defaults are
+`C_tvl = 100,000,000` cents ($1M) and `C_vol = 10^13` base units.
+
+## Mechanism
+
+Every aggregate `f` is released as
+
+```
+M(D) = f(D) + Lap(Δ / ε')
+```
+
+where `Lap(b)` has density `exp(-|x|/b) / 2b`. By the Laplace mechanism
+theorem (Dwork & Roth, Theorem 3.6), each release is `ε'`-differentially
+private. Clamping to `≥ 0` and rounding counts are post-processing and do not
+weaken the guarantee.
+
+## Composition per query
+
+A response that releases `k` aggregates under an endpoint configured with
+`(ε, δ)` uses `ε' = ε / k` for each aggregate. By basic sequential
+composition the response is `(ε, δ)`-differentially private (`/stats`:
+`k = 2`; holders aggregate: `k = 2`).
+
+The `δ` term is charged as configured. The Laplace releases themselves are
+pure-`ε`. `δ` is the operator's allowance for the residual probability that a
+deployment's sensitivity assumptions fail (for example, one person
+controlling several addresses), and it is accounted for so that `(ε, δ)`
+composes uniformly across endpoints.
+
+## Budget accounting
+
+Each API key has a budget `(E, Δ_budget)` per refresh window `W`. A query
+costing `(ε, δ)` is answered only if `spent + (ε, δ) ≤ (E, Δ_budget)`.
+By basic composition, everything any one key sees within one window is
+`(E, Δ_budget)`-differentially private.
+
+* Spend is charged atomically in Redis (a Lua check-and-charge script), so
+  every API node shares one view. Without Redis an in-memory store is used.
+* When a query would exceed the budget the API returns
+  **`429 Too Many Requests`** with `Retry-After: <seconds until refresh>`.
+* Only configured API keys (`RWA_DP_API_KEYS`, defaulting to the keys of
+  `RWA_API_KEY_TIERS`) get their own budget. Every other caller shares the
+  `anonymous` budget, so inventing keys cannot mint fresh budgets.
+* If the budget store is unreachable the query is refused (`503`). Answering
+  without charging would let an outage bypass the budget.
+* Raw API keys are never stored. Budgets are keyed by a truncated SHA-256 of
+  the key.
+
+Budgets refresh at the end of each window. Across windows, privacy loss
+accumulates linearly (`n` windows cost `n · E`). Operators should choose `E`
+and `W` with that in mind.
+
+## Configuration
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `RWA_DP_ENABLED` | `true` | Turn noise and budgeting on or off |
+| `RWA_DP_STATS_EPSILON` / `RWA_DP_STATS_DELTA` | `0.5` / `1e-6` | `(ε, δ)` per `/stats` query |
+| `RWA_DP_HOLDERS_EPSILON` / `RWA_DP_HOLDERS_DELTA` | `0.5` / `1e-6` | `(ε, δ)` per holders aggregate query |
+| `RWA_DP_TVL_CLIP_CENTS` | `100000000` | `C_tvl` |
+| `RWA_DP_TRANSFER_VOLUME_CLIP` | `1e13` | `C_vol` |
+| `RWA_DP_BUDGET_EPSILON` / `RWA_DP_BUDGET_DELTA` | `10` / `1e-4` | Per-key budget per window |
+| `RWA_DP_BUDGET_WINDOW_SECS` | `86400` | Refresh window |
+| `RWA_DP_REDIS_URL` | `RWA_RATE_LIMIT_REDIS_URL` | Budget store |
+
+A `*_DELTA` of `0` configures a pure-`ε` endpoint.
+
+## Expected accuracy
+
+The Laplace noise has standard deviation `√2 · Δ / ε'`. With the defaults
+(`ε' = 0.25`):
+
+* holder count: about ±5.7 holders,
+* TVL: about ±$5,657 per $1M clip.
+
+Each response carries `X-Privacy-Epsilon`, `X-Privacy-Delta`,
+`X-Privacy-Budget-Remaining` and `X-Privacy-Budget-Reset` headers.
+
+## Operator endpoint
+
+`GET /v1/admin/privacy/budget` (requires `Authorization: Bearer
+<RWA_ADMIN_TOKEN>`) reports the configuration and each key's spent `ε`,
+spent `δ`, query count and seconds until refresh. `?api_key=<key>` (or
+`?api_key=anonymous`) filters to one budget.
+
+## Scope
+
+The row-level `GET /v1/assets/:id/holders` list reproduces public on-chain
+balances. It is not an aggregate and is not covered by this guarantee. Only
+the `?view=aggregate` view and `/v1/stats` are.

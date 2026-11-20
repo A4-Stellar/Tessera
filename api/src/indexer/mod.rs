@@ -245,6 +245,9 @@ pub struct AppState {
     /// Append-only MMR of indexed-ledger checkpoints for light-client
     /// proofs (issue #318).
     pub mmr: Arc<std::sync::RwLock<mmr_checkpoint::MmrCheckpoints>>,
+    /// Differential privacy for aggregate endpoints (issue #26). Disabled
+    /// until `main` installs the configured engine.
+    pub privacy: Arc<crate::analytics::differential_privacy::PrivacyEngine>,
 }
 
 impl AppState {
@@ -260,6 +263,7 @@ impl AppState {
             dlq: None,
             node_role: tokio::sync::watch::channel(NodeRole::Leader).1,
             mmr: Arc::default(),
+            privacy: Arc::new(crate::analytics::differential_privacy::PrivacyEngine::disabled()),
         }
     }
 

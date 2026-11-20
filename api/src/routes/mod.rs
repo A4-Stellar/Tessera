@@ -9,6 +9,7 @@ pub mod events;
 pub mod export;
 pub mod holders;
 pub mod portfolio;
+pub mod privacy;
 pub mod proofs;
 #[expect(
     dead_code,
@@ -148,7 +149,7 @@ pub fn router(state: AppState) -> Router {
             "/assets/:id/analytics",
             get(assets::concentration_analytics),
         )
-        .route("/assets/:id/holders", get(holders::list))
+        .route("/assets/:id/holders", get(holders::list_or_aggregate))
         .route("/assets/:id/compliance", get(compliance::summary))
         .route("/assets/:id/dividends", get(dividends::list))
         .route("/assets/:id/distributions/:did", get(dividends::get_one))
@@ -188,6 +189,8 @@ pub fn router(state: AppState) -> Router {
         .nest("/v1", data_routes)
         .route("/v1/ws", get(crate::ws::handler))
         .route("/v1/admin/dlq/retry", axum::routing::post(dlq::retry))
+        // Issue #26: per-key differential-privacy budget consumption.
+        .route("/v1/admin/privacy/budget", get(privacy::budget))
         // `route_layer` (rather than `layer`) so the middleware runs after
         // route matching and can read `MatchedPath` from the request
         // extensions for a low-cardinality route label.
@@ -309,6 +312,7 @@ async fn index() -> Json<serde_json::Value> {
             "GET /v1/assets/:id/metrics/analytics",
             "GET /v1/assets/:id/analytics",
             "GET /v1/assets/:id/holders",
+            "GET /v1/assets/:id/holders?view=aggregate",
             "GET /v1/assets/:id/compliance",
             "GET /v1/assets/:id/dividends",
             "GET /v1/assets/:id/distributions/:did",
@@ -320,6 +324,7 @@ async fn index() -> Json<serde_json::Value> {
             "GET /v1/security/anomalies",
             "GET /v1/proofs/mmr",
             "GET /v1/proofs/mmr/:ledger_seq?account=:address",
+            "GET /v1/admin/privacy/budget",
             "GET /health",
             "GET /metrics"
         ],
