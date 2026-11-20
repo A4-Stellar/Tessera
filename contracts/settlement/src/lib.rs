@@ -21,14 +21,25 @@
 //! `is_allowed(address) -> bool` gates every leg in that token) or explicitly
 //! as *unregulated* (e.g. a USDC Stellar Asset Contract used as the cash leg).
 //! An unregistered token fails closed.
+//!
+//! Alongside the batch engine the contract also exposes T+0 DVP instructions
+//! (issue #390): counterparties sign a `SettlementInstruction`, either may call
+//! `settle` on its settlement ledger for atomic delivery-versus-payment,
+//! `net_settle` clears many instructions through the minimum number of net
+//! transfers, and the settlement guarantee fund compensates a counterparty when
+//! a pre-flight check shows the other side cannot perform.
 #![no_std]
 
 mod batch_settler;
+mod instructions;
 
 #[cfg(test)]
 mod test;
 
 pub use batch_settler::{AssetPolicy, TradeLeg, MAX_LEGS};
+pub use instructions::{
+    InstructionStatus, SettlementInstruction, MAX_NET_INSTRUCTIONS,
+};
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, Address, BytesN, Env,
@@ -66,6 +77,22 @@ pub enum Error {
     /// The token's compliance contract rejected a leg's recipient.
     RecipientNotCompliant = 13,
     Overflow = 14,
+    /// No instruction exists with this id.
+    InstructionNotFound = 15,
+    /// The instruction has already settled or been covered by the guarantee.
+    InstructionAlreadySettled = 16,
+    /// `settle`/`net_settle` was called before the settlement ledger.
+    SettlementNotDue = 17,
+    /// The requested settlement ledger is in the past.
+    InvalidSettlementLedger = 18,
+    /// Buyer and seller are the same account.
+    SameAccount = 19,
+    /// The traded asset and the payment asset are the same token.
+    SameAsset = 20,
+    /// No guarantee fund is configured for the failed leg's token.
+    GuaranteeNotConfigured = 21,
+    /// The guarantee fund cannot cover the failed leg in full.
+    InsufficientGuarantee = 22,
 }
 
 #[derive(Clone)]
@@ -76,6 +103,16 @@ pub(crate) enum DataKey {
     Asset(Address),
     /// Number of batches settled so far; the next batch's id.
     BatchCount,
+    /// Next DVP instruction id (issue #390).
+    InstructionCount,
+    /// A signed settlement instruction.
+    Instruction(u32),
+    /// Collateral deposited for settlement-failure coverage, per token.
+    Guarantee(Address),
+    /// Admin-configured maximum payout per token; zero disables coverage.
+    GuaranteeCap(Address),
+    /// Transfers executed by the most recent `net_settle` call.
+    LastNetTransferCount,
 }
 
 #[contract]
@@ -181,6 +218,96 @@ impl SettlementContract {
     pub fn upgrade(env: Env, admin: Address, new_wasm_hash: BytesN<32>) {
         Self::require_admin(&env, &admin);
         tessera_common::upgrade(&env, new_wasm_hash);
+    }
+
+    // ------------------------------------------------------------------
+    // T+0 DVP instructions, netting and guarantee fund (issue #390)
+    // ------------------------------------------------------------------
+
+    /// Create a bilateral DVP instruction. Both counterparties must authorize
+    /// the exact terms; either may settle it once `settlement_ledger` is reached.
+    pub fn create_instruction(
+        env: Env,
+        buyer: Address,
+        seller: Address,
+        asset: Address,
+        amount: i128,
+        payment_asset: Address,
+        payment_amount: i128,
+        settlement_ledger: u32,
+    ) -> u32 {
+        instructions::create(
+            &env,
+            &buyer,
+            &seller,
+            &asset,
+            amount,
+            &payment_asset,
+            payment_amount,
+            settlement_ledger,
+        )
+    }
+
+    pub fn get_instruction(env: Env, instruction_id: u32) -> SettlementInstruction {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Instruction(instruction_id))
+            .unwrap_or_else(|| panic_with_error!(env, Error::InstructionNotFound))
+    }
+
+    /// Atomically deliver `asset` to the buyer and `payment_asset` to the
+    /// seller. Either party may call this; both must authorize the transfers.
+    pub fn settle(env: Env, instruction_id: u32) {
+        instructions::settle(&env, instruction_id);
+    }
+
+    /// Clear a set of pending instructions against each other. Returns the
+    /// number of transfers executed — the minimum for the net positions.
+    pub fn net_settle(env: Env, instruction_ids: Vec<u32>) -> u32 {
+        instructions::net_settle(&env, instruction_ids)
+    }
+
+    pub fn last_net_transfer_count(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::LastNetTransferCount)
+            .unwrap_or(0)
+    }
+
+    pub fn instruction_count(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::InstructionCount)
+            .unwrap_or(0)
+    }
+
+    /// Set the per-token maximum guarantee payout (`0` disables coverage).
+    pub fn configure_guarantee(env: Env, admin: Address, token: Address, max_amount: i128) {
+        instructions::configure_guarantee(&env, &admin, &token, max_amount);
+    }
+
+    /// Deposit coverage collateral. Anyone may deposit; only the admin may
+    /// withdraw, and only pending failures may pay out.
+    pub fn deposit_guarantee(env: Env, depositor: Address, token: Address, amount: i128) {
+        instructions::deposit_guarantee(&env, &depositor, &token, amount);
+    }
+
+    pub fn withdraw_guarantee(env: Env, admin: Address, token: Address, amount: i128) {
+        instructions::withdraw_guarantee(&env, &admin, &token, amount);
+    }
+
+    pub fn guarantee_balance(env: Env, token: Address) -> i128 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Guarantee(token))
+            .unwrap_or(0)
+    }
+
+    pub fn guarantee_cap(env: Env, token: Address) -> i128 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::GuaranteeCap(token))
+            .unwrap_or(0)
     }
 
     fn require_admin(env: &Env, admin: &Address) {
