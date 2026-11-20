@@ -191,6 +191,10 @@ impl VestingContract {
         }
 
         let mut schedule = Self::schedule(&env, schedule_id);
+        // Revoke already returned the unvested balance to the treasury.
+        if schedule.revoked_at.is_some() {
+            panic_with_error!(env, Error::AlreadyRevoked);
+        }
         let now = env.ledger().timestamp();
         let vested = Self::vested_at(&env, &schedule, now);
         let unvested = schedule.amount.saturating_sub(vested);
@@ -295,11 +299,11 @@ impl VestingContract {
             return 0;
         }
         let elapsed = core::cmp::min(effective_now - schedule.start_time, schedule.total_duration);
-        let numerator = schedule
-            .amount
+        // Vest on the original curve; a slash only removes unvested tokens, so cap at the remaining amount.
+        let numerator = (schedule.amount + schedule.slashed_amount)
             .checked_mul(elapsed as i128)
             .unwrap_or_else(|| panic_with_error!(env, Error::Overflow));
-        numerator / schedule.total_duration as i128
+        core::cmp::min(numerator / schedule.total_duration as i128, schedule.amount)
     }
 
     fn transfer_from_contract(env: &Env, to: &Address, amount: i128) {

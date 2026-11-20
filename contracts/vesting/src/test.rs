@@ -271,3 +271,51 @@ mod grant_vault_tests {
         assert_eq!(s.equity.balance(&s.vault_id), 0);
     }
 }
+
+#[test]
+fn slash_keeps_vested_tokens_and_revoke_refunds_only_what_remains() {
+    let (env, admin, beneficiary, treasury, vesting_id, token_id) = setup();
+    let vesting = VestingContractClient::new(&env, &vesting_id);
+    let token = MockTokenClient::new(&env, &token_id);
+    set_time(&env, 0);
+    let id = vesting.create_vesting_schedule(&admin, &beneficiary, &0, &0, &100, &1_000, &true);
+    set_time(&env, 50);
+    assert_eq!(vesting.claim_vested_tokens(&beneficiary, &id), 500);
+    let reason = soroban_sdk::BytesN::from_array(&env, &[0; 32]);
+    assert_eq!(vesting.slash(&admin, &id, &reason, &10_000), 500);
+    // Everything left was slashed: nothing more to vest, nothing to refund.
+    set_time(&env, 75);
+    assert_eq!(vesting.claim_vested_tokens(&beneficiary, &id), 0);
+    assert_eq!(vesting.revoke_vesting_schedule(&admin, &id), 0);
+    assert_eq!(token.balance(&treasury), 500);
+    assert_eq!(token.balance(&vesting_id), 0);
+}
+
+#[test]
+fn partial_slash_keeps_original_vesting_pace() {
+    let (env, admin, beneficiary, _treasury, vesting_id, token_id) = setup();
+    let vesting = VestingContractClient::new(&env, &vesting_id);
+    let token = MockTokenClient::new(&env, &token_id);
+    set_time(&env, 0);
+    let id = vesting.create_vesting_schedule(&admin, &beneficiary, &0, &0, &100, &1_000, &true);
+    set_time(&env, 50);
+    let reason = soroban_sdk::BytesN::from_array(&env, &[0; 32]);
+    assert_eq!(vesting.slash(&admin, &id, &reason, &5_000), 250);
+    assert_eq!(vesting.claim_vested_tokens(&beneficiary, &id), 500);
+    set_time(&env, 200);
+    assert_eq!(vesting.claim_vested_tokens(&beneficiary, &id), 250);
+    assert_eq!(token.balance(&vesting_id), 0);
+}
+
+#[test]
+#[should_panic]
+fn slash_after_revoke_is_rejected() {
+    let (env, admin, beneficiary, _treasury, vesting_id, _token_id) = setup();
+    let vesting = VestingContractClient::new(&env, &vesting_id);
+    set_time(&env, 0);
+    let id = vesting.create_vesting_schedule(&admin, &beneficiary, &0, &0, &100, &1_000, &true);
+    set_time(&env, 50);
+    vesting.revoke_vesting_schedule(&admin, &id);
+    let reason = soroban_sdk::BytesN::from_array(&env, &[0; 32]);
+    vesting.slash(&admin, &id, &reason, &10_000);
+}
