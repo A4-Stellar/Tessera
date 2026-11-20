@@ -4,10 +4,15 @@
 #![no_std]
 
 mod resolution;
+pub mod timelock;
 pub mod ve_vault;
 
 pub use resolution::{
     BoardConfig, Error, ExecutionPayload, GovernanceContract, GovernanceContractClient, Resolution,
+};
+pub use timelock::{
+    GovernanceTimelockContract, GovernanceTimelockContractClient, ProposalEnvelope,
+    ProposalStatus, ProposalV1, ProposalV2, TimelockConfig, TimelockError,
 };
 pub use ve_vault::{
     EarlyWithdrawn, LockCreated, LockUpdated, VeError, VeLock, VeVaultContract,

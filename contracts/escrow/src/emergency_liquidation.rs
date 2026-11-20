@@ -55,6 +55,22 @@ pub struct LiquidationState {
 enum VaultKey {
     EmergencyState,
     EmergencyRedeemed(Address),
+    /// The vault-liquidation contract permitted to hand us expired auctions.
+    BackstopOperator,
+    /// Record of an absorbed single-vault liquidation (issue #360).
+    AbsorbedVault(u64),
+}
+
+/// Book-keeping for a vault that an auction could not sell and that the
+/// emergency backstop has taken over.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AbsorbedVaultRecord {
+    pub operator: Address,
+    pub collateral_token: Address,
+    pub collateral_amount: i128,
+    pub debt_amount: i128,
+    pub absorbed_ledger: u32,
 }
 
 #[contract]
@@ -213,6 +229,62 @@ impl EmergencyLiquidationVault {
             .persistent()
             .get(&VaultKey::EmergencyRedeemed(holder))
             .unwrap_or(0)
+    }
+
+    /// Absorb a vault whose Dutch auction expired without a bid (issue #360).
+    ///
+    /// Only the vault-liquidation contract may call this, and it binds itself
+    /// as the operator on the first call. The collateral is recorded as
+    /// absorbed so the committee can liquidate it through the ordinary
+    /// emergency settlement flow; the vault itself is already marked closed.
+    pub fn absorb_vault(
+        env: Env,
+        operator: Address,
+        vault_id: u64,
+        collateral_token: Address,
+        collateral_amount: i128,
+        debt_amount: i128,
+    ) {
+        operator.require_auth();
+        let operator_key = VaultKey::BackstopOperator;
+        match env
+            .storage()
+            .instance()
+            .get::<_, Address>(&operator_key)
+        {
+            Some(stored) => {
+                if stored != operator {
+                    panic_with_error!(env, LiquidationError::NotCommittee);
+                }
+            }
+            None => env.storage().instance().set(&operator_key, &operator),
+        }
+        if collateral_amount <= 0 || debt_amount < 0 {
+            panic_with_error!(env, LiquidationError::InvalidAmount);
+        }
+        let record_key = VaultKey::AbsorbedVault(vault_id);
+        if env.storage().persistent().has(&record_key) {
+            panic_with_error!(env, LiquidationError::AlreadyActive);
+        }
+        let record = AbsorbedVaultRecord {
+            operator: operator.clone(),
+            collateral_token,
+            collateral_amount,
+            debt_amount,
+            absorbed_ledger: env.ledger().sequence(),
+        };
+        env.storage().persistent().set(&record_key, &record);
+        env.events().publish(
+            (symbol_short!("absorbed"), operator),
+            (vault_id, collateral_amount, debt_amount),
+        );
+    }
+
+    /// Record of an absorbed vault, if the backstop ever took one over.
+    pub fn absorbed_vault(env: Env, vault_id: u64) -> Option<AbsorbedVaultRecord> {
+        env.storage()
+            .persistent()
+            .get(&VaultKey::AbsorbedVault(vault_id))
     }
 }
 

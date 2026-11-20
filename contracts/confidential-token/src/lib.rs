@@ -123,6 +123,18 @@ pub struct VerificationSession {
     pub accumulator: Point,
 }
 
+/// Public parameters needed to verify a Pedersen commitment opening.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PublicParameters {
+    /// Commitment base `G` (value base).
+    pub value_base: Point,
+    /// Commitment base `H` (blinding base), with discrete log unknown.
+    pub blinding_base: Point,
+    /// Number of vector generators `G_i` / `H_i` required by a proof.
+    pub generator_count: u32,
+}
+
 #[derive(Clone)]
 #[contracttype]
 enum DataKey {
@@ -136,6 +148,8 @@ enum DataKey {
     /// Bulletproofs vector generators `G_i` / `H_i`, derived on-chain.
     GensG,
     GensH,
+    /// Verifier public parameters `G`, `H` and the generator count.
+    Params,
     /// Spendable balance commitment.
     Available(Address),
     /// Received-but-not-yet-applied balance commitment.
@@ -178,6 +192,26 @@ impl ConfidentialTokenContract {
         env.storage()
             .persistent()
             .set(&DataKey::GensH, &Vec::<Point>::new(&env));
+        // The commitment bases are fixed, small and read on every operation,
+        // so they live in InstanceStorage rather than PersistentStorage.
+        env.storage().instance().set(
+            &DataKey::Params,
+            &PublicParameters {
+                value_base: pedersen::value_base(&env).to_bytes(),
+                blinding_base: pedersen::blinding_base(&env).to_bytes(),
+                generator_count: GENERATOR_COUNT,
+            },
+        );
+    }
+
+    /// Public verifier parameters stored at initialization.
+    pub fn public_parameters(env: Env) -> PublicParameters {
+        env.storage()
+            .instance()
+            .get(&DataKey::Params)
+            .unwrap_or_else(|| {
+                panic_with_error!(env, Error::NotInitialized)
+            })
     }
 
     /// Derive the next `count` Bulletproofs generator pairs with
