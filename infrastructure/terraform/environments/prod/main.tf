@@ -121,3 +121,23 @@ module "database" {
   max_acu                    = 16.0
   instance_count             = 2 # Multi-AZ HA
 }
+
+# 9. Warm DR standby (issue #393) — read-only API on the replicated replica.
+module "dr_standby" {
+  source               = "../../modules/aws/dr-standby"
+  project_name         = var.project_name
+  environment          = "prod"
+  aws_region           = var.aws_region
+  vpc_id               = module.vpc.vpc_id
+  private_subnet_ids   = module.vpc.private_subnet_ids
+  api_image            = var.api_image
+  execution_role_arn   = module.iam.ecs_task_execution_role_arn
+  task_role_arn        = module.iam.ecs_task_role_arn
+  replica_secret_arn   = var.dr_replica_secret_arn
+  allowed_cidr_blocks  = var.dr_allowed_cidr_blocks
+  desired_count        = 1
+  soroban_rpc_url      = var.soroban_rpc_url
+  registry_id          = var.registry_id
+  dividend_id          = var.dividend_id
+  read_source          = var.read_source
+}

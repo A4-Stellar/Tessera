@@ -1,13 +1,24 @@
 #!/usr/bin/env bash
-# Daily disaster-recovery entry point (issue #310).
+# Disaster-recovery entry point (issues #310, #393).
 #
-# Restores the latest encrypted S3/GCS Postgres backup into an isolated
-# sandbox database, asserts checksums and record counts, and alerts the SRE
-# team (Slack / PagerDuty) when restoration fails or data is corrupt. All of
-# that logic lives in infrastructure/scripts/dr_test.sh (issue #140); this is
-# the entry point invoked by the daily DR workflow.
+# Without flags this is the daily backup restore verification: the latest
+# encrypted S3/GCS Postgres backup is restored into an isolated sandbox,
+# checksums and record counts are asserted and SRE is alerted on failure. All
+# of that logic lives in infrastructure/scripts/dr_test.sh (issue #140).
 #
-# Exit codes: 0 pass, 1 failure (alerts sent), 2 warnings.
+# With --drill this entry point runs the automated weekly DR drill (issue #393):
+# scale up the warm Fargate standby, restore the newest WAL from pgBackRest,
+# health-check the read-only API, run the API test suite, measure RTO/RPO and
+# report to PagerDuty. That is what .github/workflows/dr_drill.yml invokes.
+#
+# Exit codes: 0 pass, 1 failure (alerts sent), 2 warnings/objective missed.
 set -euo pipefail
 
-exec "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../scripts/dr_test.sh" "$@"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if [[ "${1:-}" == "--drill" ]]; then
+  shift
+  exec "${SCRIPT_DIR}/dr_drill.sh" "$@"
+fi
+
+exec "${SCRIPT_DIR}/../scripts/dr_test.sh" "$@"
