@@ -53,6 +53,20 @@ export interface VerifiedCheckpoint {
   entries: { assetId: number; address: string; balance: bigint }[];
 }
 
+/** Inclusion proof returned by the audit MMR `/v1/audit/:entry_id/proof` endpoint. */
+export interface AuditMmrProofResponse {
+  sequence: number;
+  timestamp: string;
+  payload_hash: Hex;
+  prev_peak_hash: Hex;
+  leaf_index: number;
+  leaf_count: number;
+  leaf_hash: Hex;
+  path: Hex[];
+  peaks: Hex[];
+  root: Hex;
+}
+
 const MMR_LEAF = 0x00;
 const MMR_NODE = 0x01;
 const MMR_BAG = 0x02;
@@ -288,4 +302,84 @@ export async function verifyCheckpointProof(
     contractStateRoot: response.contract_state_root.toLowerCase(),
     entries,
   };
+}
+
+/** SHA256 of canonical payload bytes. */
+export async function auditPayloadHash(payload: unknown | Uint8Array): Promise<Uint8Array> {
+  const bytes =
+    payload instanceof Uint8Array
+      ? payload
+      : new TextEncoder().encode(
+          typeof payload === "string" ? payload : JSON.stringify(payload),
+        );
+  return sha256(bytes);
+}
+
+/** Required audit MMR leaf: SHA256(prev_peak_hash || timestamp || payload_hash). */
+export async function auditMmrLeafHash(
+  prevPeakHash: Uint8Array,
+  timestamp: string,
+  payloadHash: Uint8Array,
+): Promise<Uint8Array> {
+  if (prevPeakHash.length !== 32 || payloadHash.length !== 32) {
+    throw new MmrVerificationError("audit MMR hashes must be 32 bytes");
+  }
+  return sha256(
+    prevPeakHash,
+    new TextEncoder().encode(timestamp),
+    payloadHash,
+  );
+}
+
+export const auditLeafHash = auditMmrLeafHash;
+
+/**
+ * Verify the dedicated audit MMR inclusion proof format.  This recomputes the
+ * leaf from raw timestamp/payload values and confirms every peak and the root.
+ */
+export async function verifyAuditMmrProof(
+  response: AuditMmrProofResponse,
+  trustedRoot?: Hex,
+): Promise<boolean> {
+  try {
+    const payloadHash = hash32(response.payload_hash);
+    const prevPeak = hash32(response.prev_peak_hash);
+    const leaf = await auditMmrLeafHash(prevPeak, response.timestamp, payloadHash);
+    if (!equal(leaf, hash32(response.leaf_hash))) return false;
+    if (!Number.isSafeInteger(response.leaf_index) ||
+        !Number.isSafeInteger(response.leaf_count)) return false;
+    if (response.leaf_index < 0 || response.leaf_index >= response.leaf_count) return false;
+
+    const all = mountains(response.leaf_count);
+    if (all.length !== response.peaks.length) return false;
+    const pos = all.findIndex(([start, height]) =>
+      response.leaf_index >= start &&
+      response.leaf_index < start + 2 ** height);
+    if (pos < 0) return false;
+    const [start, height] = all[pos];
+    if (response.path.length !== height) return false;
+
+    let acc = leaf;
+    let idx = response.leaf_index - start;
+    for (const siblingHex of response.path) {
+      const sibling = hash32(siblingHex);
+      acc = idx % 2 === 0
+        ? await sha256(acc, sibling)
+        : await sha256(sibling, acc);
+      idx = Math.floor(idx / 2);
+    }
+    if (!equal(acc, hash32(response.peaks[pos]))) return false;
+
+    const peaks = response.peaks.map(hash32);
+    let bagged = peaks[peaks.length - 1];
+    for (let i = peaks.length - 2; i >= 0; i--) {
+      bagged = await sha256(peaks[i], bagged);
+    }
+    const root = bagged;
+    if (!equal(root, hash32(response.root))) return false;
+    if (trustedRoot !== undefined && !equal(root, hash32(trustedRoot))) return false;
+    return true;
+  } catch {
+    return false;
+  }
 }

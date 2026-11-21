@@ -7,7 +7,7 @@ pub mod pii_scrubber;
 pub mod rate_limit;
 #[expect(
     dead_code,
-    reason = "tenant helpers are staged until API-key authentication is wired"
+    reason = "the legacy API-key tier helpers remain staged while tenant headers are active"
 )]
 pub mod tenant;
 pub mod token_bucket;

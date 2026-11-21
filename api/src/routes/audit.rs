@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use super::ApiError;
 use crate::audit::{AnchorRecord, AuditAction, AuditEntry, AuditVerificationResult, MerkleProof};
+use crate::audit::mmr::AuditMmrProofResponse;
 use crate::indexer::AppState;
 
 const DEFAULT_PAGE_SIZE: usize = 50;
@@ -52,6 +53,7 @@ pub struct PaginatedEntriesResponse {
 pub struct EntryDetailResponse {
     pub entry: AuditEntry,
     pub inclusion_proof: Option<MerkleProof>,
+    pub audit_mmr_proof: Option<AuditMmrProofResponse>,
 }
 
 /// Request body for `POST /v1/audit/entries`.
@@ -122,7 +124,40 @@ pub async fn get_entry(
     Ok(Json(EntryDetailResponse {
         entry,
         inclusion_proof,
+        audit_mmr_proof: state.audit.audit_mmr_proof(sequence).await,
     }))
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AuditMmrRootResponse {
+    pub leaf_count: usize,
+    pub root: String,
+}
+
+/// Returns the current audit MMR root.
+pub async fn mmr_root(State(state): State<AppState>) -> Json<AuditMmrRootResponse> {
+    let (root, leaf_count) = state.audit.audit_mmr_root().await;
+    Json(AuditMmrRootResponse {
+        leaf_count,
+        root: hex::encode(root),
+    })
+}
+
+/// Returns an audit MMR inclusion proof for a 1-indexed audit sequence.
+pub async fn mmr_proof(
+    State(state): State<AppState>,
+    Path(sequence): Path<u64>,
+) -> Result<Json<AuditMmrProofResponse>, ApiError> {
+    state
+        .audit
+        .audit_mmr_proof(sequence)
+        .await
+        .map(Json)
+        .ok_or_else(|| {
+            ApiError::NotFound(format!(
+                "Audit MMR proof for sequence {sequence} not found"
+            ))
+        })
 }
 
 /// List all published root hash anchors on the Stellar ledger.
@@ -267,6 +302,23 @@ mod tests {
         assert!(detail.inclusion_proof.is_some());
         let proof = detail.inclusion_proof.unwrap();
         assert!(proof.verify(&proof.root_hash));
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::get("/v1/audit/1/proof")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let mmr_proof: AuditMmrProofResponse = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(mmr_proof.sequence, 1);
+        assert_eq!(mmr_proof.leaf_count, 1);
 
         // GET /v1/audit/entries/999 -> 404
         let req = Request::builder()

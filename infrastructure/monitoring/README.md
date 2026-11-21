@@ -73,7 +73,9 @@ is exhausted, and inhibits tickets while a page for that SLO is firing.
 
 3. **Grafana**: import `slo_dashboard.json` (Dashboards → Import), or
    provision it from a dashboards provider directory. Pick the Prometheus
-   data source in the `Prometheus` variable.
+   data source in the `Prometheus` variable. The dashboard also includes a
+   quarantined dead-letter event panel sourced from
+   `tessera_dlq_quarantined_total`.
 
 ## Validate
 

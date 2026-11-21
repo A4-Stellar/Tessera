@@ -37,6 +37,7 @@ mod ws;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use indexer::{AppState, Config, Indexer};
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder};
@@ -96,6 +97,22 @@ async fn main() {
     metrics::gauge!("active_websocket_connections").set(0.0);
 
     let mut state = AppState::new(config, metrics_handle);
+    let audit_mmr_path = std::path::PathBuf::from(
+        std::env::var("RWA_AUDIT_MMR_PATH").unwrap_or_else(|_| "./data/audit-mmr".into()),
+    );
+    if let Some(parent) = audit_mmr_path.parent() {
+        if let Err(error) = std::fs::create_dir_all(parent) {
+            tracing::error!(%error, path = %parent.display(), "failed to create audit MMR directory");
+            std::process::exit(1);
+        }
+    }
+    match audit::AuditLog::with_rocksdb(&audit_mmr_path) {
+        Ok(audit_log) => state.audit = Arc::new(audit_log),
+        Err(error) => {
+            tracing::error!(%error, path = %audit_mmr_path.display(), "failed to restore audit MMR");
+            std::process::exit(1);
+        }
+    }
 
     // Issue #26: differential privacy for aggregate endpoints.
     match analytics::differential_privacy::PrivacyEngine::from_env() {
@@ -136,8 +153,55 @@ async fn main() {
         Ok(Some(router)) => {
             let router = Arc::new(router);
             router.spawn_health_monitor(shutdown_rx.clone());
+            if let Err(error) = sqlx::raw_sql(include_str!(
+                "db/migrations/0004_tenant_rate_limits.sql"
+            ))
+                .execute(router.primary())
+                .await
+            {
+                tracing::error!(%error, "tenant rate-limit schema initialization failed");
+                std::process::exit(1);
+            }
             // Issue #163: quarantine table behind `POST /v1/admin/dlq/retry`.
             state.dlq = indexer::dlq::DeadLetterQueue::open(router.primary().clone()).await;
+            if let Some(dlq) = state.dlq.clone() {
+                let store = indexer::replay::FileEventStore::from_env();
+                let retry_worker = dlq.clone();
+                let worker_shutdown = shutdown_rx.clone();
+                tokio::spawn(async move {
+                    retry_worker.run_worker(store, worker_shutdown).await;
+                });
+
+                let mut publisher_shutdown = shutdown_rx.clone();
+                tokio::spawn(async move {
+                    loop {
+                        if *publisher_shutdown.borrow() {
+                            break;
+                        }
+                        match indexer::pulsar_producer::PulsarProducer::connect(
+                            indexer::pulsar_producer::PulsarConfig::from_env(),
+                        )
+                        .await
+                        {
+                            Ok(pulsar) => {
+                                dlq.set_pulsar(pulsar).await;
+                                break;
+                            }
+                            Err(error) => {
+                                tracing::error!(%error, "DLQ poison-pill publisher could not connect to Pulsar; retrying");
+                                tokio::select! {
+                                    _ = tokio::time::sleep(Duration::from_secs(30)) => {}
+                                    changed = publisher_shutdown.changed() => {
+                                        if changed.is_err() || *publisher_shutdown.borrow() {
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
+            }
         }
         Ok(None) => {}
         Err(e) => {

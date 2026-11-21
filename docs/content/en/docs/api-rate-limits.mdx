@@ -15,8 +15,16 @@ this callout removed once the features ship.
 
 ## Rate limits
 
-Each IP address is allowed **300 requests per minute** (sliding window). This
-applies to all endpoints equally — there are no per-endpoint overrides.
+Requests carrying `X-Tenant-ID` use the token-bucket configuration stored for
+that tenant in PostgreSQL (`tenant_rate_limits`). The configuration defines a
+bucket capacity, a refill rate, and the refill interval. Tenants without a
+configured row use the API's default tier. Requests without `X-Tenant-ID`
+continue to use the configured API-key or client-IP bucket.
+
+Redis coordinates the bucket atomically across API instances. If Redis is
+unavailable, the API enters degraded mode and enforces a process-local bucket
+until Redis is reachable again. Local degraded buckets are not shared across
+instances.
 
 ### Response headers
 
@@ -25,9 +33,9 @@ remaining budget without waiting for a `429`:
 
 | Header | Example | Meaning |
 |--------|---------|---------|
-| `X-RateLimit-Limit` | `300` | Maximum requests allowed per window |
-| `X-RateLimit-Remaining` | `247` | Requests remaining in the current window |
-| `X-RateLimit-Reset` | `1756472340` | Unix timestamp when the window resets (UTC) |
+| `X-RateLimit-Limit` | `300` | Bucket capacity |
+| `X-RateLimit-Remaining` | `247` | Whole tokens remaining |
+| `X-RateLimit-Reset` | `12` | Seconds until the bucket is full |
 
 ### When the limit is exceeded
 
@@ -48,8 +56,8 @@ X-RateLimit-Reset: 1756472340
 }
 ```
 
-The `Retry-After` value (in seconds) is the time until the window resets. Back
-off for at least that long before retrying.
+The `Retry-After` value (in seconds) is the time until one token is expected to
+be available. Back off for at least that long before retrying.
 
 <CalloutBox variant="tip">
 For polling use cases, read `X-RateLimit-Remaining` before every request and add
