@@ -242,4 +242,37 @@ describe("RealTimeDashboard", () => {
     });
     expect(FakeWebSocket.instances).toHaveLength(2);
   });
+
+  it("handles incoming anomaly events and renders AnomalyAlert (issue #30)", async () => {
+    render(<RealTimeDashboard assetContract={ASSET} apiBaseUrl="http://api.test" />);
+    const ws = FakeWebSocket.instances[0];
+    act(() => ws.open());
+    await settle();
+
+    // Emit event matching anomaly detector (issue #30: Z-score > 3.5)
+    act(() => {
+      ws.emit({
+        id: 99,
+        contract: ASSET,
+        event_type: "anomaly_alert",
+        ledger: 1099,
+        timestamp: new Date().toISOString(),
+        data: {
+          account: "GBBD...TESSERA",
+          metric: "VelocitySpike",
+          peak_z_score: 4.25,
+          z_score: 4.25,
+          risk_flag: true,
+        },
+      });
+    });
+
+    const alert = screen.getByTestId("anomaly-alert");
+    expect(alert).toBeInTheDocument();
+    expect(alert).toHaveAttribute("role", "alert");
+    expect(alert).toHaveAttribute("aria-live", "assertive");
+    expect(alert).toHaveTextContent("Anomaly Detected (Issue #30)");
+    expect(alert).toHaveTextContent("Z = 4.25");
+  });
 });
+
