@@ -34,6 +34,9 @@ pub const DEFAULT_SVID_DIR: &str = "/var/run/spiffe.svid";
 pub const DEFAULT_SERVICE_NAME: &str = "tessera-api";
 pub const SPIFFE_ID_PREFIX: &str = "spiffe://tessera.io/ns/prod/sa";
 pub const ROTATION_POLL_INTERVAL: Duration = Duration::from_secs(5);
+/// Consecutive polls the SVID must be missing before it counts as revoked, so a
+/// non-atomic rewrite by the SPIRE helper does not terminate the process.
+pub const REVOCATION_GRACE_POLLS: u32 = 3;
 /// Hard deadline for terminating mid-flight requests after revocation.
 pub const REVOCATION_TERMINATION_DEADLINE: Duration = Duration::from_secs(10);
 
@@ -190,7 +193,7 @@ impl SvidStore {
         match build_http_client(&material) {
             Ok(client) => self
                 .http_client
-                .store(Arc::new(Some(Arc::new(client)))),
+                .store(Arc::new(Some(client))),
             Err(error) => tracing::warn!(%error, "failed to rebuild mTLS HTTP client"),
         }
         self.current.store(Arc::new(Some(Arc::new(material))));
@@ -201,7 +204,7 @@ impl SvidStore {
     fn svid_stream(&self) -> impl Stream<Item = Result<SvidMaterial, SvidError>> + '_ {
         let dir = self.dir.clone();
         let expected_id = self.expected_id.clone();
-        let mut last = self.current().map(|material| material.fingerprint);
+        let last = self.current().map(|material| material.fingerprint);
 
         futures::stream::unfold(
             (dir, expected_id, last),
@@ -214,7 +217,11 @@ impl SvidStore {
                         }
                         Ok(_) => {}
                         Err(error) => {
-                            return Some((Err(error), (dir, expected_id, last)));
+                            // Back off before reporting, or a persistent error spins this loop.
+                            tokio::time::sleep(ROTATION_POLL_INTERVAL).await;
+                            // Forget the fingerprint so recovery is reported (and resets the
+                            // revocation grace counter) even if the files come back unchanged.
+                            return Some((Err(error), (dir, expected_id, None)));
                         }
                     }
                     tokio::time::sleep(ROTATION_POLL_INTERVAL).await;
@@ -227,10 +234,12 @@ impl SvidStore {
     /// load is treated as revocation.
     pub async fn run(self: Arc<Self>, mut shutdown: watch::Receiver<bool>) {
         let mut stream = Box::pin(self.svid_stream());
+        let mut missing_polls = 0u32;
         loop {
             tokio::select! {
                 update = stream.next() => match update {
                     Some(Ok(material)) => {
+                        missing_polls = 0;
                         tracing::info!(
                             fingerprint = %hex::encode(material.fingerprint),
                             "installed rotated X.509 SVID"
@@ -244,7 +253,8 @@ impl SvidStore {
                             SvidError::Io { source, .. }
                                 if source.kind() == std::io::ErrorKind::NotFound
                         );
-                        if missing && self.current().is_some() {
+                        missing_polls = if missing { missing_polls + 1 } else { 0 };
+                        if missing_polls >= REVOCATION_GRACE_POLLS && self.current().is_some() {
                             self.revoked.send_replace(true);
                         }
                     }

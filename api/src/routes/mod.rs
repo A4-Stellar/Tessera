@@ -179,9 +179,6 @@ pub fn router(state: AppState) -> Router {
         .layer(middleware::from_fn_with_state(state.clone(), cache_headers));
 
     Router::new()
-        // GraphQL lives at the API root so Apollo Router can use the standard
-        // `/graphql` service endpoint (including Federation `_service`).
-        .merge(crate::graphql::create_graphql_router())
         .route("/", get(index))
         .route("/version", get(version))
         .route("/health", get(health))
@@ -196,6 +193,13 @@ pub fn router(state: AppState) -> Router {
         // extensions for a low-cardinality route label.
         .route_layer(middleware::from_fn(track_request_metrics))
         .with_state(state)
+        // GraphQL lives at the API root so Apollo Router can use the standard
+        // `/graphql` service endpoint (including Federation `_service`). It is
+        // already stateful, so it merges after `with_state`.
+        .merge(
+            crate::graphql::create_graphql_router()
+                .route_layer(middleware::from_fn(track_request_metrics)),
+        )
         .layer(TimeoutLayer::new(Duration::from_secs(env_value(
             "RWA_REQUEST_TIMEOUT_SECS",
             REQUEST_TIMEOUT_SECS,

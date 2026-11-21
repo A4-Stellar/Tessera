@@ -35,6 +35,7 @@ FAILOVER_ROUTING_KEY = "failover:routing"
 
 # Secrets — set out of band:
 #   npx wrangler secret put CF_API_TOKEN -c wrangler.failover.toml
+#   npx wrangler secret put FAILOVER_ADMIN_TOKEN -c wrangler.failover.toml  (Bearer token for /__failover/*)
 #   npx wrangler secret put CF_ZONE_ID -c wrangler.failover.toml
 #   npx wrangler secret put CF_LOAD_BALANCER_ID -c wrangler.failover.toml
 #   npx wrangler secret put PRIMARY_POOL_ID -c wrangler.failover.toml

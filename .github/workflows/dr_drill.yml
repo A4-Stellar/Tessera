@@ -12,7 +12,9 @@ permissions:
 jobs:
   dr-drill:
     name: Restore latest WAL and run API smoke tests
-    runs-on: ubuntu-latest
+    # pgBackRest restores must run on the database host, so this job runs on a
+    # self-hosted runner installed on the DR replica (label: tessera-dr).
+    runs-on: [self-hosted, tessera-dr]
     environment: production
     timeout-minutes: 45
     steps:
@@ -34,28 +36,22 @@ jobs:
       - name: Set up Google Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
 
-      - name: Configure kubectl for the DR cluster
-        run: |
-          aws eks update-kubeconfig \
-            --name "${{ vars.DR_EKS_CLUSTER_NAME }}" \
-            --region "${{ vars.AWS_REGION }}"
-
       - name: Install pgBackRest
         run: sudo apt-get update && sudo apt-get install -y pgbackrest
 
       - name: Run automated DR drill
         id: drill
+        # Names match what infrastructure/dr/dr_drill.sh reads.
         env:
-          DR_PGBACKREST_STANZA: ${{ vars.DR_PGBACKREST_STANZA }}
-          DR_PGBACKREST_REPO: ${{ vars.DR_PGBACKREST_REPO }}
-          DR_S3_BUCKET: ${{ vars.PGBACKREST_S3_BUCKET }}
-          DR_GCS_BUCKET: ${{ vars.PGBACKREST_GCS_BUCKET }}
-          DR_K8S_NAMESPACE: ${{ vars.DR_K8S_NAMESPACE }}
-          DR_API_DEPLOYMENT: ${{ vars.DR_API_DEPLOYMENT }}
-          DR_API_URL: ${{ vars.DR_API_URL }}
-          DR_API_TOKEN: ${{ secrets.DR_API_TOKEN }}
+          DR_CLUSTER: ${{ vars.DR_ECS_CLUSTER }}
+          DR_SERVICE: ${{ vars.DR_ECS_SERVICE }}
+          DR_REGION: ${{ vars.AWS_REGION }}
+          PGBACKREST_STANZA: ${{ vars.DR_PGBACKREST_STANZA }}
+          PGBACKREST_REPO: ${{ vars.DR_PGBACKREST_REPO }}
+          STANDBY_HEALTH_URL: ${{ vars.DR_API_URL }}/health
+          FAILOVER_WORKER_URL: ${{ vars.DR_FAILOVER_WORKER_URL }}
+          FAILOVER_ADMIN_TOKEN: ${{ secrets.FAILOVER_ADMIN_TOKEN }}
           PAGERDUTY_ROUTING_KEY: ${{ secrets.PAGERDUTY_ROUTING_KEY }}
-          PAGERDUTY_SERVICE_ID: ${{ vars.PAGERDUTY_SERVICE_ID }}
         run: ./infrastructure/dr/restore_verification.sh --drill
 
       - name: Upload drill results
@@ -63,5 +59,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: dr-drill-results
-          path: /tmp/tessera-dr-drill-*
+          path: /tmp/tessera-dr-drill*.json
           if-no-files-found: warn

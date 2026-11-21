@@ -47,8 +47,7 @@ variable "replica_secret_arn" {
 
 variable "allowed_cidr_blocks" {
   type        = list(string)
-  description = "CIDRs allowed to reach the standby ALB (Cloudflare edge ranges / drill runner)"
-  default     = ["0.0.0.0/0"]
+  description = "CIDRs allowed to reach the internal standby ALB (VPC / drill runner ranges). No default: choose explicitly."
 }
 
 variable "desired_count" {
