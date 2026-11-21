@@ -1,0 +1,59 @@
+# Workload registration entries for Tessera services (issue #394).
+# Every entry is scoped to the `prod` namespace and one Kubernetes service
+# account, producing IDs of the form
+# spiffe://tessera.io/ns/prod/sa/<service-name>.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: spire-registration
+  namespace: prod
+data:
+  register.sh: |
+    #!/bin/sh
+    set -eu
+    SERVER=/opt/spire/bin/spire-server
+    SOCKET=/run/spire/server/sockets/agent.sock
+    for service in tessera-api tessera-indexer tessera-notary tessera-worker; do
+      id="spiffe://tessera.io/ns/prod/sa/${service}"
+      if "$SERVER" entry show -socketPath "$SOCKET" -spiffeID "$id" | grep -q "$id"; then
+        echo "entry exists: $id"
+        continue
+      fi
+      "$SERVER" entry create \
+        -socketPath "$SOCKET" \
+        -spiffeID "$id" \
+        -selector "k8s:ns:prod" \
+        -selector "k8s:sa:${service}" \
+        -ttl 300
+      echo "created: $id"
+    done
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: spire-registration
+  namespace: prod
+spec:
+  backoffLimit: 5
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: register
+          image: ghcr.io/spiffe/spire-server:1.8.1
+          command: ["sh", "/scripts/register.sh"]
+          volumeMounts:
+            - name: script
+              mountPath: /scripts
+              readOnly: true
+            - name: server-socket
+              mountPath: /run/spire/server/sockets
+      volumes:
+        - name: script
+          configMap:
+            name: spire-registration
+            defaultMode: 0755
+        - name: server-socket
+          hostPath:
+            path: /run/spire/server/sockets
+            type: Directory

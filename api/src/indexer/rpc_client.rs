@@ -148,7 +148,7 @@ impl RpcClient {
             })
             .collect();
         RpcClient {
-            http: reqwest::Client::new(),
+            http: crate::security::mtls::http_client(),
             endpoints: Arc::new(Mutex::new(endpoints)),
             source,
         }

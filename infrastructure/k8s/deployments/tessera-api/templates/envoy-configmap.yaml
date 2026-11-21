@@ -1,0 +1,90 @@
+{{- if .Values.mtls.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "tessera-api.fullname" . }}-envoy
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "tessera-api.labels" . | nindent 4 }}
+data:
+  envoy.yaml: |
+    admin:
+      address:
+        socket_address:
+          address: 127.0.0.1
+          port_value: 9901
+    static_resources:
+      listeners:
+        - name: inbound_mtls
+          address:
+            socket_address:
+              address: 0.0.0.0
+              port_value: {{ .Values.mtls.envoy.inboundPort }}
+          filter_chains:
+            - transport_socket:
+                name: envoy.transport_sockets.tls
+                typed_config:
+                  "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
+                  require_client_certificate: true
+                  common_tls_context:
+                    tls_certificates:
+                      - certificate_chain:
+                          filename: /var/run/spiffe.svid/svid.pem
+                        private_key:
+                          filename: /var/run/spiffe.svid/svid.key
+                    validation_context:
+                      trusted_ca:
+                        filename: /var/run/spiffe.svid/bundle.pem
+                      match_typed_subject_alt_names:
+                        - san_type: URI
+                          matcher:
+                            exact: {{ .Values.mtls.spiffeId | quote }}
+              filters:
+                - name: envoy.filters.network.tcp_proxy
+                  typed_config:
+                    "@type": type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
+                    stat_prefix: inbound_mtls
+                    cluster: tessera_api_local
+      clusters:
+        - name: tessera_api_local
+          type: STATIC
+          connect_timeout: 5s
+          load_assignment:
+            cluster_name: tessera_api_local
+            endpoints:
+              - lb_endpoints:
+                  - endpoint:
+                      address:
+                        socket_address:
+                          address: 127.0.0.1
+                          port_value: {{ .Values.service.targetPort }}
+        - name: tessera_indexer_mtls
+          type: STRICT_DNS
+          connect_timeout: 5s
+          load_assignment:
+            cluster_name: tessera_indexer_mtls
+            endpoints:
+              - lb_endpoints:
+                  - endpoint:
+                      address:
+                        socket_address:
+                          address: tessera-indexer.prod.svc.cluster.local
+                          port_value: {{ .Values.mtls.envoy.inboundPort }}
+          transport_socket:
+            name: envoy.transport_sockets.tls
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+              common_tls_context:
+                tls_certificates:
+                  - certificate_chain:
+                      filename: /var/run/spiffe.svid/svid.pem
+                    private_key:
+                      filename: /var/run/spiffe.svid/svid.key
+                validation_context:
+                  trusted_ca:
+                    filename: /var/run/spiffe.svid/bundle.pem
+                  match_typed_subject_alt_names:
+                    - san_type: URI
+                      matcher:
+                        exact: "spiffe://tessera.io/ns/prod/sa/tessera-indexer"
+{{- end }}

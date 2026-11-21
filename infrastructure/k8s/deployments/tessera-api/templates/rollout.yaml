@@ -86,6 +86,15 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- if .Values.mtls.enabled }}
+      initContainers:
+        - name: install-spire-cli
+          image: {{ .Values.mtls.spireAgentImage }}
+          command: ["cp", "/opt/spire/bin/spire-agent", "/opt/spire-cli/spire-agent"]
+          volumeMounts:
+            - name: spire-cli
+              mountPath: /opt/spire-cli
+      {{- end }}
       containers:
         - name: {{ .Chart.Name }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
@@ -97,9 +106,17 @@ spec:
             - name: metrics
               containerPort: 9090
               protocol: TCP
-          {{- with .Values.env }}
+          {{- if or .Values.env .Values.mtls.enabled }}
           env:
+            {{- if .Values.mtls.enabled }}
+            - name: SPIFFE_SVID_DIR
+              value: /var/run/spiffe.svid
+            - name: SPIFFE_SERVICE_NAME
+              value: tessera-api
+            {{- end }}
+            {{- with .Values.env }}
             {{- toYaml . | nindent 12 }}
+            {{- end }}
           {{- end }}
           {{- with .Values.envFrom }}
           envFrom:
@@ -111,6 +128,12 @@ spec:
             {{- toYaml .Values.readinessProbe | nindent 12 }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+          {{- if .Values.mtls.enabled }}
+          volumeMounts:
+            - name: spiffe-svid
+              mountPath: /var/run/spiffe.svid
+              readOnly: true
+          {{- end }}
           securityContext:
             runAsNonRoot: true
             runAsUser: 65532
@@ -118,6 +141,79 @@ spec:
             allowPrivilegeEscalation: false
             capabilities:
               drop: [ALL]
+        {{- if .Values.mtls.enabled }}
+        - name: spiffe-svid-writer
+          image: {{ .Values.mtls.svidWriterImage }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              CLI=/opt/spire-cli/spire-agent
+              SOCKET={{ .Values.mtls.spireAgentSocket }}
+              DIR=/var/run/spiffe.svid
+              mkdir -p "$DIR/raw"
+              while true; do
+                rm -f "$DIR/raw"/*
+                if "$CLI" api fetch x509 -socketPath "$SOCKET" -write "$DIR/raw" -silent; then
+                  cp "$DIR/raw/svid.0.pem" "$DIR/svid.pem"
+                  cp "$DIR/raw/svid.0.key" "$DIR/svid.key"
+                  cp "$DIR/raw/bundle.0.pem" "$DIR/bundle.pem"
+                  printf '%s' '{{ .Values.mtls.spiffeId }}' > "$DIR/spiffe_id"
+                fi
+                sleep {{ .Values.mtls.refreshSeconds }}
+              done
+          volumeMounts:
+            - name: spiffe-svid
+              mountPath: /var/run/spiffe.svid
+            - name: spire-cli
+              mountPath: /opt/spire-cli
+              readOnly: true
+            - name: spire-agent-socket
+              mountPath: /run/spire/agent
+              readOnly: true
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+        - name: envoy
+          image: {{ .Values.mtls.envoy.image }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: mesh
+              containerPort: {{ .Values.mtls.envoy.inboundPort }}
+              protocol: TCP
+          volumeMounts:
+            - name: envoy-config
+              mountPath: /etc/envoy
+              readOnly: true
+            - name: spiffe-svid
+              mountPath: /var/run/spiffe.svid
+              readOnly: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+        {{- end }}
+      {{- if .Values.mtls.enabled }}
+      volumes:
+        - name: spiffe-svid
+          emptyDir: {}
+        - name: spire-cli
+          emptyDir: {}
+        - name: spire-agent-socket
+          hostPath:
+            path: /run/spire/agent
+            type: Directory
+        - name: envoy-config
+          configMap:
+            name: {{ include "tessera-api.fullname" . }}-envoy
+      {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

@@ -1,0 +1,139 @@
+# SPIRE agent on every node. Workloads reach it through a hostPath socket so
+# the SVID writer sidecar in each pod can fetch short-lived X.509 material.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: spire-agent
+  namespace: prod
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: spire-agent
+rules:
+  - apiGroups: [""]
+    resources: ["nodes", "pods", "serviceaccounts"]
+    verbs: ["get", "list"]
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: spire-agent
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: spire-agent
+subjects:
+  - kind: ServiceAccount
+    name: spire-agent
+    namespace: prod
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: spire-agent
+  namespace: prod
+data:
+  agent.conf: |
+    agent {
+      data_dir = "/run/spire/agent/data"
+      log_level = "INFO"
+      server_address = "spire-server.prod.svc.cluster.local"
+      server_port = "8081"
+      socket_path = "/run/spire/agent/agent.sock"
+      trust_bundle_path = "/run/spire/bundle/bundle.crt"
+      trust_domain = "tessera.io"
+    }
+    plugins {
+      NodeAttestor "k8s_psat" {
+        plugin_data {
+          cluster = "prod"
+        }
+      }
+      KeyManager "memory" {
+        plugin_data {}
+      }
+      WorkloadAttestor "k8s" {
+        plugin_data {
+          kubelet_read_only_port = "10255"
+        }
+      }
+    }
+    health_checks {
+      listener_enabled = true
+      bind_address = "0.0.0.0"
+      bind_port = "8080"
+      live_path = "/live"
+      ready_path = "/ready"
+    }
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: spire-agent
+  namespace: prod
+spec:
+  selector:
+    matchLabels:
+      app: spire-agent
+  template:
+    metadata:
+      labels:
+        app: spire-agent
+    spec:
+      hostPID: true
+      serviceAccountName: spire-agent
+      initContainers:
+        - name: install-workload-api-cli
+          image: ghcr.io/spiffe/spire-agent:1.8.1
+          command: ["cp", "/opt/spire/bin/spire-agent", "/opt/spire-cli/spire-agent"]
+          volumeMounts:
+            - name: spire-cli
+              mountPath: /opt/spire-cli
+      containers:
+        - name: spire-agent
+          image: ghcr.io/spiffe/spire-agent:1.8.1
+          args: ["-config", "/run/spire/config/agent.conf"]
+          ports:
+            - name: health
+              containerPort: 8080
+          volumeMounts:
+            - name: config
+              mountPath: /run/spire/config
+              readOnly: true
+            - name: bundle
+              mountPath: /run/spire/bundle
+              readOnly: true
+            - name: agent-socket
+              mountPath: /run/spire/agent
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: health
+          livenessProbe:
+            httpGet:
+              path: /live
+              port: health
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+      volumes:
+        - name: config
+          configMap:
+            name: spire-agent
+        - name: bundle
+          configMap:
+            name: spire-bundle
+        - name: agent-socket
+          hostPath:
+            path: /run/spire/agent
+            type: DirectoryOrCreate
+        - name: spire-cli
+          emptyDir: {}

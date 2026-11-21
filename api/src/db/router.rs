@@ -217,7 +217,10 @@ fn parse_url(var: &'static str, url: &str) -> Result<PgConnectOptions, DbConfigE
     if !(url.starts_with("postgres://") || url.starts_with("postgresql://")) {
         return Err(DbConfigError::Scheme(var));
     }
-    PgConnectOptions::from_str(url).map_err(|e| DbConfigError::Url(var, e))
+    let options = PgConnectOptions::from_str(url).map_err(|e| DbConfigError::Url(var, e))?;
+    // Issue #394: when a SPIFFE SVID is available, every pooled connection
+    // presents it to PostgreSQL and verifies the server against the bundle.
+    Ok(crate::security::mtls::apply_pg_tls(options))
 }
 
 /// Whether a hot standby can run `sql` (see [`DbRouter::route`]). A single

@@ -84,7 +84,8 @@ podLabels: {}
 
 serviceAccount:
   create: true
-  name: ""
+  # -- Must match the SPIRE registration entry: spiffe://tessera.io/ns/prod/sa/tessera-api
+  name: "tessera-api"
   annotations: {}
 
 podDisruptionBudget:
@@ -113,6 +114,23 @@ ingress:
   annotations: {}
   hosts: []
   tls: []
+
+# -- SPIFFE X.509 SVID writer and Envoy mTLS sidecar (issue #394).
+# Requires the SPIRE manifests in ../../spire to be installed first.
+mtls:
+  enabled: false
+  spiffeId: "spiffe://tessera.io/ns/prod/sa/tessera-api"
+  # -- Path to the agent socket exposed on the host by the SPIRE DaemonSet.
+  spireAgentSocket: "/run/spire/agent/agent.sock"
+  # -- Refresh cadence for short-lived SVIDs (must be shorter than the SPIRE TTL).
+  refreshSeconds: 240
+  spireAgentImage: "ghcr.io/spiffe/spire-agent:1.8.1"
+  svidWriterImage: "busybox:1.36"
+  envoy:
+    image: "envoyproxy/envoy:v1.31-latest"
+    # -- Service target port when the sidecar is enabled; traffic is mTLS to
+    # the sidecar, then plain HTTP to the application container.
+    inboundPort: 8443
 
 argo-rollouts:
   enabled: false

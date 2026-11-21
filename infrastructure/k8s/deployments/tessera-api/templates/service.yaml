@@ -9,7 +9,7 @@ spec:
   type: {{ .Values.service.type }}
   ports:
     - port: {{ .Values.service.port }}
-      targetPort: http
+      targetPort: {{ if .Values.mtls.enabled }}mesh{{ else }}http{{ end }}
       protocol: TCP
       name: http
   selector:
@@ -28,7 +28,7 @@ spec:
   type: {{ .Values.service.type }}
   ports:
     - port: {{ .Values.previewService.port }}
-      targetPort: http
+      targetPort: {{ if .Values.mtls.enabled }}mesh{{ else }}http{{ end }}
       protocol: TCP
       name: http
   selector:
