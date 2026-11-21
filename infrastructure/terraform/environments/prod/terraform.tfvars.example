@@ -15,4 +15,4 @@ next_public_api_base_url  = "https://api.tessera.xyz"
 
 # DR standby (issue #393)
 dr_replica_secret_arn     = "arn:aws:secretsmanager:us-east-1:123456789012:secret:tessera/dr-replica-url"
-dr_allowed_cidr_blocks    = ["0.0.0.0/0"]
+dr_allowed_cidr_blocks    = ["10.0.0.0/16"] # the VPC CIDR; the standby ALB is internal

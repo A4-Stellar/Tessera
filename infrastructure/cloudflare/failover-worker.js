@@ -253,7 +253,8 @@ export class FailoverMonitor {
 
   async fetch(request) {
     const path = new URL(request.url).pathname;
-    if (path === '/check') {
+    // '/alarm' is what the worker's /__failover/start sends to arm the loop.
+    if (path === '/check' || path === '/alarm') {
       const result = await runFailoverCheck(this.env, { fetch: globalThis.fetch });
       await this.state.storage.put('health', result.state);
       await this.scheduleNext();
@@ -288,9 +289,27 @@ async function ensureMonitor(env) {
   await stub.fetch('https://failover.internal/alarm');
 }
 
+/** Constant-time check of `Authorization: Bearer <FAILOVER_ADMIN_TOKEN>`. */
+export function isAuthorized(request, env) {
+  const expected = envString(env && env.FAILOVER_ADMIN_TOKEN);
+  if (!expected) return false; // fail closed when no token is configured
+  const header = request.headers.get('authorization') || '';
+  const supplied = header.startsWith('Bearer ') ? header.slice(7) : '';
+  if (supplied.length !== expected.length) return false;
+  let diff = 0;
+  for (let i = 0; i < expected.length; i += 1) {
+    diff |= expected.charCodeAt(i) ^ supplied.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
 export default {
   async fetch(request, env) {
     const path = new URL(request.url).pathname;
+    // Every endpoint can probe the primary or move traffic: operators only.
+    if (path.startsWith('/__failover/') && !isAuthorized(request, env)) {
+      return jsonResponse(401, { error: 'unauthorized' });
+    }
     if (path === '/__failover/start') {
       await ensureMonitor(env);
       return jsonResponse(200, { started: true, intervalMs: resolveFailoverConfig(env).intervalMs });

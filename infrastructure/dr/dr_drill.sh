@@ -13,6 +13,8 @@
 #   STANDBY_HEALTH_URL                     standby API /health URL
 #   PGBACKREST_STANZA                      pgBackRest stanza (default prod)
 #   FAILOVER_WORKER_URL                    DR worker /__failover/check endpoint
+#   FAILOVER_ADMIN_TOKEN                   Bearer token the DR worker requires
+#   DR_PG_DATA_PATH                        replica data dir (/var/lib/postgresql/16/main)
 #   PAGERDUTY_ROUTING_KEY                  Events API v2 key (optional)
 #   SLACK_WEBHOOK_URL                      optional Slack report
 #   DR_RTO_TARGET_SECONDS                  900 (15 min)
@@ -36,6 +38,8 @@ STANDBY_HEALTH_URL="${STANDBY_HEALTH_URL:-http://localhost:8080/health}"
 PGBACKREST_STANZA="${PGBACKREST_STANZA:-prod}"
 PGBACKREST_REPO="${PGBACKREST_REPO:-1}"
 FAILOVER_WORKER_URL="${FAILOVER_WORKER_URL:-}"
+FAILOVER_ADMIN_TOKEN="${FAILOVER_ADMIN_TOKEN:-}"
+DR_PG_DATA_PATH="${DR_PG_DATA_PATH:-/var/lib/postgresql/16/main}"
 PAGERDUTY_ROUTING_KEY="${PAGERDUTY_ROUTING_KEY:-}"
 SLACK_WEBHOOK_URL="${SLACK_WEBHOOK_URL:-}"
 DR_RTO_TARGET_SECONDS="${DR_RTO_TARGET_SECONDS:-900}"
@@ -45,6 +49,10 @@ DRY_RUN="${DRY_RUN:-false}"
 STAGES=()
 WARNINGS=0
 ERRORS=0
+# Set up front: under `set -u` an unhealthy standby (RTO never measured) would
+# otherwise crash the summary before the report and PagerDuty alert go out.
+RTO_SECONDS=0
+RPO_SECONDS=0
 
 log() { printf '[dr-drill] %s %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*" >&2; }
 stage() {
@@ -84,8 +92,14 @@ restore_wal() {
     log "[DRY-RUN] would restore stanza ${PGBACKREST_STANZA} from repo ${PGBACKREST_REPO}"
     return 0
   fi
+  # pgBackRest restores in place on the database host. Refuse to run anywhere
+  # else (e.g. a CI runner) instead of writing a database onto that machine.
+  if [[ ! -d "${DR_PG_DATA_PATH}" ]]; then
+    fail "${DR_PG_DATA_PATH} not found: run the drill on the DR replica host"
+    return 1
+  fi
   pgbackrest --stanza="${PGBACKREST_STANZA}" --repo="${PGBACKREST_REPO}" \
-    --pg1-path=/var/lib/postgresql/16/main \
+    --pg1-path="${DR_PG_DATA_PATH}" \
     restore --type=default --delta --no-owner --no-privileges \
     --target-action=promote
   psql -h "${DR_REPLICA_HOST}" -p "${DR_REPLICA_PORT}" -U postgres -d postgres \
@@ -152,7 +166,8 @@ reset_failover() {
     log "[DRY-RUN] would call ${FAILOVER_WORKER_URL}"
     return 0
   fi
-  curl -fsS --max-time 10 "${FAILOVER_WORKER_URL}" >/dev/null || \
+  curl -fsS --max-time 10 -H "Authorization: Bearer ${FAILOVER_ADMIN_TOKEN}" \
+    "${FAILOVER_WORKER_URL}" >/dev/null || \
     log "WARN could not re-check primary routing; verify the LB state manually"
 }
 

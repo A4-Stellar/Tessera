@@ -10,7 +10,9 @@ import {
   probePrimary,
   resolveFailoverConfig,
   runFailoverCheck,
+  FailoverMonitor,
 } from '../failover-worker.js';
+import worker from '../failover-worker.js';
 
 class FakeKv {
   constructor() {
@@ -119,13 +121,16 @@ describe('runFailoverCheck', () => {
   test('applies routing only on transition and mirrors it to Workers KV', async () => {
     const kv = new FakeKv();
     const patches = [];
-    const calls = [false, false, true];
+    // Three consecutive failed probes (failureThreshold = 3).
+    const failedProbes = [true, true, true];
     const env = {
       ...config,
       FAILOVER_KV: kv,
       CF_ZONE_ID: 'zone-1',
       CF_LOAD_BALANCER_ID: 'lb-1',
       CF_API_TOKEN: 'token',
+      PRIMARY_POOL_ID: 'primary-pool',
+      STANDBY_POOL_ID: 'standby-pool',
     };
     const deps = {
       fetch: async (url, init) => {
@@ -133,7 +138,7 @@ describe('runFailoverCheck', () => {
           patches.push(JSON.parse(init.body));
           return { ok: true, status: 200 };
         }
-        return { ok: !calls.shift(), status: 200 };
+        return { ok: !failedProbes.shift(), status: 200 };
       },
     };
 
@@ -147,5 +152,43 @@ describe('runFailoverCheck', () => {
     const stored = JSON.parse(await kv.get(config.routingKey));
     assert.equal(stored.active, 'standby');
     assert.deepEqual(stored.weights, { 'primary-pool': 0, 'standby-pool': 100 });
+  });
+});
+
+describe('HTTP endpoints', () => {
+  const env = { FAILOVER_ADMIN_TOKEN: 'secret-token' };
+  const req = (path, token) =>
+    new Request(`https://dr.example${path}`, token ? { headers: { authorization: `Bearer ${token}` } } : {});
+
+  test('reject requests without the admin token', async () => {
+    const res = await worker.fetch(req('/__failover/check'), env);
+    assert.equal(res.status, 401);
+    const wrong = await worker.fetch(req('/__failover/check', 'nope'), env);
+    assert.equal(wrong.status, 401);
+  });
+
+  test('fail closed when no admin token is configured', async () => {
+    const res = await worker.fetch(req('/__failover/state', 'anything'), {});
+    assert.equal(res.status, 401);
+  });
+
+  test('accept the admin token', async () => {
+    const res = await worker.fetch(req('/__failover/state', 'secret-token'), env);
+    assert.equal(res.status, 200);
+  });
+
+  test('the monitor accepts the /alarm path used by /__failover/start', async () => {
+    let alarmAt = null;
+    const storage = { put: async () => {}, get: async () => null, setAlarm: async (t) => { alarmAt = t; } };
+    const monitor = new FailoverMonitor({ storage }, { PRIMARY_HEALTH_URL: 'https://p.example/health' });
+    const original = globalThis.fetch;
+    globalThis.fetch = async () => ({ ok: true, status: 200 });
+    try {
+      const res = await monitor.fetch(new Request('https://failover.internal/alarm'));
+      assert.equal(res.status, 200);
+      assert.ok(alarmAt, 'next alarm was scheduled');
+    } finally {
+      globalThis.fetch = original;
+    }
   });
 });

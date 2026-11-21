@@ -70,8 +70,7 @@ variable "dr_replica_secret_arn" {
 
 variable "dr_allowed_cidr_blocks" {
   type        = list(string)
-  description = "CIDRs allowed to reach the DR standby ALB"
-  default     = ["0.0.0.0/0"]
+  description = "CIDRs allowed to reach the internal DR standby ALB (e.g. the VPC CIDR). No default: choose explicitly."
 }
 
 variable "next_public_api_base_url" {
