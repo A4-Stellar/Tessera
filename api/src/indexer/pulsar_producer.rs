@@ -4,13 +4,15 @@
 //! # Overview
 //!
 //! [`PulsarProducer`] wraps the `pulsar-rs` client and maintains **three
-//! persistent, compression-enabled producers** — one per logical topic:
+//! persistent, compression-enabled event producers** — one per logical topic.
+//! A dedicated DLQ producer is also created when the broker permits it:
 //!
 //! | Topic                          | Event types routed there                |
 //! |--------------------------------|-----------------------------------------|
 //! | `tessera.events.transfers`     | `transfer`, `mint`, `burn`, `clawback`  |
 //! | `tessera.events.compliance`    | `kyc_*`, `hook*`, `jurisdiction_*`      |
 //! | `tessera.events.dividends`     | `dividend_*`, `distribution_*`          |
+//! | `tessera.events.dlq`           | exhausted poison-pill events        |
 //!
 //! All other event types are silently dropped (no-op).
 //!
@@ -67,8 +69,9 @@ use tracing::{debug, error, info};
 pub const TOPIC_TRANSFERS: &str = "tessera.events.transfers";
 pub const TOPIC_COMPLIANCE: &str = "tessera.events.compliance";
 pub const TOPIC_DIVIDENDS: &str = "tessera.events.dividends";
+pub const TOPIC_DLQ: &str = "tessera.events.dlq";
 
-/// All managed topics in declaration order.
+/// Established business-event topics in declaration order.
 const ALL_TOPICS: [&str; 3] = [TOPIC_TRANSFERS, TOPIC_COMPLIANCE, TOPIC_DIVIDENDS];
 
 // ---------------------------------------------------------------------------
@@ -120,6 +123,20 @@ pub struct TesseraEvent {
     // ---- domain payload ---------------------------------------------------
     /// Full decoded event data exactly as returned by the indexer XDR parser.
     pub data: serde_json::Value,
+}
+
+/// Payload published to the dedicated dead-letter topic after an event
+/// exhausts the DLQ retry budget.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PoisonPill {
+    pub message_type: String,
+    pub event_id: String,
+    pub ledger_sequence: i64,
+    pub contract_id: Option<String>,
+    pub topic_xdr: Vec<String>,
+    pub value_xdr: String,
+    pub error: String,
+    pub attempts: i32,
 }
 
 impl TesseraEvent {
@@ -306,13 +323,15 @@ pub struct PulsarProducer {
 
 struct Inner {
     config: PulsarConfig,
+    client: Pulsar<TokioExecutor>,
     /// One [`Producer`] per topic, keyed by the short topic name constant.
     producers: RwLock<HashMap<&'static str, Producer<TokioExecutor>>>,
 }
 
 impl PulsarProducer {
-    /// Connect to the Pulsar broker and create producers for all three managed
-    /// topics.
+    /// Connect to the Pulsar broker and create producers for all established
+    /// event topics. The dedicated DLQ producer is optional for compatibility
+    /// with brokers where the DLQ topic or publish permission is not yet set up.
     ///
     /// # Errors
     ///
@@ -371,6 +390,7 @@ impl PulsarProducer {
         Ok(Self {
             inner: Arc::new(Inner {
                 config,
+                client,
                 producers: RwLock::new(producers),
             }),
         })
@@ -443,6 +463,63 @@ impl PulsarProducer {
             dedup_key = %event.dedup_key,
             "event acknowledged by Pulsar broker"
         );
+        Ok(())
+    }
+
+    /// Publish an exhausted DLQ row to the dedicated `tessera.events.dlq`
+    /// topic. The event ID is the partition and ordering key, making
+    /// republishing after an ambiguous acknowledgement idempotent downstream.
+    pub async fn publish_poison_pill(&self, poison: &PoisonPill) -> Result<(), PulsarError> {
+        let payload = serde_json::to_vec(poison)?;
+        let mut producers = self.inner.producers.write().await;
+        if !producers.contains_key(TOPIC_DLQ) {
+            let topic_url = self.inner.config.topic_url(TOPIC_DLQ);
+            let producer = self
+                .inner
+                .client
+                .producer()
+                .with_topic(&topic_url)
+                .with_name(format!("tessera-indexer-{TOPIC_DLQ}"))
+                .with_options(producer::ProducerOptions {
+                    compression: self
+                        .inner
+                        .config
+                        .compression
+                        .into_pulsar_compression(),
+                    metadata: {
+                        let mut metadata = BTreeMap::new();
+                        metadata.insert("source".to_string(), "tessera-indexer".to_string());
+                        metadata.insert("topic".to_string(), TOPIC_DLQ.to_string());
+                        metadata
+                    },
+                    ..Default::default()
+                })
+                .build()
+                .await?;
+            info!(topic = %topic_url, "Pulsar DLQ producer ready");
+            producers.insert(TOPIC_DLQ, producer);
+        }
+        let producer = producers
+            .get_mut(TOPIC_DLQ)
+            .expect("DLQ producer was created above");
+        let message = Message {
+            payload,
+            partition_key: Some(poison.event_id.clone()),
+            ordering_key: Some(poison.event_id.as_bytes().to_vec()),
+            properties: {
+                let mut properties = HashMap::new();
+                properties.insert("event_id".to_string(), poison.event_id.clone());
+                properties.insert(
+                    "ledger_sequence".to_string(),
+                    poison.ledger_sequence.to_string(),
+                );
+                properties.insert("attempts".to_string(), poison.attempts.to_string());
+                properties.insert("message_type".to_string(), "poison_pill".to_string());
+                properties
+            },
+            ..Default::default()
+        };
+        producer.send_non_blocking(message).await?.await?;
         Ok(())
     }
 
@@ -526,6 +603,25 @@ impl fmt::Debug for PulsarProducer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn poison_pill_payload_is_separate_from_business_event_routing() {
+        let poison = PoisonPill {
+            message_type: "poison_pill".into(),
+            event_id: "event-1".into(),
+            ledger_sequence: 42,
+            contract_id: Some("CABC".into()),
+            topic_xdr: vec!["AAAA".into()],
+            value_xdr: "BBBB".into(),
+            error: "decode failed".into(),
+            attempts: 5,
+        };
+        let payload = serde_json::to_value(poison).unwrap();
+        assert_eq!(payload["message_type"], "poison_pill");
+        assert_eq!(payload["event_id"], "event-1");
+        assert_eq!(payload["attempts"], 5);
+        assert!(route_topic("poison_pill").is_none());
+    }
 
     // ---- topic routing ---------------------------------------------------
 

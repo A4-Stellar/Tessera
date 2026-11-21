@@ -108,7 +108,11 @@ pub fn router(state: AppState) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(origins)
         .allow_methods([Method::GET, Method::POST])
-        .allow_headers([header::CONTENT_TYPE]);
+        .allow_headers([
+            header::CONTENT_TYPE,
+            axum::http::HeaderName::from_static("x-tenant-id"),
+            axum::http::HeaderName::from_static("x-api-key"),
+        ]);
 
     let per_second = env_value("RWA_RATE_LIMIT_PER_SECOND", RATE_LIMIT_PER_SECOND);
     let burst = env_value("RWA_RATE_LIMIT_BURST", RATE_LIMIT_BURST);
@@ -122,16 +126,16 @@ pub fn router(state: AppState) -> Router {
         } else {
             Arc::new(MemoryBucketStore::default())
         };
-    let token_bucket_state = Arc::new(TokenBucketState {
+    let token_bucket_state = Arc::new(TokenBucketState::new(
         store,
-        default_tier: Tier {
+        Tier {
             capacity: burst,
-            refill_per_second: per_second as u32,
+            refill_per_second: per_second as f64,
         },
-        api_key_tiers: TokenBucketState::parse_api_key_tiers(
+        TokenBucketState::parse_api_key_tiers(
             &std::env::var("RWA_API_KEY_TIERS").unwrap_or_default(),
         ),
-    });
+    ));
 
     // Snapshot-backed endpoints: cacheable and safe to answer with 304 when
     // the client's ETag still matches the last indexed ledger.
@@ -171,6 +175,8 @@ pub fn router(state: AppState) -> Router {
             get(audit::list_entries).post(audit::create_entry),
         )
         .route("/audit/entries/:sequence", get(audit::get_entry))
+        .route("/audit/mmr", get(audit::mmr_root))
+        .route("/audit/:entry_id/proof", get(audit::mmr_proof))
         .route("/audit/anchors", get(audit::list_anchors))
         // Issue #318: light-client MMR checkpoint proofs.
         .route("/proofs/mmr", get(proofs::root))
@@ -183,6 +189,10 @@ pub fn router(state: AppState) -> Router {
         .route("/version", get(version))
         .route("/health", get(health))
         .route("/metrics", get(metrics))
+        .route(
+            "/v1/assets/:id/proofs/verify",
+            axum::routing::post(proofs::verify),
+        )
         .nest("/v1", data_routes)
         .route("/v1/ws", get(crate::ws::handler))
         .route("/v1/admin/dlq/retry", axum::routing::post(dlq::retry))
@@ -312,6 +322,7 @@ async fn index() -> Json<serde_json::Value> {
             "GET /v1/events",
             "GET /v1/assets",
             "GET /v1/assets/:id",
+            "POST /v1/assets/:id/proofs/verify",
             "GET /v1/assets/:id/events",
             "GET /v1/assets/:id/metrics/analytics",
             "GET /v1/assets/:id/analytics",
@@ -326,6 +337,8 @@ async fn index() -> Json<serde_json::Value> {
             "GET /v1/holders/:address/portfolio",
             "GET /v1/compliance/:address",
             "GET /v1/security/anomalies",
+            "GET /v1/audit/:entry_id/proof",
+            "GET /v1/audit/mmr",
             "GET /v1/proofs/mmr",
             "GET /v1/proofs/mmr/:ledger_seq?account=:address",
             "GET /v1/admin/privacy/budget",

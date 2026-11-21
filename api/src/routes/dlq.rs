@@ -1,13 +1,24 @@
 //! `POST /v1/admin/dlq/retry` (issue #163).
 
 use axum::{
+    body::Bytes,
     extract::State,
     http::{header, HeaderMap},
     Json,
 };
+use serde::Deserialize;
 
 use super::ApiError;
-use crate::indexer::{dlq::RetryReport, replay::FileEventStore, AppState};
+use crate::indexer::{
+    dlq::{RetryReport, RETRY_BATCH},
+    replay::FileEventStore,
+    AppState,
+};
+
+#[derive(Debug, Deserialize)]
+struct RetryRequest {
+    event_ids: Vec<String>,
+}
 
 /// Re-process quarantined events after a parser fix; those that now decode
 /// are merged into the event store and marked resolved.
@@ -17,6 +28,7 @@ use crate::indexer::{dlq::RetryReport, replay::FileEventStore, AppState};
 pub async fn retry(
     headers: HeaderMap,
     State(state): State<AppState>,
+    body: Bytes,
 ) -> Result<Json<RetryReport>, ApiError> {
     let expected = std::env::var("RWA_ADMIN_TOKEN").unwrap_or_default();
     let supplied = headers
@@ -30,7 +42,13 @@ pub async fn retry(
     let dlq = state.dlq.as_ref().ok_or_else(|| {
         ApiError::Unavailable("dead-letter queue requires RWA_DATABASE_URL".into())
     })?;
-    let report = dlq.retry(FileEventStore::from_env()).await.map_err(|e| {
+    let event_ids = parse_retry_ids(&body)?;
+    let store = FileEventStore::from_env();
+    let report = match event_ids {
+        Some(ids) => dlq.retry_selected(store, &ids).await,
+        None => dlq.retry(store).await,
+    }
+    .map_err(|e| {
         tracing::error!(error = %e, "dead-letter retry failed");
         ApiError::Unavailable(e.to_string())
     })?;
@@ -38,9 +56,29 @@ pub async fn retry(
         retried = report.retried,
         resolved = report.resolved,
         still_quarantined = report.still_quarantined,
+        poisoned = report.poisoned,
         "dead-letter retry complete"
     );
     Ok(Json(report))
+}
+
+fn parse_retry_ids(body: &[u8]) -> Result<Option<Vec<String>>, ApiError> {
+    if body.is_empty() {
+        return Ok(None);
+    }
+    let request: RetryRequest = serde_json::from_slice(body)
+        .map_err(|e| ApiError::BadRequest(format!("invalid retry request: {e}")))?;
+    if request.event_ids.is_empty() || request.event_ids.len() > RETRY_BATCH as usize {
+        return Err(ApiError::BadRequest(format!(
+            "event_ids must contain between 1 and {RETRY_BATCH} IDs"
+        )));
+    }
+    if request.event_ids.iter().any(|id| id.trim().is_empty()) {
+        return Err(ApiError::BadRequest(
+            "event_ids must not contain empty IDs".into(),
+        ));
+    }
+    Ok(Some(request.event_ids))
 }
 
 /// Constant-time comparison, so response timing does not reveal how much of
@@ -68,7 +106,7 @@ mod tests {
     };
     use tower::ServiceExt as _;
 
-    use super::token_matches;
+    use super::{parse_retry_ids, token_matches};
     use crate::indexer::AppState;
 
     #[test]
@@ -78,6 +116,18 @@ mod tests {
         assert!(!token_matches("s3cret", Some("s3cret!")));
         assert!(!token_matches("s3cret", None));
         assert!(!token_matches("", Some("")));
+    }
+
+    #[test]
+    fn retry_body_is_optional_but_validates_manual_ids() {
+        assert_eq!(parse_retry_ids(b"").unwrap(), None);
+        assert_eq!(
+            parse_retry_ids(br#"{"event_ids":["event-1"]}"#).unwrap(),
+            Some(vec!["event-1".to_string()])
+        );
+        assert!(parse_retry_ids(br#"{"event_ids":[]}"#).is_err());
+        assert!(parse_retry_ids(br#"{"event_ids":[" "]}"#).is_err());
+        assert!(parse_retry_ids(b"not-json").is_err());
     }
 
     #[tokio::test]
