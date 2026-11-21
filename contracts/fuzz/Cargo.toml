@@ -110,6 +110,20 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "differential"
+path = "fuzz_targets/differential.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "crash_reproducer"
+path = "fuzz_targets/crash_reproducer.rs"
+test = false
+doc = false
+bench = false
+
 # The single most important knob for an arithmetic-overflow fuzzer: overflow
 # must *panic*, which is what makes it observable as a WASM trap. cargo-fuzz
 # also passes `-C debug-assertions` via RUSTFLAGS, but pinning it here means

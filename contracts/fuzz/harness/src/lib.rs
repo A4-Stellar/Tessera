@@ -58,6 +58,9 @@
 #![forbid(unsafe_code)]
 #![deny(missing_debug_implementations)]
 
+pub mod xdr_mutator;
+pub use xdr_mutator::StructuredXdrMutator;
+
 use core::fmt::Debug;
 
 use soroban_sdk::{ConversionError, InvokeError};

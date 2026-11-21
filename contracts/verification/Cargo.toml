@@ -9,17 +9,17 @@ version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
 publish = false
-description = "Formal state-invariant verification for the Tessera Soroban contract suite (issue #296)."
+description = "Formal state-invariant verification and Kani proof harnesses for the Tessera Soroban contract suite (issues #296, #369)."
 
 [dependencies]
 soroban-sdk = { version = "25.0.0", features = ["testutils"] }
 proptest = "1"
 
 tessera-registry = { path = "../registry" }
+tessera-compliance = { path = "../compliance" }
+tessera-asset-token = { path = "../asset-token" }
+tessera-dividend = { path = "../dividend" }
 
-# Mirrors `fuzz/proptests`: these are invariant tests, so an optimization
-# that skips a bounds check could hide exactly the violation being asserted
-# against.
 [profile.test]
 opt-level = 0
 debug-assertions = true
