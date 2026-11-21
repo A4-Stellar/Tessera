@@ -68,6 +68,18 @@ pub fn hash_api_key(api_key: &str) -> String {
     hex::encode(Sha256::digest(api_key.as_bytes()))
 }
 
+pub fn tenant_id_from_header(value: &str) -> Option<String> {
+    if value.is_empty()
+        || value.len() > 128
+        || !value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
+    {
+        return None;
+    }
+    Some(value.to_ascii_lowercase())
+}
+
 fn normalize_tenant_id(tenant_id: &str) -> String {
     tenant_id
         .chars()
@@ -108,5 +120,12 @@ mod tests {
         let key = tenant.rate_limit_key("assets:list");
         assert!(key.starts_with("tenant:acme_corp:assets-list:"));
         assert!(!key.contains("abcdefghijklmnopqrstuvwxyz"));
+    }
+
+    #[test]
+    fn validates_tenant_header_identifiers() {
+        assert_eq!(tenant_id_from_header("Acme-01").as_deref(), Some("acme-01"));
+        assert!(tenant_id_from_header("").is_none());
+        assert!(tenant_id_from_header("tenant:other").is_none());
     }
 }

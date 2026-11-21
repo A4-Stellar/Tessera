@@ -17,6 +17,8 @@
 //!    the entire cryptographic hash chain, detecting any data corruption, sequence gap,
 //!    or timestamp inconsistency.
 
+pub mod mmr;
+
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc,
@@ -48,6 +50,8 @@ pub enum AuditError {
     EntryHashMismatch { sequence: u64 },
     #[error("Serialization error: {0}")]
     Serialization(String),
+    #[error("Audit MMR error: {0}")]
+    Mmr(#[from] mmr::AuditMmrError),
 }
 
 /// Strongly-typed administrative actions tracked by the audit log.
@@ -372,6 +376,8 @@ pub struct AuditLog {
     anchors: Arc<RwLock<Vec<AnchorRecord>>>,
     next_sequence: Arc<AtomicU64>,
     next_anchor_id: Arc<AtomicU64>,
+    /// Append-only audit MMR (Issue #375).
+    pub mmr: Arc<RwLock<mmr::AuditMmr>>,
 }
 
 impl Default for AuditLog {
@@ -388,7 +394,48 @@ impl AuditLog {
             anchors: Arc::new(RwLock::new(Vec::new())),
             next_sequence: Arc::new(AtomicU64::new(1)),
             next_anchor_id: Arc::new(AtomicU64::new(1)),
+            mmr: Arc::new(RwLock::new(mmr::AuditMmr::new())),
         }
+    }
+
+    /// Initializes an audit log with persisted entries and their MMR snapshot.
+    pub fn with_rocksdb(path: impl AsRef<std::path::Path>) -> Result<Self, mmr::AuditMmrError> {
+        let audit_mmr = mmr::AuditMmr::with_rocksdb(path)?;
+        let persisted_entries = audit_mmr.load_audit_entries()?;
+        let mut entries = Vec::with_capacity(persisted_entries.len());
+        for encoded_entry in persisted_entries {
+            let entry: AuditEntry = serde_json::from_slice(&encoded_entry)
+                .map_err(|error| mmr::AuditMmrError::InvalidState(error.to_string()))?;
+            entries.push(entry);
+        }
+        if entries.len() != audit_mmr.leaf_count() {
+            return Err(mmr::AuditMmrError::InvalidState(
+                "persisted audit entries and MMR leaf count disagree".to_string(),
+            ));
+        }
+        let mut previous_hash = GENESIS_HASH.to_string();
+        for (index, (entry, leaf)) in entries.iter().zip(audit_mmr.leaves()).enumerate() {
+            if entry.sequence != index as u64 + 1
+                || entry.prev_hash != previous_hash
+                || !entry.verify_internal_hash()
+                || entry.timestamp.to_rfc3339() != leaf.timestamp
+                || hex::encode(mmr::audit_payload_hash(&entry.payload)) != leaf.payload_hash
+            {
+                return Err(mmr::AuditMmrError::InvalidState(format!(
+                    "persisted audit entry {} does not match the MMR snapshot",
+                    index + 1
+                )));
+            }
+            previous_hash = entry.entry_hash.clone();
+        }
+        let next_sequence = entries.len() as u64 + 1;
+        Ok(AuditLog {
+            entries: Arc::new(RwLock::new(entries)),
+            anchors: Arc::new(RwLock::new(Vec::new())),
+            next_sequence: Arc::new(AtomicU64::new(next_sequence)),
+            next_anchor_id: Arc::new(AtomicU64::new(1)),
+            mmr: Arc::new(RwLock::new(audit_mmr)),
+        })
     }
 
     /// Appends a new administrative action to the tamper-proof hash chain.
@@ -400,7 +447,14 @@ impl AuditLog {
         payload: serde_json::Value,
     ) -> Result<AuditEntry, AuditError> {
         let mut entries = self.entries.write().await;
-        let sequence = self.next_sequence.fetch_add(1, Ordering::SeqCst);
+        let sequence = self.next_sequence.load(Ordering::SeqCst);
+        let expected_sequence = entries.len() as u64 + 1;
+        if sequence != expected_sequence {
+            return Err(AuditError::InvalidSequence {
+                expected: expected_sequence,
+                found: sequence,
+            });
+        }
         let timestamp = Utc::now();
 
         let prev_hash = if let Some(last) = entries.last() {
@@ -430,7 +484,25 @@ impl AuditLog {
             entry_hash,
         };
 
+        let payload_hash = mmr::audit_payload_hash(&entry.payload);
+        let mut audit_mmr = self.mmr.write().await;
+        if audit_mmr.leaf_count() != sequence.saturating_sub(1) as usize {
+            return Err(AuditError::InvalidSequence {
+                expected: sequence.saturating_sub(1),
+                found: audit_mmr.leaf_count() as u64,
+            });
+        }
+        let entry_json = serde_json::to_vec(&entry)
+            .map_err(|error| AuditError::Serialization(error.to_string()))?;
+        audit_mmr.append_with_entries(
+            &entry.timestamp.to_rfc3339(),
+            &payload_hash,
+            sequence,
+            &entry_json,
+        )?;
         entries.push(entry.clone());
+        self.next_sequence
+            .store(sequence.saturating_add(1), Ordering::SeqCst);
         Ok(entry)
     }
 
@@ -450,6 +522,43 @@ impl AuditLog {
         let total = entries.len();
         let paged = entries.iter().skip(offset).take(limit).cloned().collect();
         (paged, total)
+    }
+
+    /// Returns the current audit MMR root and leaf count.
+    pub async fn audit_mmr_root(&self) -> ([u8; 32], usize) {
+        let mmr = self.mmr.read().await;
+        (mmr.root(), mmr.leaf_count())
+    }
+
+    /// Returns an inclusion proof for an audit entry (1-indexed sequence).
+    pub async fn audit_mmr_proof(
+        &self,
+        sequence: u64,
+    ) -> Option<mmr::AuditMmrProofResponse> {
+        if sequence == 0 {
+            return None;
+        }
+        let entries = self.entries.read().await;
+        let entry = entries.get(sequence as usize - 1)?.clone();
+        drop(entries);
+        let audit_mmr = self.mmr.read().await;
+        let proof = audit_mmr.proof((sequence - 1) as usize)?;
+        Some(mmr::AuditMmrProofResponse {
+            sequence,
+            timestamp: entry.timestamp.to_rfc3339(),
+            payload_hash: hex::encode(mmr::audit_payload_hash(&entry.payload)),
+            prev_peak_hash: audit_mmr
+                .leaves()
+                .get((sequence - 1) as usize)
+                .map(|leaf| leaf.prev_peak_hash.clone())
+                .unwrap_or_else(|| hex::encode([0u8; 32])),
+            leaf_index: proof.leaf_index,
+            leaf_count: proof.leaf_count,
+            leaf_hash: proof.leaf_hash,
+            path: proof.path,
+            peaks: proof.peaks,
+            root: proof.root,
+        })
     }
 
     /// Returns the current Merkle tree over all entries.

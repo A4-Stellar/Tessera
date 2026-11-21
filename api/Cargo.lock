@@ -5079,6 +5079,7 @@ dependencies = [
  "chrono",
  "criterion",
  "csv",
+ "dashmap",
  "etcd-client",
  "futures",
  "governor",
