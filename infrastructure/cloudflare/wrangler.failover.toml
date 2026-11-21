@@ -1,0 +1,41 @@
+# Tessera DR failover worker (issue #393).
+# Deploy with: npx wrangler deploy -c wrangler.failover.toml
+
+name = "tessera-dr-failover"
+main = "failover-worker.js"
+compatibility_date = "2024-09-23"
+
+# Fallback schedule (Cloudflare Cron Triggers have a 60s minimum); the primary
+# 30s cadence is the FailoverMonitor Durable Object alarm started via
+# GET /__failover/start.
+[triggers]
+crons = ["* * * * *"]
+
+[[kv_namespaces]]
+binding = "FAILOVER_KV"
+id = "REPLACE_WITH_FAILOVER_KV_NAMESPACE_ID"
+
+[[durable_objects.bindings]]
+name = "FAILOVER_MONITOR"
+class_name = "FailoverMonitor"
+script_name = "tessera-dr-failover"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["FailoverMonitor"]
+
+[vars]
+PRIMARY_HEALTH_URL = "https://api.tessera.xyz/health"
+HEALTH_CHECK_INTERVAL_MS = "30000"
+PROBE_TIMEOUT_MS = "5000"
+FAILURE_THRESHOLD = "3"
+SUCCESS_THRESHOLD = "3"
+FAILOVER_STATE_KEY = "failover:state"
+FAILOVER_ROUTING_KEY = "failover:routing"
+
+# Secrets — set out of band:
+#   npx wrangler secret put CF_API_TOKEN -c wrangler.failover.toml
+#   npx wrangler secret put CF_ZONE_ID -c wrangler.failover.toml
+#   npx wrangler secret put CF_LOAD_BALANCER_ID -c wrangler.failover.toml
+#   npx wrangler secret put PRIMARY_POOL_ID -c wrangler.failover.toml
+#   npx wrangler secret put STANDBY_POOL_ID -c wrangler.failover.toml

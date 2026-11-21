@@ -1,0 +1,163 @@
+# SPIRE server for the tessera.io trust domain (issue #394).
+# The k8sbundle notifier publishes the trust bundle into the `prod` namespace
+# as the `spire-bundle` ConfigMap, which the agent DaemonSet mounts.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: spire-server
+  namespace: prod
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: spire-server
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: spire-server
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: spire-server
+subjects:
+  - kind: ServiceAccount
+    name: spire-server
+    namespace: prod
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: spire-server
+  namespace: prod
+data:
+  server.conf: |
+    server {
+      bind_address = "0.0.0.0"
+      bind_port = "8081"
+      socket_path = "/run/spire/server/sockets/agent.sock"
+      trust_domain = "tessera.io"
+      data_dir = "/run/spire/data"
+      log_level = "INFO"
+      ca_subject {
+        country = ["US"]
+        organization = ["Tessera"]
+        common_name = "tessera.io"
+      }
+    }
+    plugins {
+      DataStore "sql" {
+        plugin_data {
+          database_type = "sqlite3"
+          connection_string = "/run/spire/data/datastore.sqlite3"
+        }
+      }
+      NodeAttestor "k8s_psat" {
+        plugin_data {
+          clusters = {
+            "prod" = {
+              service_account_allow_list = ["prod:spire-agent"]
+            }
+          }
+        }
+      }
+      KeyManager "disk" {
+        plugin_data {
+          directory = "/run/spire/data"
+        }
+      }
+      Notifier "k8sbundle" {
+        plugin_data {
+          namespace = "prod"
+        }
+      }
+    }
+    health_checks {
+      listener_enabled = true
+      bind_address = "0.0.0.0"
+      bind_port = "8080"
+      live_path = "/live"
+      ready_path = "/ready"
+    }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: spire-server
+  namespace: prod
+spec:
+  selector:
+    app: spire-server
+  ports:
+    - name: registration
+      port: 8081
+      targetPort: 8081
+    - name: health
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spire-server
+  namespace: prod
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: spire-server
+  template:
+    metadata:
+      labels:
+        app: spire-server
+    spec:
+      serviceAccountName: spire-server
+      containers:
+        - name: spire-server
+          image: ghcr.io/spiffe/spire-server:1.8.1
+          args: ["-config", "/run/spire/config/server.conf"]
+          ports:
+            - name: registration
+              containerPort: 8081
+            - name: health
+              containerPort: 8080
+          volumeMounts:
+            - name: config
+              mountPath: /run/spire/config
+              readOnly: true
+            - name: data
+              mountPath: /run/spire/data
+            - name: server-socket
+              mountPath: /run/spire/server/sockets
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: health
+          livenessProbe:
+            httpGet:
+              path: /live
+              port: health
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: config
+          configMap:
+            name: spire-server
+        - name: data
+          emptyDir: {}
+        - name: server-socket
+          hostPath:
+            path: /run/spire/server/sockets
+            type: DirectoryOrCreate

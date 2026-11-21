@@ -63,6 +63,17 @@ variable "read_source" {
   description = "Read source Stellar account"
 }
 
+variable "dr_replica_secret_arn" {
+  type        = string
+  description = "Secrets Manager ARN holding the read-replica DATABASE URL for the DR standby"
+}
+
+variable "dr_allowed_cidr_blocks" {
+  type        = list(string)
+  description = "CIDRs allowed to reach the DR standby ALB"
+  default     = ["0.0.0.0/0"]
+}
+
 variable "next_public_api_base_url" {
   type        = string
   description = "Public API URL for Docs"

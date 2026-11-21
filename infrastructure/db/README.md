@@ -22,6 +22,17 @@ Module implementing continuous zero-downtime, bi-directional PostgreSQL logical 
    - Simulates regional cloud partition / failure.
    - Computes cryptographic SHA-256 row checksums across nodes to assert zero divergent records and zero data loss.
 
+## Disaster recovery backups
+
+`pgbackrest.conf` configures asynchronous WAL archiving to S3 (primary) and GCS
+(secondary) with a five-minute RPO target. `pgbackrest-wal-archive.sh` performs
+a `pg_switch_wal`, checks archive health, and fails when WAL age exceeds five
+minutes. `postgresql-dr.conf` contains the hot-standby recovery settings.
+
+The warm standby, Cloudflare traffic failover, weekly restore drill, and
+failover/failback runbook are described in
+[`docs/runbooks/disaster-recovery.md`](../../docs/runbooks/disaster-recovery.md).
+
 ## Running Tests
 
 ```bash

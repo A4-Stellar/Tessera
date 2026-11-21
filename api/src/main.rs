@@ -29,6 +29,7 @@ mod indexer;
 mod middleware;
 mod models;
 mod routes;
+mod security;
 mod services;
 pub mod storage;
 pub mod tracing;
@@ -109,6 +110,20 @@ async fn main() {
     // by the indexer's poll loop so it stops issuing new refresh cycles
     // once the process is terminating, rather than racing shutdown.
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
+
+    // Issue #394: load the SPIFFE X.509 SVID for this workload. A missing
+    // SVID is not fatal at startup — the rotation task keeps retrying — but a
+    // revoked one terminates the process, including in-flight requests.
+    match security::mtls::init_from_env() {
+        Some(store) => {
+            if let Err(error) = store.load_initial().await {
+                tracing::warn!(%error, "no X.509 SVID available yet; rotation task will retry");
+            }
+            security::mtls::spawn_rotation(Arc::clone(&store), shutdown_rx.clone());
+            security::mtls::spawn_revocation_enforcer(store, shutdown_rx.clone());
+        }
+        None => tracing::info!("SPIFFE SVID loading disabled; set SPIFFE_SVID_DIR to enable it"),
+    }
 
     // Issue #159: only the elected leader polls Soroban RPC.
     state.node_role = cluster::leader_election::spawn(

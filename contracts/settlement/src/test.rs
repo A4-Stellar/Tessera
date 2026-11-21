@@ -8,7 +8,7 @@ use soroban_sdk::{
 use tessera_asset_token::{AssetTokenContract, AssetTokenContractClient};
 use tessera_compliance::{ComplianceContract, ComplianceContractClient};
 
-use crate::{Error, SettlementContract, SettlementContractClient, TradeLeg};
+use crate::{Error, InstructionStatus, SettlementContract, SettlementContractClient, TradeLeg};
 
 struct Market<'a> {
     env: Env,
@@ -477,4 +477,135 @@ fn each_sender_signs_only_the_batch_and_its_own_transfer() {
         .execute_multilateral_settlement(&legs);
     assert_eq!(balance(&m, &m.usdc, &m.a), 2_000);
     assert_eq!(m.engine.batch_count(), 1);
+}
+
+// ---------------------------------------------------------------------------
+// T+0 DVP instructions, netting and guarantee fund (issue #390)
+// ---------------------------------------------------------------------------
+
+/// A sells real estate to C for USDC, due at `settlement_ledger`.
+fn due_instruction(m: &Market, amount: i128, payment: i128, due: u32) -> u32 {
+    m.engine.create_instruction(
+        &m.c,
+        &m.a,
+        &m.real_estate,
+        &amount,
+        &m.usdc,
+        &payment,
+        &due,
+    )
+}
+
+#[test]
+fn dvp_instruction_settles_both_legs_atomically() {
+    let m = setup();
+    let due = m.env.ledger().sequence() + 10;
+    let id = due_instruction(&m, 100, 2_000, due);
+    assert_eq!(id, 0);
+    assert_eq!(m.engine.get_instruction(&id).status, InstructionStatus::Pending);
+
+    m.env.ledger().set_sequence_number(due);
+    // Either party may call settle; both signatures authorize the transfers.
+    m.engine.settle(&id);
+
+    assert_eq!(m.engine.get_instruction(&id).status, InstructionStatus::Settled);
+    assert_eq!(balance(&m, &m.real_estate, &m.a), 400);
+    assert_eq!(balance(&m, &m.real_estate, &m.c), 100);
+    assert_eq!(balance(&m, &m.usdc, &m.c), 8_000);
+    assert_eq!(balance(&m, &m.usdc, &m.a), 2_000);
+
+    // A second settle attempt cannot move the legs again.
+    assert_eq!(
+        m.engine.try_settle(&id),
+        Err(Ok(ce(Error::InstructionAlreadySettled)))
+    );
+}
+
+#[test]
+fn instruction_cannot_settle_before_its_ledger() {
+    let m = setup();
+    let due = m.env.ledger().sequence() + 10;
+    let id = due_instruction(&m, 1, 10, due);
+    assert_eq!(m.engine.try_settle(&id), Err(Ok(ce(Error::SettlementNotDue))));
+    assert_eq!(m.engine.get_instruction(&id).status, InstructionStatus::Pending);
+}
+
+#[test]
+fn ten_instructions_net_to_four_transfers() {
+    let m = setup();
+    // B must hold the real estate it will sell; C funds every payment leg.
+    TokenClient::new(&m.env, &m.real_estate).transfer(&m.admin, &m.b, &75);
+    let due = m.env.ledger().sequence() + 10;
+
+    for &(seller, amount, payment) in &[
+        (&m.a, 10i128, 100i128),
+        (&m.a, 20, 100),
+        (&m.a, 30, 100),
+        (&m.a, 40, 100),
+        (&m.a, 50, 100),
+        (&m.b, 5, 50),
+        (&m.b, 10, 50),
+        (&m.b, 15, 50),
+        (&m.b, 20, 50),
+        (&m.b, 25, 50),
+    ] {
+        m.engine
+            .create_instruction(&m.c, seller, &m.real_estate, &amount, &m.usdc, &payment, &due);
+    }
+
+    m.env.ledger().set_sequence_number(due);
+    let ids = soroban_sdk::vec![&m.env, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+    // Naive DVP would execute 20 transfers (two per instruction). Netting
+    // clears two RE debtors into C and one USDC debtor into two creditors: 4.
+    assert_eq!(m.engine.net_settle(&ids), 4);
+    assert_eq!(m.engine.last_net_transfer_count(), 4);
+
+    assert_eq!(balance(&m, &m.real_estate, &m.a), 350);
+    assert_eq!(balance(&m, &m.real_estate, &m.b), 0);
+    assert_eq!(balance(&m, &m.real_estate, &m.c), 225);
+    assert_eq!(balance(&m, &m.usdc, &m.a), 500);
+    assert_eq!(balance(&m, &m.usdc, &m.b), 250);
+    assert_eq!(balance(&m, &m.usdc, &m.c), 9_250);
+    for id in ids.iter() {
+        assert_eq!(m.engine.get_instruction(&id).status, InstructionStatus::Settled);
+    }
+}
+
+#[test]
+fn guarantee_fund_covers_a_defaulting_seller() {
+    let m = setup();
+    let due = m.env.ledger().sequence() + 10;
+    let id = due_instruction(&m, 100, 2_000, due);
+
+    StellarAssetClient::new(&m.env, &m.usdc).mint(&m.admin, &2_000);
+    m.engine.configure_guarantee(&m.admin, &m.usdc, &2_000);
+    m.engine.deposit_guarantee(&m.admin, &m.usdc, &2_000);
+    assert_eq!(m.engine.guarantee_balance(&m.usdc), 2_000);
+
+    // A loses KYC: it cannot deliver the asset nor receive the payment. The
+    // fund compensates the buyer instead of moving either principal leg.
+    m.compliance.suspend(&m.admin, &m.a);
+    m.env.ledger().set_sequence_number(due);
+    m.engine.settle(&id);
+
+    assert_eq!(m.engine.get_instruction(&id).status, InstructionStatus::Guaranteed);
+    assert_eq!(balance(&m, &m.usdc, &m.c), 12_000);
+    assert_eq!(balance(&m, &m.real_estate, &m.c), 0);
+    assert_eq!(m.engine.guarantee_balance(&m.usdc), 0);
+}
+
+#[test]
+fn failure_without_guarantee_reverts() {
+    let m = setup();
+    let due = m.env.ledger().sequence() + 10;
+    let id = due_instruction(&m, 100, 2_000, due);
+    m.compliance.suspend(&m.admin, &m.a);
+    m.env.ledger().set_sequence_number(due);
+
+    assert_eq!(
+        m.engine.try_settle(&id),
+        Err(Ok(ce(Error::GuaranteeNotConfigured)))
+    );
+    assert_eq!(m.engine.get_instruction(&id).status, InstructionStatus::Pending);
+    assert_eq!(balance(&m, &m.real_estate, &m.a), 500);
 }

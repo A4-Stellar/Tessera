@@ -145,7 +145,7 @@ struct TradeAggregationsResponse {
 impl PriceFeedClient {
     pub fn new(config: PriceFeedConfig) -> Self {
         PriceFeedClient {
-            http: reqwest::Client::new(),
+            http: crate::security::mtls::http_client(),
             config,
         }
     }

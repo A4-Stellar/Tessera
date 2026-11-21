@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
 publish = false
-description = "Tessera atomic multilateral batch settlement engine for compliance-gated cross-trades (issue #316)."
+description = "Tessera atomic multilateral batch settlement engine and T+0 DVP instructions with netting and guarantees (#316, #390)."
 
 [lib]
 crate-type = ["cdylib", "rlib"]

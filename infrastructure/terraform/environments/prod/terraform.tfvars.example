@@ -12,3 +12,7 @@ registry_id               = "CBX5SMLTXX6JP4HA5GQIO2V6QM7WCUGL2GZ6D4U773HMRI6RXIS
 dividend_id               = "CAR4XY3CEBQWFOL27JEWFW34KXSIZA7RFKDQMEIV7ZU723RWY37I2SYX"
 read_source               = "GAIQGTOBTTLLDJ4SWGGESM7UWJ2DI4K3ZNHUSHPDKJL2IE5FKY3BSRAA"
 next_public_api_base_url  = "https://api.tessera.xyz"
+
+# DR standby (issue #393)
+dr_replica_secret_arn     = "arn:aws:secretsmanager:us-east-1:123456789012:secret:tessera/dr-replica-url"
+dr_allowed_cidr_blocks    = ["0.0.0.0/0"]

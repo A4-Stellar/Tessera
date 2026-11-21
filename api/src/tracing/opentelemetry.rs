@@ -426,7 +426,7 @@ pub struct OtlpExporter {
 
 impl OtlpExporter {
     pub fn new(config: OtelCollectorConfig) -> Self {
-        let client = reqwest::Client::builder()
+        let client = crate::security::mtls::http_builder()
             .timeout(config.export_timeout)
             .build()
             .unwrap_or_default();

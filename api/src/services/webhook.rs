@@ -372,7 +372,7 @@ impl WebhookDispatcher {
 
         let signature = hmac_sha256_hex(secret, &body);
 
-        let client = reqwest::Client::builder()
+        let client = crate::security::mtls::http_builder()
             .timeout(Duration::from_secs(DELIVERY_TIMEOUT_SECS))
             .build()
             .unwrap_or_default();

@@ -40,7 +40,7 @@ impl GcpKmsClient {
     /// Constructs a client using an explicit access token.
     pub fn new(token: impl Into<String>) -> Self {
         Self {
-            http: reqwest::Client::new(),
+            http: crate::security::mtls::http_client(),
             token: Zeroizing::new(token.into()),
             endpoint: Self::DEFAULT_ENDPOINT.to_string(),
         }
@@ -175,7 +175,7 @@ impl AzureKmsClient {
     /// Constructs a client using an explicit access token.
     pub fn new(token: impl Into<String>) -> Self {
         Self {
-            http: reqwest::Client::new(),
+            http: crate::security::mtls::http_client(),
             token: Zeroizing::new(token.into()),
         }
     }
@@ -283,7 +283,7 @@ impl VaultKmsClient {
     /// Constructs a client with an explicit address and token.
     pub fn new(addr: impl Into<String>, token: impl Into<String>) -> Self {
         Self {
-            http: reqwest::Client::new(),
+            http: crate::security::mtls::http_client(),
             addr: addr.into().trim_end_matches('/').to_string(),
             token: Zeroizing::new(token.into()),
         }
