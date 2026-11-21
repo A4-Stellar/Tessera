@@ -8,6 +8,9 @@ on:
   push:
     branches: [main]
   pull_request:
+    paths:
+      - "contracts/**"
+      - ".github/workflows/verification.yml"
   workflow_dispatch:
 
 concurrency:
@@ -31,3 +34,22 @@ jobs:
       - name: Run model checks
         working-directory: contracts/compliance/verification
         run: ./verify.sh
+
+  kani:
+    name: Kani Model Checker
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Install Kani
+        run: |
+          cargo install --locked kani-verifier
+          cargo kani setup
+
+      - name: Run Kani proof harnesses with concrete playback
+        working-directory: contracts/verification
+        run: cargo kani --concrete-playback=inplace
