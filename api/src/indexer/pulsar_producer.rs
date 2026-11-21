@@ -61,6 +61,11 @@ use pulsar::{
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tracing::{debug, error, info};
+use opentelemetry::{
+    global,
+    propagation::Injector,
+    Context,
+};
 
 // ---------------------------------------------------------------------------
 // Topic constants
@@ -308,6 +313,34 @@ impl PulsarConfig {
 }
 
 // ---------------------------------------------------------------------------
+// W3C trace-context propagation
+// ---------------------------------------------------------------------------
+
+/// A map-backed W3C carrier for Pulsar message properties.
+///
+/// The global OpenTelemetry propagator writes `traceparent` and, when present,
+/// `tracestate` into this map. Pulsar exposes these properties to consumers.
+struct PulsarTraceInjector<'a>(&'a mut HashMap<String, String>);
+
+impl Injector for PulsarTraceInjector<'_> {
+    fn set(&mut self, key: &str, value: String) {
+        self.0.insert(key.to_ascii_lowercase(), value);
+    }
+}
+
+/// Inject the currently active OpenTelemetry context into Pulsar properties.
+///
+/// This must be called while the producer's request/event span is active.
+/// `TraceContextPropagator` is configured at process startup; using the global
+/// propagator keeps the wire format consistent with HTTP and Kafka.
+fn inject_trace_context(properties: &mut HashMap<String, String>) {
+    let context = Context::current();
+    global::get_text_map_propagator(|propagator| {
+        propagator.inject_context(&context, &mut PulsarTraceInjector(properties));
+    });
+}
+
+// ---------------------------------------------------------------------------
 // Producer wrapper
 // ---------------------------------------------------------------------------
 
@@ -448,6 +481,7 @@ impl PulsarProducer {
                 );
                 props.insert("event_type".to_string(), event.event_type.clone());
                 props.insert("contract".to_string(), event.contract.clone());
+                inject_trace_context(&mut props);
                 props
             },
             ..Default::default()
@@ -515,6 +549,7 @@ impl PulsarProducer {
                 );
                 properties.insert("attempts".to_string(), poison.attempts.to_string());
                 properties.insert("message_type".to_string(), "poison_pill".to_string());
+                inject_trace_context(&mut properties);
                 properties
             },
             ..Default::default()
