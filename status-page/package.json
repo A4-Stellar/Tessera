@@ -1,12 +1,12 @@
 {
   "name": "tessera-status-page",
   "version": "1.0.0",
-  "description": "Tessera operational status dashboard — real-time health monitoring for Tessera API, Soroban RPC, and docs.",
+  "description": "Tessera operational status dashboard \u2014 real-time health monitoring for Tessera API, Soroban RPC, and docs.",
   "private": true,
   "scripts": {
-    "dev": "next dev --port 3001",
-    "build": "next build",
-    "start": "next start --port 3001",
+    "dev": "node init && next dev --port 3001",
+    "build": "node init && next build",
+    "start": "node init && next start --port 3001",
     "lint": "next lint",
     "type-check": "tsc --noEmit"
   },

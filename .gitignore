@@ -23,13 +23,11 @@ dist/
 *.egg-info/
 
 # Env
-.env
 .env*.local
 
 # OS / editor
 .DS_Store
 .idea
-.vscode/*
 !.vscode/extensions.json
 
 # Fuzzing (contracts/fuzz)
@@ -72,3 +70,4 @@ contracts/fuzz/proptests/target/
 states/
 *_TTrace_*.tla
 *_TTrace_*.bin
+config.bat
