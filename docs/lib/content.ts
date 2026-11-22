@@ -3,7 +3,7 @@ import path from "path";
 import matter from "gray-matter";
 
 const CONTENT_ROOT = path.join(process.cwd(), "content");
-const LOCALES = ["en", "es", "pt", "ja", "fr"] as const;
+const LOCALES = ["en", "es", "fr", "zh", "ja", "ar", "pt"] as const;
 const DEFAULT_LOCALE = "en";
 
 export type Locale = (typeof LOCALES)[number];
@@ -37,15 +37,12 @@ export function readContentFile(filePath: string): ContentFile | null {
   const relativePath = path.relative(path.join(CONTENT_ROOT, "en", "docs"), filePath);
   const slug = relativePath.replace(/\.mdx$/, "").replace(/\\/g, "/");
 
-  const locale = filePath.split(path.sep).includes("en") ? "en" :
-                 filePath.split(path.sep).includes("es") ? "es" :
-                 filePath.split(path.sep).includes("pt") ? "pt" :
-                 filePath.split(path.sep).includes("ja") ? "ja" :
-                 filePath.split(path.sep).includes("fr") ? "fr" : "en";
+  const pathSegments = filePath.split(path.sep);
+  const detectedLocale = LOCALES.find((loc) => pathSegments.includes(loc)) ?? "en";
 
   return {
     slug,
-    locale: locale as Locale,
+    locale: detectedLocale,
     frontMatter,
     content,
     filePath,
@@ -99,6 +96,6 @@ export function slugToPath(slug: string): string {
   return `/docs/${slug}`;
 }
 
-export function pathToSlug(path: string): string {
-  return path.replace(/^\/docs\//, "").replace(/\/$/, "");
+export function pathToSlug(pathStr: string): string {
+  return pathStr.replace(/^\/docs\//, "").replace(/\/$/, "");
 }

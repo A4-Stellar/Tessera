@@ -1,26 +1,40 @@
-export const LOCALES = ["en", "es", "pt", "ja", "fr"] as const;
+export const LOCALES = ["en", "es", "fr", "zh", "ja", "ar", "pt"] as const;
 export const DEFAULT_LOCALE = "en" as const;
+export const RTL_LOCALES = ["ar"] as const;
 
 export type Locale = (typeof LOCALES)[number];
+export type RtlLocale = (typeof RTL_LOCALES)[number];
 
 export const LOCALE_NAMES: Record<Locale, string> = {
   en: "English",
   es: "Español",
-  pt: "Português",
-  ja: "日本語",
   fr: "Français",
+  zh: "中文",
+  ja: "日本語",
+  ar: "العربية",
+  pt: "Português",
 };
 
 export const LOCALE_NATIVE_NAMES: Record<Locale, string> = {
   en: "English",
   es: "Español",
-  pt: "Português",
-  ja: "日本語",
   fr: "Français",
+  zh: "中文",
+  ja: "日本語",
+  ar: "العربية",
+  pt: "Português",
 };
 
 export function isValidLocale(locale: string): locale is Locale {
   return LOCALES.includes(locale as Locale);
+}
+
+export function isRtlLocale(locale: string): locale is RtlLocale {
+  return RTL_LOCALES.includes(locale as RtlLocale);
+}
+
+export function getLocaleDirection(locale: string): "ltr" | "rtl" {
+  return isRtlLocale(locale) ? "rtl" : "ltr";
 }
 
 export function getLocaleFromPath(pathname: string): Locale | null {
@@ -50,6 +64,7 @@ export function getDefaultLocale(): Locale {
 }
 
 export function getFallbackLocale(locale: Locale): Locale {
+  void locale;
   return DEFAULT_LOCALE;
 }
 

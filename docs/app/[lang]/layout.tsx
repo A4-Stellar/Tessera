@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
 import { notFound } from "next/navigation";
-import { LOCALES, type Locale, LOCALE_NAMES } from "@/lib/i18n";
+import { LOCALES, type Locale, getLocaleDirection } from "@/lib/i18n";
 import { DocHeader } from "@/components/DocHeader";
 import { SITE_URL } from "@/lib/site";
 
@@ -68,7 +68,7 @@ export default async function LangLayout({ children, params }: LangLayoutProps) 
   }
 
   return (
-    <html lang={locale} className="dark">
+    <html lang={locale} dir={getLocaleDirection(locale)} className="dark">
       <head>
         <link rel="alternate" hrefLang="x-default" href={SITE_URL} />
         {LOCALES.map((l) => (
