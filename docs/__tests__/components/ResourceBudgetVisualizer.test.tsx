@@ -1,7 +1,8 @@
 import { render, screen, within } from "@testing-library/react";
 import { axe } from "jest-axe";
-import { ResourceBudgetVisualizer } from "@/components/ResourceBudgetVisualizer";
+import { ResourceBudgetVisualiser, ResourceBudgetVisualizer } from "@/components/ResourceBudgetVisualizer";
 import type { ResourceUsage } from "@/lib/soroban-resources";
+import { buildSorobanWasm } from "../fixtures/sorobanWasm";
 
 const usage = (overrides: Partial<ResourceUsage>): ResourceUsage => ({
   instructions: 0,
@@ -40,5 +41,31 @@ describe("ResourceBudgetVisualizer", () => {
 
     expect(screen.getByText("All resources are below the recommended thresholds.")).toBeInTheDocument();
     expect(screen.queryByText(/Tip:/)).not.toBeInTheDocument();
+  });
+
+  it("parses the soroban_budget custom section and renders a stacked bar chart of instruction counts by category", async () => {
+    const wasmWithBudget = buildSorobanWasm({
+      budget: {
+        compute: 20_000_000,
+        memory: 10_000_000,
+        storage: 15_000_000,
+        host_calls: 25_000_000,
+        crypto: 10_000_000,
+        mem_bytes: 4_194_304,
+      },
+    });
+
+    const { container } = render(<ResourceBudgetVisualiser wasmBytes={wasmWithBudget} />);
+
+    const chartRegion = screen.getByRole("region", {
+      name: /instruction counts by category vs\. soroban budget/i,
+    });
+    expect(chartRegion).toBeInTheDocument();
+    expect(within(chartRegion).getByText("soroban_budget custom section")).toBeInTheDocument();
+    expect(within(chartRegion).getByText("Compute & arithmetic")).toBeInTheDocument();
+    expect(within(chartRegion).getByText("20,000,000 instrs")).toBeInTheDocument();
+    expect(within(chartRegion).getByText("Host invocations")).toBeInTheDocument();
+    expect(within(chartRegion).getByText("25,000,000 instrs")).toBeInTheDocument();
+    expect(await axe(container)).toHaveNoViolations();
   });
 });

@@ -1,7 +1,8 @@
 import React from "react";
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { axe } from "jest-axe";
 import { WasmSandbox } from "@/components/WasmSandbox";
+import { buildSorobanWasm } from "../fixtures/sorobanWasm";
 
 describe("WasmSandbox Component", () => {
   it("renders the sandbox interface with header and default preset", () => {
@@ -52,6 +53,27 @@ describe("WasmSandbox Component", () => {
     expect(screen.getByText(/CPU Instructions/i)).toBeInTheDocument();
     expect(screen.getByText(/Memory Footprint/i)).toBeInTheDocument();
     expect(screen.getByText(/Storage Ops/i)).toBeInTheDocument();
+  });
+
+  it("executes a compiled .wasm binary with mock Soroban host functions and displays the return value", async () => {
+    render(<WasmSandbox wasmBytes={buildSorobanWasm()} />);
+
+    expect(screen.getByText(/hello\(\)/i)).toBeInTheDocument();
+    const paramInput = screen.getByLabelText(/parameter to/i);
+    fireEvent.change(paramInput, { target: { value: "15" } });
+
+    const executeBtn = screen.getByRole("button", { name: /execute hello/i });
+    fireEvent.click(executeBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/vec::vec_new_from_linear_memory/i)).toBeInTheDocument();
+      expect(screen.getByText(/Executed WASM export hello\(\) -> 17/i)).toBeInTheDocument();
+    });
+
+    const returnTab = screen.getByRole("button", { name: /return data/i });
+    fireEvent.click(returnTab);
+    expect(screen.getByText(/Function hello\(\) returned successfully/i)).toBeInTheDocument();
+    expect(screen.getByText(/"value": "17"/)).toBeInTheDocument();
   });
 
   it("inspects and mutates simulated ledger state in IndexedDB tab", async () => {

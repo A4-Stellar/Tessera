@@ -15,6 +15,7 @@ import { IssuerWizard } from "@/components/IssuerWizard";
 import { WasmDisassembler } from "@/components/WasmDisassembler";
 import { GasVisualizer } from "@/components/GasVisualizer";
 import { ResourceBudgetVisualizer } from "@/components/ResourceBudgetVisualizer";
+import { ContractMetadataPanel } from "@/components/ContractMetadataPanel";
 import { ExemptionChecker } from "@/components/ExemptionChecker";
 import RegulatoryMatrix from "@/components/RegulatoryMatrix";
 import { NetworkGraph } from "@/components/NetworkGraph";
@@ -58,6 +59,7 @@ export function useMDXComponents(components: MDXComponents): MDXComponents {
     WasmDisassembler,
     GasVisualizer,
     ResourceBudgetVisualizer,
+    ContractMetadataPanel,
     ExemptionChecker,
     RegulatoryMatrix,
     NetworkGraph,

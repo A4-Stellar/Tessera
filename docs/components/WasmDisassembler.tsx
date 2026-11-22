@@ -1,13 +1,16 @@
 "use client";
 
 import { useDeferredValue, useEffect, useId, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
+import MonacoEditor from "@monaco-editor/react";
 import {
-  disassembleWasm,
-  inspectWasm,
+  type ContractMetadataSummary,
+  type SorobanBudgetReport,
   type SpecEntrySummary,
   type WasmInspection,
 } from "@/lib/wasm-inspector";
+import { runWasmInspectorInWorker } from "@/lib/wasm-worker";
 import { SOROBAN_MAINNET_LIMITS } from "@/lib/soroban-resources";
+import { ContractMetadataPanel } from "@/components/ContractMetadataPanel";
 
 /** Upper bound on accepted files; unoptimized debug builds stay well below it. */
 const MAX_FILE_BYTES = 4 * 1024 * 1024;
@@ -15,12 +18,100 @@ const ROW_HEIGHT_PX = 20;
 const VIEWPORT_HEIGHT_PX = 480;
 const OVERSCAN_ROWS = 12;
 
-type View = "interface" | "wat";
+type View = "interface" | "wat" | "metadata";
 type LoadState =
   | { status: "idle" }
   | { status: "loading"; fileName: string }
   | { status: "error"; message: string }
-  | { status: "ready"; fileName: string; inspection: WasmInspection; lines: string[] };
+  | {
+      status: "ready";
+      fileName: string;
+      inspection: WasmInspection;
+      lines: string[];
+      metadata: ContractMetadataSummary;
+      budgetReport: SorobanBudgetReport;
+    };
+
+/** Monarch syntax highlighting definition for WebAssembly Text Format (WAT). */
+export const WAT_MONARCH_LANGUAGE = {
+  defaultToken: "",
+  tokenPostfix: ".wat",
+  keywords: [
+    "module",
+    "func",
+    "param",
+    "result",
+    "local",
+    "type",
+    "import",
+    "export",
+    "memory",
+    "data",
+    "global",
+    "table",
+    "elem",
+    "mut",
+    "start",
+    "offset",
+  ],
+  instructions: [
+    "call",
+    "call_indirect",
+    "br",
+    "br_if",
+    "br_table",
+    "block",
+    "loop",
+    "if",
+    "then",
+    "else",
+    "end",
+    "return",
+    "drop",
+    "select",
+    "unreachable",
+    "nop",
+  ],
+  tokenizer: {
+    root: [
+      [/;;.*$/, "comment"],
+      [/"(?:[^"\\]|\\.)*"/, "string"],
+      [/\$[^\s()]+/, "variable.name"],
+      [/\b(?:i32|i64|f32|f64|v128|memory|local|global)\.[a-z0-9_.]+\b/, "keyword.operator"],
+      [
+        /\b[a-z_][a-z0-9_]*\b/,
+        {
+          cases: {
+            "@keywords": "keyword",
+            "@instructions": "keyword.control",
+            "@default": "identifier",
+          },
+        },
+      ],
+      [/-?\b(?:0x[0-9a-fA-F]+|\d+(?:\.\d+)?)\b/, "number"],
+      [/[()]/, "delimiter.parenthesis"],
+    ],
+  },
+};
+
+interface MonacoLanguagesApi {
+  languages?: {
+    getLanguages?: () => { id: string }[];
+    register?: (def: { id: string }) => void;
+    setMonarchTokensProvider?: (languageId: string, languageDef: unknown) => void;
+  };
+}
+
+/** Registers the WebAssembly Text Format (`wat`) Monarch tokenizer with a Monaco instance. */
+export function registerWatLanguage(monaco: unknown): void {
+  const api = monaco as MonacoLanguagesApi | null;
+  if (!api?.languages?.register || !api.languages.setMonarchTokensProvider) return;
+  const existing = api.languages.getLanguages?.() ?? [];
+  if (!existing.some((lang) => lang.id === "wat")) {
+    api.languages.register({ id: "wat" });
+  }
+  api.languages.setMonarchTokensProvider("wat", WAT_MONARCH_LANGUAGE);
+}
 
 const TOKEN_PATTERN =
   /(;;.*$)|("(?:[^"\\]|\\.)*")|(\$[^\s()]+)|\b(module|func|param|result|local|type|import|export|memory|data|global|table|elem|mut|start|offset)\b|\b((?:[a-z][a-z0-9]*\.[a-z0-9_.]+)|call_indirect|call|br_table|br_if|br|block|loop|if|then|else|end|return|drop|select|unreachable|nop)\b|(-?\b(?:0x[0-9a-fA-F]+|\d+(?:\.\d+)?)\b)/g;
@@ -109,6 +200,7 @@ function WatViewer({ lines }: { lines: string[] }) {
   const [scrollTop, setScrollTop] = useState(0);
   const [query, setQuery] = useState("");
   const [activeMatch, setActiveMatch] = useState(0);
+  const [useMonaco, setUseMonaco] = useState(false);
   const deferredQuery = useDeferredValue(query.trim().toLowerCase());
 
   // Lower-cased once per module so each search is a plain O(total chars) scan.
@@ -141,6 +233,7 @@ function WatViewer({ lines }: { lines: string[] }) {
   const first = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT_PX) - OVERSCAN_ROWS);
   const last = Math.min(lines.length, Math.ceil((scrollTop + VIEWPORT_HEIGHT_PX) / ROW_HEIGHT_PX) + OVERSCAN_ROWS);
   const gutterWidth = `${String(lines.length).length + 1}ch`;
+  const fullWatText = useMemo(() => lines.join("\n"), [lines]);
 
   return (
     <div className="space-y-3">
@@ -180,6 +273,18 @@ function WatViewer({ lines }: { lines: string[] }) {
         >
           Next
         </button>
+        <button
+          type="button"
+          aria-pressed={useMonaco}
+          onClick={() => setUseMonaco((prev) => !prev)}
+          className={`rounded-md border px-3 py-1.5 text-sm ${
+            useMonaco
+              ? "border-brand-500/50 bg-brand-500/10 text-brand-300"
+              : "border-white/10 text-base-100 hover:border-brand-500/50"
+          }`}
+        >
+          Monaco editor
+        </button>
       </form>
       <p className="min-h-4 text-xs text-base-300" aria-live="polite">
         {deferredQuery
@@ -188,35 +293,58 @@ function WatViewer({ lines }: { lines: string[] }) {
             : "No matching lines"
           : `${lines.length.toLocaleString()} lines`}
       </p>
-      <div
-        ref={viewportRef}
-        role="region"
-        aria-label="Disassembled WebAssembly text"
-        // Keyboard users must be able to focus the scrollable region to scroll it (WCAG 2.1.1).
-        // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
-        tabIndex={0}
-        onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
-        className="overflow-auto rounded-lg border border-white/10 bg-base-950 font-mono text-xs focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
-        style={{ height: VIEWPORT_HEIGHT_PX }}
-      >
-        <div className="relative" style={{ height: lines.length * ROW_HEIGHT_PX }}>
-          {lines.slice(first, last).map((line, offset) => {
-            const index = first + offset;
-            return (
-              <div
-                key={index}
-                className={`absolute left-0 right-0 flex whitespace-pre px-2 ${index === activeLine ? "bg-gold-400/10" : ""}`}
-                style={{ top: index * ROW_HEIGHT_PX, height: ROW_HEIGHT_PX, lineHeight: `${ROW_HEIGHT_PX}px` }}
-              >
-                <span className="shrink-0 select-none pr-3 text-right text-base-300/50" style={{ width: gutterWidth }}>
-                  {index + 1}
-                </span>
-                <span>{renderLine(line, lowerLines[index], deferredQuery)}</span>
-              </div>
-            );
-          })}
+      {useMonaco ? (
+        <div
+          data-testid="wat-monaco-container"
+          className="overflow-hidden rounded-lg border border-white/10 bg-base-950"
+          style={{ height: VIEWPORT_HEIGHT_PX }}
+        >
+          <MonacoEditor
+            height={`${VIEWPORT_HEIGHT_PX}px`}
+            language="wat"
+            theme="vs-dark"
+            value={fullWatText}
+            beforeMount={registerWatLanguage}
+            options={{
+              readOnly: true,
+              minimap: { enabled: false },
+              fontSize: 12,
+              scrollBeyondLastLine: false,
+              wordWrap: "off",
+            }}
+          />
         </div>
-      </div>
+      ) : (
+        <div
+          ref={viewportRef}
+          role="region"
+          aria-label="Disassembled WebAssembly text"
+          // Keyboard users must be able to focus the scrollable region to scroll it (WCAG 2.1.1).
+          // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
+          tabIndex={0}
+          onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
+          className="overflow-auto rounded-lg border border-white/10 bg-base-950 font-mono text-xs focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
+          style={{ height: VIEWPORT_HEIGHT_PX }}
+        >
+          <div className="relative" style={{ height: lines.length * ROW_HEIGHT_PX }}>
+            {lines.slice(first, last).map((line, offset) => {
+              const index = first + offset;
+              return (
+                <div
+                  key={index}
+                  className={`absolute left-0 right-0 flex whitespace-pre px-2 ${index === activeLine ? "bg-gold-400/10" : ""}`}
+                  style={{ top: index * ROW_HEIGHT_PX, height: ROW_HEIGHT_PX, lineHeight: `${ROW_HEIGHT_PX}px` }}
+                >
+                  <span className="shrink-0 select-none pr-3 text-right text-base-300/50" style={{ width: gutterWidth }}>
+                    {index + 1}
+                  </span>
+                  <span>{renderLine(line, lowerLines[index], deferredQuery)}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -358,10 +486,11 @@ export function WasmDisassembler() {
     setState({ status: "loading", fileName: file.name });
     try {
       const bytes = await readFileBytes(file);
-      const inspection = inspectWasm(bytes);
-      const lines = disassembleWasm(bytes);
+      const { inspection, lines, metadata, budgetReport } = await runWasmInspectorInWorker(bytes, file.name);
       // Ignore results for a file the user has already replaced.
-      if (request === requestRef.current) setState({ status: "ready", fileName: file.name, inspection, lines });
+      if (request === requestRef.current) {
+        setState({ status: "ready", fileName: file.name, inspection, lines, metadata, budgetReport });
+      }
     } catch (error) {
       if (request === requestRef.current) {
         setState({ status: "error", message: error instanceof Error ? error.message : "Could not decode this file." });
@@ -409,17 +538,19 @@ export function WasmDisassembler() {
 
         {ready && meta && (
           <>
-            <dl className="grid gap-2 text-xs sm:grid-cols-2 lg:grid-cols-4">
+            <dl className="grid gap-2 text-xs sm:grid-cols-2 lg:grid-cols-6">
               {[
                 ["File", `${ready.fileName} · ${formatBytes(ready.inspection.byteLength)}`],
+                ["Contract name", ready.metadata.contractName],
+                ["Interface hash", ready.metadata.interfaceHash],
                 [
                   "Env interface",
                   ready.inspection.interfaceVersion
                     ? `protocol ${ready.inspection.interfaceVersion.protocol}${ready.inspection.interfaceVersion.preRelease ? ` (pre-release ${ready.inspection.interfaceVersion.preRelease})` : ""}`
                     : "—",
                 ],
-                ["Rust compiler", meta.get("rsver") ?? "—"],
-                ["Soroban SDK", meta.get("rssdkver")?.split("#")[0] ?? "—"],
+                ["Rust compiler", meta.get("rsver") ?? ready.metadata.rustVersion ?? "—"],
+                ["Soroban SDK", meta.get("rssdkver")?.split("#")[0] ?? ready.metadata.sdkVersion ?? "—"],
               ].map(([term, value]) => (
                 <div key={term} className="rounded-lg border border-white/10 bg-base-900/60 px-3 py-2">
                   <dt className="text-base-300">{term}</dt>
@@ -447,6 +578,7 @@ export function WasmDisassembler() {
                 [
                   ["interface", "Interface"],
                   ["wat", "WAT"],
+                  ["metadata", "Metadata"],
                 ] as const
               ).map(([value, label]) => (
                 <button
@@ -465,7 +597,13 @@ export function WasmDisassembler() {
               ))}
             </div>
 
-            {view === "interface" ? <InterfaceView inspection={ready.inspection} /> : <WatViewer lines={ready.lines} />}
+            {view === "interface" ? (
+              <InterfaceView inspection={ready.inspection} />
+            ) : view === "wat" ? (
+              <WatViewer lines={ready.lines} />
+            ) : (
+              <ContractMetadataPanel metadata={ready.metadata} />
+            )}
           </>
         )}
       </div>

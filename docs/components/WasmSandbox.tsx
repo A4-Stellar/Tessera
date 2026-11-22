@@ -1,6 +1,8 @@
 "use client";
 
-import React, { useEffect, useId, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useState, type ChangeEvent } from "react";
+import { inspectWasm } from "@/lib/wasm-inspector";
+import { runWasmExecutionInWorker } from "@/lib/wasm-worker";
 
 export interface WasmSandboxProps {
   /** Identifier of the pre-loaded Soroban contract preset ("asset-token" | "compliance" | "dividend"). */
@@ -11,6 +13,8 @@ export interface WasmSandboxProps {
   height?: number;
   /** Extra CSS classes for the outer container. */
   className?: string;
+  /** Optional compiled `.wasm` binary to instantiate and execute with mock Soroban host functions. */
+  wasmBytes?: Uint8Array;
 }
 
 export interface ContractFunction {
@@ -161,6 +165,75 @@ const PRESETS: Record<string, ContractPreset> = {
 
 const DB_STORE = "contract_storage";
 
+/** Builds a ContractPreset from an uploaded or provided `.wasm` binary. */
+function buildCustomWasmPreset(bytes: Uint8Array, fileName = "Uploaded Soroban WASM"): ContractPreset | null {
+  try {
+    const inspection = inspectWasm(bytes);
+    const specFns = new Map(inspection.spec.filter((s) => s.kind === "function").map((s) => [s.name, s]));
+    const exportedFns = inspection.exports.filter((e) => e.kind === "function");
+
+    const functions: ContractFunction[] = exportedFns.map((exp) => {
+      const specEntry = specFns.get(exp.name);
+      const sigMatch = specEntry?.details[0]?.match(/^fn\s+[^(]+\(([^)]*)\)(?:\s*->\s*(.+))?$/);
+      if (sigMatch) {
+        const rawInputs = sigMatch[1]
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
+        const params = rawInputs.map((inp, idx) => {
+          const [pName, pType] = inp.split(":").map((s) => s.trim());
+          return {
+            name: pName || `arg${idx}`,
+            type: pType || "Val",
+            defaultValue: String(idx + 1),
+          };
+        });
+        return {
+          name: exp.name,
+          doc: specEntry?.doc || `Exported Soroban contract function ${exp.name}.`,
+          params,
+          returnType: sigMatch[2]?.trim() || "Val",
+        };
+      }
+
+      const wasmParams =
+        exp.signature
+          ?.match(/^\(([^)]*)\)/)?.[1]
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean) ?? [];
+      const wasmReturn = exp.signature?.split("->")[1]?.trim() || "i64";
+      return {
+        name: exp.name,
+        doc: specEntry?.doc || `Exported WASM function ${exp.name}.`,
+        params: wasmParams.map((pType, idx) => ({
+          name: `arg${idx}`,
+          type: pType,
+          defaultValue: String((idx + 1) * 10),
+        })),
+        returnType: wasmReturn,
+      };
+    });
+
+    return {
+      id: "custom-wasm",
+      name: fileName,
+      description: "Live WebAssembly contract module executed with mock Soroban host functions.",
+      wasmSize: bytes.byteLength,
+      functions:
+        functions.length > 0
+          ? functions
+          : [{ name: "invoke", doc: "Invoke module entrypoint", params: [], returnType: "Val" }],
+      initialState: {
+        "LEDGER:PROTOCOL": String(inspection.interfaceVersion?.protocol ?? 25),
+        "WASM:IMPORTS": String(inspection.imports.length),
+      },
+    };
+  } catch {
+    return null;
+  }
+}
+
 /** Native IndexedDB helper with fallback for environments where indexedDB is mocked or absent. */
 function openSandboxDb(dbName: string): Promise<IDBDatabase | null> {
   return new Promise((resolve) => {
@@ -193,11 +266,42 @@ function openSandboxDb(dbName: string): Promise<IDBDatabase | null> {
 export function WasmSandbox({
   defaultContract = "asset-token",
   storageDbName = "tessera-soroban-wasm-sandbox",
-  height = 560,
   className = "",
+  wasmBytes,
 }: WasmSandboxProps) {
-  const [selectedPresetKey, setSelectedPresetKey] = useState<string>(defaultContract);
-  const currentPreset = PRESETS[selectedPresetKey] || PRESETS["asset-token"];
+  const [uploadedBytes, setUploadedBytes] = useState<Uint8Array | undefined>(wasmBytes);
+  const [uploadedName, setUploadedName] = useState<string>("Custom Soroban WASM");
+
+  useEffect(() => {
+    if (wasmBytes) {
+      setUploadedBytes(wasmBytes);
+    }
+  }, [wasmBytes]);
+
+  const customPreset = useMemo(
+    () => (uploadedBytes ? buildCustomWasmPreset(uploadedBytes, uploadedName) : null),
+    [uploadedBytes, uploadedName]
+  );
+
+  const availablePresets = useMemo<Record<string, ContractPreset>>(() => {
+    if (!customPreset) return PRESETS;
+    return {
+      ...PRESETS,
+      "custom-wasm": customPreset,
+    };
+  }, [customPreset]);
+
+  const [selectedPresetKey, setSelectedPresetKey] = useState<string>(
+    wasmBytes ? "custom-wasm" : defaultContract
+  );
+
+  useEffect(() => {
+    if (customPreset) {
+      setSelectedPresetKey("custom-wasm");
+    }
+  }, [customPreset]);
+
+  const currentPreset = availablePresets[selectedPresetKey] || availablePresets["asset-token"];
 
   const [selectedFunctionName, setSelectedFunctionName] = useState<string>(
     currentPreset.functions[0]?.name || ""
@@ -214,6 +318,18 @@ export function WasmSandbox({
   const [storageState, setStorageState] = useState<Record<string, string>>(currentPreset.initialState);
   const [customKey, setCustomKey] = useState<string>("");
   const [customValue, setCustomValue] = useState<string>("");
+
+  const handleUploadWasm = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const bytes = new Uint8Array(reader.result as ArrayBuffer);
+      setUploadedName(file.name);
+      setUploadedBytes(bytes);
+    };
+    reader.readAsArrayBuffer(file);
+  };
 
   // Sync params when function changes
   useEffect(() => {
@@ -270,7 +386,7 @@ export function WasmSandbox({
     }
   };
 
-  // Execute WASM function in Web Worker with WASI emulation
+  // Execute WASM function in Web Worker with WASI emulation & mock Soroban host functions
   const handleExecute = async () => {
     setIsExecuting(true);
     const startTime = performance.now();
@@ -302,8 +418,47 @@ export function WasmSandbox({
     let writes = 0;
     const nextStorage = { ...storageState };
 
-    // Contract function execution simulation matching Soroban semantics
-    if (funcName === "balance") {
+    if (selectedPresetKey === "custom-wasm" && uploadedBytes) {
+      try {
+        const numericArgs = (currentFunction?.params ?? []).map((p, idx) => {
+          const raw = params[p.name] ?? "";
+          const parsed = Number(raw);
+          return Number.isFinite(parsed) ? BigInt(Math.trunc(parsed)) : BigInt(idx + 1);
+        });
+        const trace = await runWasmExecutionInWorker(uploadedBytes, funcName, numericArgs);
+        trace.hostCalls.forEach((call, idx) => {
+          logs.push({
+            id: `l-host-${idx}`,
+            timestamp: `00.01${idx}s`,
+            source: "host_event",
+            text: `[SorobanHost::Mock] ${call.canonicalName}(${call.args.join(", ")}) -> ${call.returnValue}`,
+          });
+        });
+        logs.push({
+          id: "l-wasm-out",
+          timestamp: "00.018s",
+          source: "wasi_stdout",
+          text: `[WASI::stdout] Executed WASM export ${trace.functionName}() -> ${trace.returnValue}`,
+        });
+        returnValue = {
+          type: currentFunction?.returnType || "Val",
+          value: trace.returnValue,
+          hostCalls: trace.hostCalls,
+        };
+        reads = Math.max(1, trace.hostCalls.length);
+      } catch (err) {
+        returnValue = {
+          type: "error",
+          message: err instanceof Error ? err.message : "WASM execution error",
+        };
+        logs.push({
+          id: "l-wasm-err",
+          timestamp: "00.015s",
+          source: "wasi_stderr",
+          text: `[WASI::stderr] ${err instanceof Error ? err.message : "WASM execution failed"}`,
+        });
+      }
+    } else if (funcName === "balance") {
       const acc = params["account"] || "GBBD...TESSERA";
       const key = `BALANCE:${acc}`;
       const found = nextStorage[key] || "0";
@@ -507,8 +662,8 @@ export function WasmSandbox({
           </span>
         </div>
 
-        {/* Contract Preset Selector */}
-        <div className="flex items-center gap-2 text-xs">
+        {/* Contract Preset Selector & Custom WASM Upload */}
+        <div className="flex flex-wrap items-center gap-2 text-xs">
           <span className="text-base-400">Contract:</span>
           <select
             value={selectedPresetKey}
@@ -516,12 +671,22 @@ export function WasmSandbox({
             className="rounded bg-base-800 border border-base-700 px-2.5 py-1 text-xs text-base-100 font-medium focus:outline-none focus:border-gold-500"
             aria-label="Contract preset selector"
           >
-            {Object.entries(PRESETS).map(([k, p]) => (
+            {Object.entries(availablePresets).map(([k, p]) => (
               <option key={k} value={k}>
                 {p.name}
               </option>
             ))}
           </select>
+          <label className="cursor-pointer rounded border border-base-700 bg-base-800 px-2 py-1 text-xs text-base-200 hover:border-brand-500/50">
+            <span>Load .wasm</span>
+            <input
+              type="file"
+              accept=".wasm,application/wasm"
+              onChange={handleUploadWasm}
+              className="sr-only"
+              aria-label="Upload custom WASM binary"
+            />
+          </label>
         </div>
       </div>
 
@@ -695,7 +860,7 @@ export function WasmSandbox({
                   <div className="flex flex-col items-center justify-center py-16 text-center text-base-400">
                     <p className="font-sans">Ready to execute contract.</p>
                     <p className="text-[11px] text-base-500 font-sans mt-1">
-                      Choose an exported function and click "Execute" to stream raw WASI logs.
+                      Choose an exported function and click &quot;Execute&quot; to stream raw WASI logs.
                     </p>
                   </div>
                 )}

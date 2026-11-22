@@ -1,5 +1,16 @@
 import { xdr } from "@stellar/stellar-sdk";
-import { disassembleWasm, formatSpecType, inspectWasm, WasmInspectionError } from "@/lib/wasm-inspector";
+import {
+  analyzeWasmInstructionBudget,
+  decodeWasmAst,
+  disassembleWasm,
+  executeWasmWithMockHost,
+  extractContractMetadata,
+  formatSpecType,
+  inspectWasm,
+  parseSorobanBudgetSection,
+  WasmInspectionError,
+} from "@/lib/wasm-inspector";
+import { runWasmInspectorInWorker } from "@/lib/wasm-worker";
 import { resolveHostFunction } from "@/lib/soroban-host-functions";
 import { buildSorobanWasm } from "./fixtures/sorobanWasm";
 
@@ -80,5 +91,80 @@ describe("wasm inspector", () => {
     expect(resolveHostFunction("x", "_")?.name).toBe("log_from_linear_memory");
     expect(resolveHostFunction("__proto__", "toString")).toBeNull();
     expect(resolveHostFunction("x", "toString")).toBeNull();
+  });
+
+  it("decodes a structured WebAssembly module AST with custom sections and instructions", () => {
+    const ast = decodeWasmAst(buildSorobanWasm());
+    expect(ast.type).toBe("Program");
+    expect(ast.body[0].type).toBe("Module");
+    expect(ast.body[0].customSections.map((s) => s.name)).toEqual([
+      "contractspecv0",
+      "contractenvmetav0",
+      "contractmetav0",
+    ]);
+    expect(ast.body[0].instructions.some((instr) => instr.id === "call")).toBe(true);
+  });
+
+  it("parses the soroban_budget custom section and falls back to static instruction profiling", () => {
+    expect(parseSorobanBudgetSection(buildSorobanWasm())).toBeNull();
+
+    const wasmWithBudget = buildSorobanWasm({
+      budget: {
+        compute: 1_200_000,
+        memory: 450_000,
+        storage: 800_000,
+        host_calls: 350_000,
+        crypto: 200_000,
+        mem_bytes: 2_097_152,
+      },
+    });
+    const parsed = parseSorobanBudgetSection(wasmWithBudget);
+    expect(parsed).not.toBeNull();
+    expect(parsed?.source).toBe("soroban_budget");
+    expect(parsed?.totalInstructions).toBe(3_000_000);
+    expect(parsed?.memBytes).toBe(2_097_152);
+    expect(parsed?.categories.find((c) => c.category === "compute")?.instructions).toBe(1_200_000);
+
+    const staticProfile = analyzeWasmInstructionBudget(buildSorobanWasm());
+    expect(staticProfile.source).toBe("static_analysis");
+    expect(staticProfile.totalInstructions).toBeGreaterThan(0);
+  });
+
+  it("extracts contractenvmeta and contractmetav0 metadata including SDK version, contract name, and interface hash", () => {
+    const wasm = buildSorobanWasm({
+      envMetaJson: {
+        contract_name: "tessera_rwa_token",
+        sdk_version: "25.3.2#a1b2c3",
+        protocol: 25,
+      },
+    });
+    const metadata = extractContractMetadata(wasm, "token.wasm");
+    expect(metadata.contractName).toBe("tessera_rwa_token");
+    expect(metadata.sdkVersion).toBe("25.3.2");
+    expect(metadata.rustVersion).toBe("1.98.0");
+    expect(metadata.protocolVersion).toBe(25);
+    expect(metadata.interfaceHash).toMatch(/^0x[0-9a-f]{16}$/);
+  });
+
+  it("executes a compiled .wasm module with mock Soroban host functions", async () => {
+    const trace = await executeWasmWithMockHost(buildSorobanWasm(), "hello", [10n, 32n]);
+    expect(trace.functionName).toBe("hello");
+    expect(trace.returnValue).toBe("42");
+    expect(trace.hostCalls).toEqual([
+      {
+        module: "v",
+        field: "g",
+        canonicalName: "vec::vec_new_from_linear_memory",
+        args: ["10", "32"],
+        returnValue: "42",
+      },
+    ]);
+  });
+
+  it("offloads WASM inspection through runWasmInspectorInWorker", async () => {
+    const result = await runWasmInspectorInWorker(buildSorobanWasm(), "hello.wasm");
+    expect(result.inspection.exports[0].name).toBe("hello");
+    expect(result.metadata.contractName).toBe("hello");
+    expect(result.lines.join("\n")).toContain("call $import0");
   });
 });

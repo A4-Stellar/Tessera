@@ -1,6 +1,6 @@
 export const metadata = {
   title: "ResourceBudgetVisualizer",
-  description: "Soroban resource budget visualizer: renders stacked progress bars for CPU, memory, and ledger/storage resources, highlights bottlenecks, and suggests optimizations when a resource reaches its recommended threshold.",
+  description: "Soroban resource budget visualizer: renders stacked progress bars for CPU, memory, and ledger/storage resources, highlights bottlenecks, suggests optimizations when a resource reaches its recommended threshold, and parses the `soroban_budget` WASM custom section to render a stacked bar chart of instruction counts by category vs.",
   canonical: "/docs/components/resource-budget-visualizer",
 };
 
@@ -8,7 +8,7 @@ export const metadata = {
 
 # ResourceBudgetVisualizer
 
-{"Soroban resource budget visualizer: renders stacked progress bars for CPU, memory, and ledger/storage resources, highlights bottlenecks, and suggests optimizations when a resource reaches its recommended threshold."}
+{"Soroban resource budget visualizer: renders stacked progress bars for CPU, memory, and ledger/storage resources, highlights bottlenecks, suggests optimizations when a resource reaches its recommended threshold, and parses the "}`soroban_budget`{" WASM custom section to render a stacked bar chart of instruction counts by category vs. Soroban limits."}
 
 Source: `components/ResourceBudgetVisualizer.tsx` · available in every MDX page as `<ResourceBudgetVisualizer />`.
 
@@ -29,7 +29,7 @@ Source: `components/ResourceBudgetVisualizer.tsx` · available in every MDX page
       <td><code>{"usage"}</code></td>
       <td><code>{"ResourceUsage"}</code></td>
       <td>No</td>
-      <td><code>{"defaultUsage()"}</code></td>
+      <td>—</td>
       <td>{"Metered resources to compare with the network limits. Defaults to the latest Tessera release's worst-case method."}</td>
     </tr>
     <tr>
@@ -45,6 +45,20 @@ Source: `components/ResourceBudgetVisualizer.tsx` · available in every MDX page
       <td>No</td>
       <td><code>{"{ warning: 0.75, critical: 0.9 }"}</code></td>
       <td>{"Utilization ratios at which a resource is flagged as nearing or exceeding its recommended limit."}</td>
+    </tr>
+    <tr>
+      <td><code>{"wasmBytes"}</code></td>
+      <td><code>{"Uint8Array<ArrayBufferLike>"}</code></td>
+      <td>No</td>
+      <td>—</td>
+      <td>{"Optional compiled "}<code>{".wasm"}</code>{" binary containing a "}<code>{"soroban_budget"}</code>{" custom section ("}<code>{"soroban build --debug"}</code>{") to decode and visualize."}</td>
+    </tr>
+    <tr>
+      <td><code>{"budgetReport"}</code></td>
+      <td><code>{"SorobanBudgetReport"}</code></td>
+      <td>No</td>
+      <td>—</td>
+      <td>{"Optional pre-parsed "}<code>{"soroban_budget"}</code>{" instruction category report to render in the stacked category chart."}</td>
     </tr>
   </tbody>
 </table>
