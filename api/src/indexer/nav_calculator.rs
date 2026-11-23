@@ -132,3 +132,172 @@ mod tests {
         );
     }
 }
+
+// ── NAV aggregation (issue #456) ──────────────────────────────────────────
+
+/// Decimal places of the fixed-point NAV representation (`price * 10^7`),
+/// matching the Stellar 7-decimal amount convention used on-chain.
+pub const NAV_SCALE: u32 = 7;
+
+/// Maximum tolerated move between consecutive NAVs before an alert fires: 5 %.
+pub const NAV_DEVIATION_ALERT_BPS: i128 = 500;
+
+/// One oracle quote for a single underlying RWA asset.
+#[allow(dead_code)] // not yet wired into the indexer
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OraclePrice {
+    /// Oracle identifier, e.g. `"stellar_dex_twap"`, `"pyth"`, `"band"`.
+    pub source: &'static str,
+    /// Price in fixed point with [`NAV_SCALE`] decimals.
+    pub price: i128,
+    /// Relative weight; zero-weight quotes are ignored.
+    pub weight: u32,
+    /// Unix seconds of the oracle's last update.
+    pub updated_at: u64,
+}
+
+/// Result of one NAV aggregation pass.
+#[allow(dead_code)] // not yet wired into the indexer
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NavResult {
+    /// Fresh NAV when `status` is [`NavStatus::Fresh`]; the last known NAV
+    /// (possibly `None`) when stale.
+    pub nav: Option<i128>,
+    pub status: NavStatus,
+    /// Oracles excluded for staleness; callers emit `OracleStaleness` for each.
+    pub stale_sources: Vec<&'static str>,
+}
+
+#[allow(dead_code)] // not yet wired into the indexer
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NavStatus {
+    Fresh,
+    Stale,
+}
+
+/// Compute a weighted-average NAV from fresh oracle quotes.
+///
+/// * Quotes older than `max_staleness_seconds` are excluded and reported in
+///   `stale_sources`.
+/// * If fewer than `min_oracles` fresh quotes remain (or arithmetic would
+///   overflow), the result is [`NavStatus::Stale`] and carries
+///   `last_known` instead of a new value.
+#[allow(dead_code)] // not yet wired into the indexer
+pub fn aggregate_nav(
+    prices: &[OraclePrice],
+    now: u64,
+    max_staleness_seconds: u64,
+    min_oracles: usize,
+    last_known: Option<i128>,
+) -> NavResult {
+    let mut stale_sources = Vec::new();
+    let mut weighted_sum: i128 = 0;
+    let mut total_weight: i128 = 0;
+    let mut fresh_count = 0usize;
+    let mut overflow = false;
+
+    for quote in prices.iter().filter(|q| q.weight > 0) {
+        if now.saturating_sub(quote.updated_at) > max_staleness_seconds {
+            stale_sources.push(quote.source);
+            continue;
+        }
+        fresh_count += 1;
+        let weight = i128::from(quote.weight);
+        match quote.price.checked_mul(weight) {
+            Some(term) => match weighted_sum.checked_add(term) {
+                Some(sum) => weighted_sum = sum,
+                None => overflow = true,
+            },
+            None => overflow = true,
+        }
+        total_weight += weight;
+    }
+
+    if fresh_count < min_oracles || fresh_count == 0 || overflow {
+        return NavResult {
+            nav: last_known,
+            status: NavStatus::Stale,
+            stale_sources,
+        };
+    }
+
+    NavResult {
+        nav: Some(weighted_sum / total_weight),
+        status: NavStatus::Fresh,
+        stale_sources,
+    }
+}
+
+/// True when `next` differs from `previous` by more than
+/// [`NAV_DEVIATION_ALERT_BPS`] basis points of `previous`.
+#[allow(dead_code)] // not yet wired into the indexer
+pub fn nav_deviation_exceeds_alert(previous: i128, next: i128) -> bool {
+    if previous == 0 {
+        return next != 0;
+    }
+    let diff = next.checked_sub(previous).and_then(i128::checked_abs);
+    match diff.and_then(|d| d.checked_mul(10_000)) {
+        Some(scaled) => scaled / previous.abs() > NAV_DEVIATION_ALERT_BPS,
+        None => true,
+    }
+}
+
+#[cfg(test)]
+mod nav_aggregation_tests {
+    use super::*;
+
+    fn quote(source: &'static str, price: i128, weight: u32, updated_at: u64) -> OraclePrice {
+        OraclePrice {
+            source,
+            price,
+            weight,
+            updated_at,
+        }
+    }
+
+    #[test]
+    fn weighted_average_uses_only_fresh_quotes() {
+        let prices = [
+            quote("dex", 100_0000000, 1, 1_000),
+            quote("pyth", 200_0000000, 1, 1_000),
+            quote("band", 900_0000000, 1, 0), // stale
+        ];
+        let result = aggregate_nav(&prices, 1_030, 60, 2, None);
+        assert_eq!(result.status, NavStatus::Fresh);
+        assert_eq!(result.nav, Some(150_0000000));
+        assert_eq!(result.stale_sources, vec!["band"]);
+    }
+
+    #[test]
+    fn too_few_fresh_oracles_serves_last_known_as_stale() {
+        let prices = [quote("dex", 100, 1, 0), quote("pyth", 200, 1, 1_000)];
+        let result = aggregate_nav(&prices, 1_030, 60, 2, Some(42));
+        assert_eq!(result.status, NavStatus::Stale);
+        assert_eq!(result.nav, Some(42));
+        assert_eq!(result.stale_sources, vec!["dex"]);
+    }
+
+    #[test]
+    fn zero_weight_quotes_are_ignored() {
+        let prices = [quote("dex", 100, 0, 1_000), quote("pyth", 300, 2, 1_000)];
+        let result = aggregate_nav(&prices, 1_000, 60, 1, None);
+        assert_eq!(result.nav, Some(300));
+        assert!(result.stale_sources.is_empty());
+    }
+
+    #[test]
+    fn overflow_is_treated_as_stale() {
+        let prices = [quote("dex", i128::MAX, 2, 1_000)];
+        let result = aggregate_nav(&prices, 1_000, 60, 1, Some(7));
+        assert_eq!(result.status, NavStatus::Stale);
+        assert_eq!(result.nav, Some(7));
+    }
+
+    #[test]
+    fn deviation_alert_triggers_above_five_percent() {
+        assert!(!nav_deviation_exceeds_alert(1_000, 1_050));
+        assert!(nav_deviation_exceeds_alert(1_000, 1_051));
+        assert!(nav_deviation_exceeds_alert(1_000, 940));
+        assert!(!nav_deviation_exceeds_alert(1_000, 960));
+    }
+}
