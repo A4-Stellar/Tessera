@@ -1,0 +1,120 @@
+{
+  "contract": "debt-token",
+  "moduleDoc": "Debt-token amortization ledger (tranche waterfall).\r\n\nRewritten by the fuzzing work. Every defect below was reachable from a\r\npublic entry point with attacker-chosen arguments, and none of them\r\nreported itself as an error — they either trapped, which is\r\nindistinguishable from a genuine bug, or silently corrupted the ledger.",
+  "generated_at": "2026-11-23T12:28:42.995Z",
+  "methods": [
+    {
+      "name": "initialize",
+      "doc": "Install the admin. Required before any ledger mutation, because `accrue_interest` and `trigger_default` are admin-gated and previously had no admin at all — anyone could inflate any tranche's debt.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "deposit_repayment",
+      "doc": "Apply `amount` to the waterfall, paying `Senior` first, then `Mezzanine`, then `Equity`.  Fixed here:  * a non-positive `amount` is rejected. It used to be accepted, and a   negative amount *increased* every tranche's owed balance, because each   tranche was credited `owed - payment` with `payment` itself negative; * each tranche's payment is now capped at that tranche's own owed   balance. The `Equity` leg previously took the entire uncapped   remainder, so repaying more than was outstanding underflowed   `equity_owed - equity_payment` and trapped; * `i128::MIN` is rejected up front, so no leg can compute   `owed - i128::MIN`.  Overpayment beyond the total outstanding is accepted and simply retires the whole ledger; the excess is not credited anywhere.",
+      "inputs": [
+        {
+          "name": "borrower",
+          "type": "Address"
+        },
+        {
+          "name": "amount",
+          "type": "i128"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "accrue_interest",
+      "doc": "Invokes `accrue_interest` on debt-token.",
+      "inputs": [
+        {
+          "name": "tranche",
+          "type": "Tranche"
+        },
+        {
+          "name": "amount",
+          "type": "i128"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "set_rate_params",
+      "doc": "Issue #85: set kinked-curve parameters (first caller becomes rate admin).",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "params",
+          "type": "interest_rate"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "get_rate_params",
+      "doc": "Invokes `get_rate_params` on debt-token.",
+      "inputs": [],
+      "output": "interest_rate::RateParams"
+    },
+    {
+      "name": "current_borrow_rate",
+      "doc": "Annual borrow rate (WAD) for the given pool balances.",
+      "inputs": [
+        {
+          "name": "borrowed",
+          "type": "i128"
+        },
+        {
+          "name": "available",
+          "type": "i128"
+        }
+      ],
+      "output": "i128"
+    },
+    {
+      "name": "pool_utilization",
+      "doc": "Pool utilization (WAD).",
+      "inputs": [
+        {
+          "name": "borrowed",
+          "type": "i128"
+        },
+        {
+          "name": "available",
+          "type": "i128"
+        }
+      ],
+      "output": "i128"
+    },
+    {
+      "name": "accrue_rate_index",
+      "doc": "Accrue the WAD borrow index to the current ledger time; returns it.",
+      "inputs": [
+        {
+          "name": "borrowed",
+          "type": "i128"
+        },
+        {
+          "name": "available",
+          "type": "i128"
+        }
+      ],
+      "output": "i128"
+    },
+    {
+      "name": "trigger_default",
+      "doc": "Invokes `trigger_default` on debt-token.",
+      "inputs": [],
+      "output": "()"
+    }
+  ]
+}

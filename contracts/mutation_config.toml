@@ -1,0 +1,67 @@
+# Cargo-Mutants Configuration for Soroban Smart Contracts (Issue #448 / #65)
+# Enforces a minimum 85% mutation score across the Tessera contracts workspace.
+
+[mutation]
+minimum_score_percent = 85
+timeout_multiplier = 2.5
+
+# Custom Soroban-specific mutant operators
+[[operators]]
+name = "soroban_kyc_expiry_boundary"
+description = "Replace `>=` with `>` in KYC/compliance expiry checks to catch off-by-one ledger sequence vulnerabilities"
+search = "env.ledger().sequence() >= record.expires_at"
+replace = "env.ledger().sequence() > record.expires_at"
+
+[[operators]]
+name = "soroban_storage_permanence"
+description = "Replace `persistent()` with `temporary()` storage calls to detect ephemeral state leaks"
+search = "storage().persistent()"
+replace = "storage().temporary()"
+
+[[operators]]
+name = "soroban_is_allowed_negation"
+description = "Negate boolean return values from compliance transfer guards"
+search = "is_allowed"
+mutation_type = "invert_bool_return"
+
+# Allow-list to exclude trivially-equivalent mutants (e.g. debug strings, logging, constant folding)
+[exclude]
+patterns = [
+    # Constant folding / symbol short abbreviations
+    'symbol_short!.*',
+    # Formatting and debug strings
+    '.*format_args!.*',
+    '.*panic_with_error!.*',
+    # Default unreached enum display branches
+    '.*impl core::fmt::Debug.*',
+    # Trivial getter clones
+    '.*fn name\(.*',
+    '.*fn symbol\(.*',
+]
+
+[mutants]
+exclude_re = [
+    'symbol_short!.*',
+    '.*format_args!.*',
+    '.*panic_with_error!.*',
+    '.*impl core::fmt::Debug.*',
+    '.*fn name\(.*',
+    '.*fn symbol\(.*',
+]
+
+# Contracts prioritisation order for mutation testing
+[priorities]
+contracts = [
+    "compliance",
+    "asset-token",
+    "cap-table",
+    "registry",
+    "dividend",
+    "vaults",
+    "settlement",
+    "amm",
+    "debt-token",
+    "governance",
+    "bridge",
+    "flash-loan",
+]

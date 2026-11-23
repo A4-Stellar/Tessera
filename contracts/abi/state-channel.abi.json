@@ -1,0 +1,286 @@
+{
+  "contract": "state-channel",
+  "moduleDoc": "Issue #322 - Off-Chain Layer-2 State Channel Framework for High-Frequency Rental Micropayments\r\n\nImplements a bidirectional payment channel with the following guarantees:\r\n- On-chain channel opening with locked escrow stakes from both parties\r\n- Off-chain state exchange with Ed25519 signatures and monotonic sequence numbers\r\n- Cooperative channel closure for optimal gas efficiency\r\n- Unilateral dispute mechanism with 24-hour challenge window\r\n- Slashing for dishonest counterparty submitting outdated state\r\n\nFlow:\r\n1. Both parties call `open_channel` to lock escrow stakes on-chain\r\n2. Parties exchange signed state updates off-chain (handled by channel-node daemon)\r\n3. Either party calls `close_channel` cooperatively with final signed state\r\n4. If one party is unresponsive, initiate_dispute with latest signed state\r\n5. During 24h challenge window, counterparty can submit newer state via `challenge_dispute`\r\n6. After challenge window, call `finalize_dispute` to settle and slash if fraud detected\r\n\nIssue #366 - dispute resolution with fraud proofs and adjudication timeout:\r\n1. Each party registers its Ed25519 signing key (`register_signing_key`)\r\n2. `open_dispute(channel_id, latest_state, signatures)` - either party submits\r\n   a state signed by both parties; starts a `dispute_window_ledgers` window\r\n3. `counter_dispute(channel_id, newer_state, signatures)` - the counter-party\r\n   submits a state with a higher sequence number within the window\r\n4. `submit_fraud_proof(channel_id, invalid_state, proof)` - anyone except the\r\n   submitter proves a submitted state invalid (balance sum mismatch or a\r\n   negative balance) and earns `fraud_bounty_bps` of the submitter's deposit\r\n5. `resolve_dispute(channel_id)` - after the window, closes the channel and\r\n   settles at the highest-sequence valid state\r\n\nEvery submitted state's signatures are batch-verified (all-or-nothing).",
+  "generated_at": "2026-11-23T12:28:43.020Z",
+  "methods": [
+    {
+      "name": "open_channel",
+      "doc": "Open a new payment channel. Both parties must call this to fund their stakes. channel_id is a unique identifier (e.g., hash of (party_a, party_b, nonce))",
+      "inputs": [
+        {
+          "name": "channel_id",
+          "type": "BytesN<32>"
+        },
+        {
+          "name": "party_a",
+          "type": "Address"
+        },
+        {
+          "name": "party_b",
+          "type": "Address"
+        },
+        {
+          "name": "token",
+          "type": "Address"
+        },
+        {
+          "name": "stake_a",
+          "type": "i128"
+        },
+        {
+          "name": "stake_b",
+          "type": "i128"
+        },
+        {
+          "name": "caller",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "close_channel",
+      "doc": "Cooperatively close the channel with mutually signed final state. This is the gas-optimal path and settles immediately without disputes.",
+      "inputs": [
+        {
+          "name": "channel_id",
+          "type": "BytesN<32>"
+        },
+        {
+          "name": "final_state",
+          "type": "ChannelState"
+        },
+        {
+          "name": "caller",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "initiate_dispute",
+      "doc": "Initiate unilateral dispute with the latest state you have. Starts a 24-hour challenge window for the counterparty to submit a newer state.",
+      "inputs": [
+        {
+          "name": "channel_id",
+          "type": "BytesN<32>"
+        },
+        {
+          "name": "state",
+          "type": "ChannelState"
+        },
+        {
+          "name": "caller",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "challenge_dispute",
+      "doc": "Challenge a dispute by submitting a state with a higher sequence number. If successful, the challenger proves the dispute initiator submitted stale state (fraud).",
+      "inputs": [
+        {
+          "name": "channel_id",
+          "type": "BytesN<32>"
+        },
+        {
+          "name": "newer_state",
+          "type": "ChannelState"
+        },
+        {
+          "name": "caller",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "finalize_dispute",
+      "doc": "Finalize the dispute after the challenge window expires. Settles balances according to the latest submitted state. If fraud was detected (challenge succeeded), slashes the dishonest party's escrow stake.",
+      "inputs": [
+        {
+          "name": "channel_id",
+          "type": "BytesN<32>"
+        },
+        {
+          "name": "caller",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "init_dispute_config",
+      "doc": "One-time setup of the adjudication parameters. Until this is called the contract uses `DISPUTE_WINDOW_LEDGERS` and `DEFAULT_FRAUD_BOUNTY_BPS`.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "dispute_window_ledgers",
+          "type": "u32"
+        },
+        {
+          "name": "fraud_bounty_bps",
+          "type": "u32"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "update_dispute_config",
+      "doc": "Admin-only update of the adjudication parameters. Disputes that are already open keep the window and bounty they were opened with.",
+      "inputs": [
+        {
+          "name": "dispute_window_ledgers",
+          "type": "u32"
+        },
+        {
+          "name": "fraud_bounty_bps",
+          "type": "u32"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "get_dispute_config",
+      "doc": "Invokes `get_dispute_config` on state-channel.",
+      "inputs": [],
+      "output": "DisputeParams"
+    },
+    {
+      "name": "register_signing_key",
+      "doc": "Register the Ed25519 key `party` signs channel states with. Each key can be set once, before any dispute is opened, so a party cannot swap keys to repudiate states it already signed.",
+      "inputs": [
+        {
+          "name": "channel_id",
+          "type": "BytesN<32>"
+        },
+        {
+          "name": "party",
+          "type": "Address"
+        },
+        {
+          "name": "public_key",
+          "type": "BytesN<32>"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "get_signing_keys",
+      "doc": "Invokes `get_signing_keys` on state-channel.",
+      "inputs": [
+        {
+          "name": "channel_id",
+          "type": "BytesN<32>"
+        }
+      ],
+      "output": "SignerKeys"
+    },
+    {
+      "name": "get_dispute",
+      "doc": "Invokes `get_dispute` on state-channel.",
+      "inputs": [
+        {
+          "name": "channel_id",
+          "type": "BytesN<32>"
+        }
+      ],
+      "output": "Dispute"
+    },
+    {
+      "name": "open_dispute",
+      "doc": "(1) Open a dispute with the latest state `caller` holds.  `signatures` must be `[sig_a, sig_b]` over the state and is batch-verified against the registered keys. The state's balances are deliberately *not* checked here (optimistic adjudication): an invalid state can be disproven by anyone through `submit_fraud_proof`, and `resolve_dispute` never settles at an invalid state.",
+      "inputs": [
+        {
+          "name": "channel_id",
+          "type": "BytesN<32>"
+        },
+        {
+          "name": "latest_state",
+          "type": "StateUpdate"
+        },
+        {
+          "name": "signatures",
+          "type": "Vec<BytesN<64>>"
+        },
+        {
+          "name": "caller",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "counter_dispute",
+      "doc": "(2) The counter-party answers an open dispute with a newer state.  Only accepted within the dispute window and only if `newer_state` has a strictly higher sequence than every submission not yet proven fraudulent.",
+      "inputs": [
+        {
+          "name": "channel_id",
+          "type": "BytesN<32>"
+        },
+        {
+          "name": "newer_state",
+          "type": "StateUpdate"
+        },
+        {
+          "name": "signatures",
+          "type": "Vec<BytesN<64>>"
+        },
+        {
+          "name": "caller",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "submit_fraud_proof",
+      "doc": "Fraud proof: anyone other than the submitter can show that a submitted state is provably invalid and earn `fraud_bounty_bps` of the submitter's deposit. The disproven state is excluded from settlement.  The bounty is capped at what remains of the submitter's deposit, and is accounted for at settlement, so it can never be paid from the counter-party's funds or from other channels.",
+      "inputs": [
+        {
+          "name": "channel_id",
+          "type": "BytesN<32>"
+        },
+        {
+          "name": "invalid_state",
+          "type": "StateUpdate"
+        },
+        {
+          "name": "proof",
+          "type": "FraudProof"
+        },
+        {
+          "name": "prover",
+          "type": "Address"
+        }
+      ],
+      "output": "i128"
+    },
+    {
+      "name": "resolve_dispute",
+      "doc": "(3) After the dispute window, close the channel and settle at the highest-sequence valid submission. If no valid submission exists the original deposits are returned. Fraud bounties already paid are deducted from the fraudulent party's share. Permissionless.",
+      "inputs": [
+        {
+          "name": "channel_id",
+          "type": "BytesN<32>"
+        }
+      ],
+      "output": "(i128, i128)"
+    },
+    {
+      "name": "get_channel",
+      "doc": "Get channel info",
+      "inputs": [
+        {
+          "name": "channel_id",
+          "type": "BytesN<32>"
+        }
+      ],
+      "output": "Channel"
+    }
+  ]
+}

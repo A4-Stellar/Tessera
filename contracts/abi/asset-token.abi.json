@@ -1,0 +1,423 @@
+{
+  "contract": "asset-token",
+  "moduleDoc": "Asset-token contract — good-faith reconstruction of the deployed testnet\r\nIncludes issue #40: Automated Share Buyback & Capital Reduction module\r\n(`buyback.rs`).\r\ncontract at `CBMCWLSQSWUTLUJFCNBHNBSXMUM3XU7NAQ5TSNERW4HA4ZZBYHLG4ECZ`,\r\nbuilt from `docs/app/docs/contracts/asset-token/page.mdx` and\r\ncross-checked against the `RawMetadata` shape `api/src/indexer/mod.rs`\r\nalready decodes from that live contract. See the repository root\r\n`contracts/` entry in the pull request description for the full\r\nreconstruction caveat.",
+  "generated_at": "2026-11-23T12:28:42.977Z",
+  "methods": [
+    {
+      "name": "initialize",
+      "doc": "Invokes `initialize` on asset-token.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "name",
+          "type": "String"
+        },
+        {
+          "name": "symbol",
+          "type": "String"
+        },
+        {
+          "name": "asset_type",
+          "type": "String"
+        },
+        {
+          "name": "total_supply",
+          "type": "i128"
+        },
+        {
+          "name": "decimals",
+          "type": "u32"
+        },
+        {
+          "name": "compliance_contract",
+          "type": "Address"
+        },
+        {
+          "name": "asset_description",
+          "type": "String"
+        },
+        {
+          "name": "valuation",
+          "type": "i128"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "transfer",
+      "doc": "Invokes `transfer` on asset-token.",
+      "inputs": [
+        {
+          "name": "from",
+          "type": "Address"
+        },
+        {
+          "name": "to",
+          "type": "Address"
+        },
+        {
+          "name": "amount",
+          "type": "i128"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "permit",
+      "doc": "Invokes `permit` on asset-token.",
+      "inputs": [
+        {
+          "name": "owner",
+          "type": "Address"
+        },
+        {
+          "name": "spender",
+          "type": "Address"
+        },
+        {
+          "name": "amount",
+          "type": "i128"
+        },
+        {
+          "name": "deadline_ledger",
+          "type": "u32"
+        },
+        {
+          "name": "signature",
+          "type": "BytesN<64>"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "allowance",
+      "doc": "Invokes `allowance` on asset-token.",
+      "inputs": [
+        {
+          "name": "owner",
+          "type": "Address"
+        },
+        {
+          "name": "spender",
+          "type": "Address"
+        }
+      ],
+      "output": "i128"
+    },
+    {
+      "name": "approve",
+      "doc": "Invokes `approve` on asset-token.",
+      "inputs": [
+        {
+          "name": "owner",
+          "type": "Address"
+        },
+        {
+          "name": "spender",
+          "type": "Address"
+        },
+        {
+          "name": "amount",
+          "type": "i128"
+        },
+        {
+          "name": "expiration_ledger",
+          "type": "u32"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "transfer_from",
+      "doc": "Invokes `transfer_from` on asset-token.",
+      "inputs": [
+        {
+          "name": "spender",
+          "type": "Address"
+        },
+        {
+          "name": "from",
+          "type": "Address"
+        },
+        {
+          "name": "to",
+          "type": "Address"
+        },
+        {
+          "name": "amount",
+          "type": "i128"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "mint",
+      "doc": "Invokes `mint` on asset-token.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "to",
+          "type": "Address"
+        },
+        {
+          "name": "amount",
+          "type": "i128"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "burn",
+      "doc": "Invokes `burn` on asset-token.",
+      "inputs": [
+        {
+          "name": "from",
+          "type": "Address"
+        },
+        {
+          "name": "amount",
+          "type": "i128"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "balance",
+      "doc": "Invokes `balance` on asset-token.",
+      "inputs": [
+        {
+          "name": "id",
+          "type": "Address"
+        }
+      ],
+      "output": "i128"
+    },
+    {
+      "name": "execute_share_split",
+      "doc": "Issue #90 - execute a forward (`num > den`) or reverse (`num < den`) split. Balances settle lazily; supply is the sum of individually rounded balances, scanning holders and pending history. Admin-authenticated.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "ratio_numerator",
+          "type": "u32"
+        },
+        {
+          "name": "ratio_denominator",
+          "type": "u32"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "set_liquidation_stablecoin",
+      "doc": "Configure the stablecoin used for liquidation proceeds.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "stablecoin",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "deposit_liquidation_proceeds",
+      "doc": "Deposit the cash proceeds from an asset sale and permanently close the secondary market. The stablecoin must already have been transferred to this contract by the administrator.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "stablecoin_amount",
+          "type": "i128"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "redeem_liquidation_proceeds",
+      "doc": "Burn asset tokens and pay the holder's pro-rata share of the deposited proceeds. Transfers and minting are disabled after liquidation.",
+      "inputs": [
+        {
+          "name": "holder",
+          "type": "Address"
+        },
+        {
+          "name": "token_amount",
+          "type": "i128"
+        }
+      ],
+      "output": "i128"
+    },
+    {
+      "name": "status",
+      "doc": "Invokes `status` on asset-token.",
+      "inputs": [],
+      "output": "AssetStatus"
+    },
+    {
+      "name": "split_multiplier",
+      "doc": "Issue #90 - cumulative split multiplier as `(numerator, denominator)`.",
+      "inputs": [],
+      "output": "(u128, u128)"
+    },
+    {
+      "name": "split_count",
+      "doc": "Issue #90 - number of splits executed so far.",
+      "inputs": [],
+      "output": "u32"
+    },
+    {
+      "name": "total_supply",
+      "doc": "Invokes `total_supply` on asset-token.",
+      "inputs": [],
+      "output": "i128"
+    },
+    {
+      "name": "pause",
+      "doc": "Invokes `pause` on asset-token.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "unpause",
+      "doc": "Invokes `unpause` on asset-token.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "update_valuation",
+      "doc": "Invokes `update_valuation` on asset-token.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "new_valuation",
+          "type": "i128"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "set_compliance",
+      "doc": "Invokes `set_compliance` on asset-token.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "compliance",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "set_lockup",
+      "doc": "Issue #10 — set (or clear, with `unlock_ledger = 0`) the holding-period lockup for `holder`. Admin-authenticated. Used both to impose a regulatory-exemption holding period (e.g. a 12-month lockup) and, by setting `unlock_ledger` back to `0` or to an earlier ledger, to grant a partial/early release under a court order or approved exemption. Does not affect `mint` or `initialize`.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "holder",
+          "type": "Address"
+        },
+        {
+          "name": "unlock_ledger",
+          "type": "u32"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "get_lockup",
+      "doc": "The ledger sequence at/after which `holder` may transfer or burn. `0` means no lockup is in effect.",
+      "inputs": [
+        {
+          "name": "holder",
+          "type": "Address"
+        }
+      ],
+      "output": "u32"
+    },
+    {
+      "name": "get_metadata",
+      "doc": "Invokes `get_metadata` on asset-token.",
+      "inputs": [],
+      "output": "AssetMetadata"
+    },
+    {
+      "name": "version",
+      "doc": "Current contract ABI version, polled by the off-chain indexer.",
+      "inputs": [
+        {
+          "name": "_env",
+          "type": "Env"
+        }
+      ],
+      "output": "u64"
+    },
+    {
+      "name": "clawback",
+      "doc": "Issue #12 — on-chain clawback engine.  Deliberately implemented as a standalone path, NOT on top of `transfer`: a clawback is an admin-only, legally-authorized recovery mechanism (court order, lost-key recovery, regulatory enforcement) that must be able to succeed precisely when the holder cannot or will not cooperate — for example, their address has since been suspended in compliance, or they refuse to sign. Routing this through `transfer` would force it through `from.require_auth()` and the sender-compliance check, which are exactly the two things a clawback needs to bypass. It still validates the source balance (reusing `Error::InsufficientBalance`, since the failure mode is identical to a transfer's — see the PR description for why a new error code was not added here), and emits a dedicated `clawback` event so the recovery is fully auditable on-chain. Total supply is unchanged: recovered units are credited to the administrator so every unit of supply remains backed by an account balance.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "from",
+          "type": "Address"
+        },
+        {
+          "name": "amount",
+          "type": "i128"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "upgrade",
+      "doc": "Issue #11 — migrate this contract to a new WASM build without losing storage. Reuses `Error::Unauthorized` (3), already the admin-mismatch error for every other admin-gated call on this contract; no new error code is needed.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "new_wasm_hash",
+          "type": "BytesN<32>"
+        }
+      ],
+      "output": "()"
+    }
+  ]
+}

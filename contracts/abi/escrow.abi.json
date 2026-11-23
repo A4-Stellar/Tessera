@@ -1,0 +1,117 @@
+{
+  "contract": "escrow",
+  "moduleDoc": "Issue #86 - multi-party threshold escrow (buyer / seller / inspector) with\r\nledger-window timeouts.\r\n\nFlow: the buyer funds the escrow in `create_escrow`. Each party calls\r\n`approve_release`; once `threshold` distinct approvals are recorded AND the\r\ninspector has approved, the funds are paid to the seller. If the inspector\r\nhas not approved by `inspection_deadline` (current ledger + a configurable\r\nwindow), anyone may call `refund` and the funds return to the buyer.\r\nBuyer or seller may `raise_dispute`, which freezes release; the inspector\r\nsettles it with `resolve_dispute`, and if nobody does within\r\n`dispute_window` ledgers `refund` returns the funds to the buyer.",
+  "generated_at": "2026-11-23T12:28:43.000Z",
+  "methods": [
+    {
+      "name": "create_escrow",
+      "doc": "Create and fund an escrow. `inspection_window` and `dispute_window` are ledger counts. Returns the escrow id.",
+      "inputs": [
+        {
+          "name": "buyer",
+          "type": "Address"
+        },
+        {
+          "name": "seller",
+          "type": "Address"
+        },
+        {
+          "name": "inspector",
+          "type": "Address"
+        },
+        {
+          "name": "token",
+          "type": "Address"
+        },
+        {
+          "name": "amount",
+          "type": "i128"
+        },
+        {
+          "name": "threshold",
+          "type": "u32"
+        },
+        {
+          "name": "inspection_window",
+          "type": "u32"
+        },
+        {
+          "name": "dispute_window",
+          "type": "u32"
+        }
+      ],
+      "output": "u32"
+    },
+    {
+      "name": "approve_release",
+      "doc": "Record `signer`'s approval; releases to the seller when the threshold is met and the inspector has signed. After the inspection deadline no further approvals are accepted unless the inspector already approved.",
+      "inputs": [
+        {
+          "name": "id",
+          "type": "u32"
+        },
+        {
+          "name": "signer",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "raise_dispute",
+      "doc": "Buyer or seller freezes release and starts the dispute window.",
+      "inputs": [
+        {
+          "name": "id",
+          "type": "u32"
+        },
+        {
+          "name": "party",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "resolve_dispute",
+      "doc": "Inspector settles a dispute (before the dispute window lapses).",
+      "inputs": [
+        {
+          "name": "id",
+          "type": "u32"
+        },
+        {
+          "name": "inspector",
+          "type": "Address"
+        },
+        {
+          "name": "release_to_seller",
+          "type": "bool"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "refund",
+      "doc": "Return funds to the buyer. Permissionless, but only valid once a deadline has lapsed: the inspection deadline with no inspector approval, or the dispute deadline of an unresolved dispute.",
+      "inputs": [
+        {
+          "name": "id",
+          "type": "u32"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "get_escrow",
+      "doc": "Invokes `get_escrow` on escrow.",
+      "inputs": [
+        {
+          "name": "id",
+          "type": "u32"
+        }
+      ],
+      "output": "Escrow"
+    }
+  ]
+}

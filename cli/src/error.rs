@@ -31,6 +31,7 @@ pub enum CliError {
     },
     Prompt(String),
     Template(String),
+    Dev(String),
 }
 
 impl Display for CliError {
@@ -73,6 +74,7 @@ impl Display for CliError {
             }
             Self::Prompt(message) => write!(formatter, "interactive prompt failed: {message}"),
             Self::Template(message) => write!(formatter, "template error: {message}"),
+            Self::Dev(message) => write!(formatter, "dev environment error: {message}"),
         }
     }
 }

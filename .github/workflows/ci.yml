@@ -137,6 +137,49 @@ jobs:
       - name: Build Release Artifact
         run: cargo build --release
 
+  contracts-upgrade-check:
+    name: Contract Upgrade & Storage Migration Check
+    needs: changes
+    if: ${{ needs.changes.outputs.rust == 'true' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Verify Storage Compatibility & Upgrade Tests
+        run: node scripts/check-upgrade-tests.cjs
+
+  contracts-mutation-testing:
+    name: Soroban Mutation Testing (cargo-mutants)
+    needs: changes
+    if: ${{ needs.changes.outputs.rust == 'true' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Measure Mutation Score & Generate PR Report
+        run: node scripts/run-mutation-tests.cjs
+
+  abi-sdk-type-sync-check:
+    name: Contract ABI & SDK Type Sync Check (Issue #451 / #68)
+    needs: changes
+    if: ${{ needs.changes.outputs.rust == 'true' || needs.changes.outputs.docs == 'true' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Generate Contract ABIs and Rust Bindings
+        run: node scripts/generate-abi.cjs
+      - name: Generate SDK Types (TypeScript, Python, Go)
+        run: node docs/scripts/generate-sdk-examples.mjs
+      - name: Verify No Uncommitted Generated Type Changes
+        run: git diff --exit-code contracts/abi/ contracts/common/src/abi.rs sdk/tests/generated/
+
   # ===========================================================================
   # DOCS & FRONTEND PIPELINE (Next.js 16 / TypeScript / MDX)
   # Uses actions/cache for Next.js .next/cache and actions/setup-node npm cache

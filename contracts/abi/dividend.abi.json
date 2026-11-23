@@ -1,0 +1,337 @@
+{
+  "contract": "dividend",
+  "moduleDoc": "Dividend contract — good-faith reconstruction of the deployed testnet\r\ncontract at `CAR4XY3CEBQWFOL27JEWFW34KXSIZA7RFKDQMEIV7ZU723RWY37I2SYX`,\r\nbuilt from `docs/app/docs/contracts/dividend/page.mdx` and cross-checked\r\nagainst the `RawDistribution` shape `api/src/indexer/mod.rs` already\r\ndecodes from that live contract. See the repository root `contracts/`\r\nentry in the pull request description for the full reconstruction\r\ncaveat.\r\n\nCross-contract calls to the asset-token and payment-token contracts use\r\n`Env::invoke_contract` directly (rather than a generated client from\r\n`contractimport!`) since this repository never shipped compiled `.wasm`\r\nfor the real, already-deployed contracts to import against.",
+  "generated_at": "2026-11-23T12:28:42.998Z",
+  "methods": [
+    {
+      "name": "initialize",
+      "doc": "Invokes `initialize` on dividend.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "create_distribution",
+      "doc": "Invokes `create_distribution` on dividend.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "asset_token",
+          "type": "Address"
+        },
+        {
+          "name": "payment_token",
+          "type": "Address"
+        },
+        {
+          "name": "total_amount",
+          "type": "i128"
+        }
+      ],
+      "output": "u64"
+    },
+    {
+      "name": "claimable",
+      "doc": "Invokes `claimable` on dividend.",
+      "inputs": [
+        {
+          "name": "distribution_id",
+          "type": "u64"
+        },
+        {
+          "name": "holder",
+          "type": "Address"
+        }
+      ],
+      "output": "i128"
+    },
+    {
+      "name": "claim_legacy",
+      "doc": "Legacy live-balance claim, retained so existing holders and fuzz targets keep working alongside the new Merkle path.",
+      "inputs": [
+        {
+          "name": "distribution_id",
+          "type": "u64"
+        },
+        {
+          "name": "holder",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "claim",
+      "doc": "Pull-based Merkle claim. The proof authorizes the committed payee, so no `holder.require_auth()` is needed. `leaf_index` selects both the claim bitmap slot and the left/right sibling ordering.",
+      "inputs": [
+        {
+          "name": "proof",
+          "type": "ClaimProof"
+        },
+        {
+          "name": "leaf_index",
+          "type": "u32"
+        }
+      ],
+      "output": "i128"
+    },
+    {
+      "name": "set_root",
+      "doc": "Commit (or rotate) the Merkle root for a distribution. The prior root remains claimable until `valid_until`, so pending proofs are not invalidated by a rotation.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "distribution_id",
+          "type": "u64"
+        },
+        {
+          "name": "root",
+          "type": "BytesN<32>"
+        },
+        {
+          "name": "leaf_count",
+          "type": "u32"
+        },
+        {
+          "name": "valid_until",
+          "type": "u32"
+        },
+        {
+          "name": "total_entitlement",
+          "type": "i128"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "rotate_root",
+      "doc": "Invokes `rotate_root` on dividend.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "distribution_id",
+          "type": "u64"
+        },
+        {
+          "name": "root",
+          "type": "BytesN<32>"
+        },
+        {
+          "name": "leaf_count",
+          "type": "u32"
+        },
+        {
+          "name": "valid_until",
+          "type": "u32"
+        },
+        {
+          "name": "total_entitlement",
+          "type": "i128"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "get_root",
+      "doc": "Invokes `get_root` on dividend.",
+      "inputs": [],
+      "output": "BytesN<32>"
+    },
+    {
+      "name": "get_root_meta",
+      "doc": "Invokes `get_root_meta` on dividend.",
+      "inputs": [
+        {
+          "name": "slot",
+          "type": "RootSlot"
+        }
+      ],
+      "output": "Option<RootMeta>"
+    },
+    {
+      "name": "sync_root_cache",
+      "doc": "Invokes `sync_root_cache` on dividend.",
+      "inputs": [],
+      "output": "()"
+    },
+    {
+      "name": "get_root_cache",
+      "doc": "Invokes `get_root_cache` on dividend.",
+      "inputs": [],
+      "output": "BytesN<32>"
+    },
+    {
+      "name": "merkle_claimed",
+      "doc": "Invokes `merkle_claimed` on dividend.",
+      "inputs": [
+        {
+          "name": "distribution_id",
+          "type": "u64"
+        },
+        {
+          "name": "holder",
+          "type": "Address"
+        }
+      ],
+      "output": "bool"
+    },
+    {
+      "name": "merkle_paid",
+      "doc": "Invokes `merkle_paid` on dividend.",
+      "inputs": [
+        {
+          "name": "distribution_id",
+          "type": "u64"
+        },
+        {
+          "name": "holder",
+          "type": "Address"
+        }
+      ],
+      "output": "i128"
+    },
+    {
+      "name": "set_drip_preference",
+      "doc": "Opt in or out of receiving dividend claims as an AMM purchase of the distribution's asset token. The preference is shared by all claims.",
+      "inputs": [
+        {
+          "name": "holder",
+          "type": "Address"
+        },
+        {
+          "name": "enabled",
+          "type": "bool"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "get_drip_preference",
+      "doc": "Invokes `get_drip_preference` on dividend.",
+      "inputs": [
+        {
+          "name": "holder",
+          "type": "Address"
+        }
+      ],
+      "output": "bool"
+    },
+    {
+      "name": "configure_drip",
+      "doc": "Configure the router and cap-table ledger used by opted-in legacy claims. The cap-table must separately authorize this contract as a registrar.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "amm",
+          "type": "Address"
+        },
+        {
+          "name": "cap_table",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "get_distribution",
+      "doc": "Invokes `get_distribution` on dividend.",
+      "inputs": [
+        {
+          "name": "id",
+          "type": "u64"
+        }
+      ],
+      "output": "Distribution"
+    },
+    {
+      "name": "get_distributions_for_asset",
+      "doc": "Invokes `get_distributions_for_asset` on dividend.",
+      "inputs": [
+        {
+          "name": "asset_token",
+          "type": "Address"
+        }
+      ],
+      "output": "Vec<Distribution>"
+    },
+    {
+      "name": "has_claimed",
+      "doc": "Invokes `has_claimed` on dividend.",
+      "inputs": [
+        {
+          "name": "id",
+          "type": "u64"
+        },
+        {
+          "name": "holder",
+          "type": "Address"
+        }
+      ],
+      "output": "bool"
+    },
+    {
+      "name": "version",
+      "doc": "Current contract ABI version, polled by the off-chain indexer.",
+      "inputs": [
+        {
+          "name": "_env",
+          "type": "Env"
+        }
+      ],
+      "output": "u64"
+    },
+    {
+      "name": "pause",
+      "doc": "Invokes `pause` on dividend.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "unpause",
+      "doc": "Invokes `unpause` on dividend.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "upgrade",
+      "doc": "Invokes `upgrade` on dividend.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "new_wasm_hash",
+          "type": "BytesN<32>"
+        }
+      ],
+      "output": "()"
+    }
+  ]
+}
