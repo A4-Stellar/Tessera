@@ -12,6 +12,9 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
     defaults:
       run:
         working-directory: docs
@@ -27,4 +30,25 @@ jobs:
       - run: npm run check:mdx-types
       - run: npm run check:component-docs
       - run: npm run check:mdx-links
+      - name: Run i18n translation & glossary quality checks
+        run: node scripts/translate-docs.mjs --check --report-markdown translation-quality-report.md
+      - name: Post translation quality metrics as PR comment
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require("node:fs");
+            const reportPath = "docs/translation-quality-report.md";
+            if (!fs.existsSync(reportPath)) return;
+            const marker = "<!-- tessera-i18n-quality-report -->";
+            const body = `${marker}\n${fs.readFileSync(reportPath, "utf8")}`;
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const { data: comments } = await github.rest.issues.listComments({ owner, repo, issue_number });
+            const existing = comments.find((c) => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
       - run: npm run build

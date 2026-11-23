@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { getLocaleDirection, isRtlLocale, LOCALES } from "@/lib/i18n";
 
 const core = require("../scripts/lib/mdx-translation.cjs");
 
@@ -73,6 +74,76 @@ describe("translateDocument", () => {
     expect(sent.join("\n")).not.toMatch(/Tessera|Stellar|transfer\(\)|pub fn|\/docs\//);
 
     expect(core.validateParity(SOURCE, translated)).toEqual([]);
+  });
+
+  it("freezes {/* i18n-freeze */} blocks and automatically protects Stellar contract and account addresses", async () => {
+    const contractAddr = "CBMCWLSQSWUTLUJFCNBHNBSXMUM3XU7NAQ5TSNERW4HA4ZZBYHLG4ECZ";
+    const accountAddr = "GAIQGTOBTTLLDJ4SWGGESM7UWJ2DI4K3ZNHUSHPDKJL2IE5FKY3BSRAA";
+    const frozenSource = `# Deployment
+
+Deploy to contract ${contractAddr} owned by ${accountAddr}.
+
+{/* i18n-freeze */}
+| Contract | Address |
+| --- | --- |
+| asset-token | ${contractAddr} |
+{/* /i18n-freeze */}
+
+Inline {/* i18n-freeze */}do not translate this span{/* /i18n-freeze */} end.
+`;
+
+    const sent: string[] = [];
+    const translated: string = await core.translateDocument(frozenSource, {
+      locale: "es",
+      translateBatch: async (templates: string[]) => {
+        sent.push(...templates);
+        return shout(templates);
+      },
+    });
+
+    expect(translated).toContain("# DEPLOYMENT");
+    expect(translated).toContain(`DEPLOY TO CONTRACT ${contractAddr} OWNED BY ${accountAddr}.`);
+    expect(translated).toContain("| asset-token | CBMCWLSQSWUTLUJFCNBHNBSXMUM3XU7NAQ5TSNERW4HA4ZZBYHLG4ECZ |");
+    expect(translated).toContain("{/* i18n-freeze */}do not translate this span{/* /i18n-freeze */}");
+    expect(sent.join("\n")).not.toContain(contractAddr);
+    expect(sent.join("\n")).not.toContain(accountAddr);
+    expect(sent.join("\n")).not.toContain("do not translate this span");
+    expect(core.validateParity(frozenSource, translated)).toEqual([]);
+
+    const tamperedAddr = translated.replace(
+      contractAddr,
+      "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4"
+    );
+    expect(core.validateParity(frozenSource, tamperedAddr).join("\n")).toMatch(/Contract addresses differ/);
+  });
+
+  it("caches segments in translation_memory.json keyed by SHA-256 content hash", async () => {
+    const tm = core.createTranslationMemory();
+    const providerSpy = jest.fn(async (templates: string[]) => shout(templates));
+
+    const first = await core.translateDocument(SOURCE, {
+      locale: "fr",
+      translateBatch: providerSpy,
+      translationMemory: tm,
+    });
+
+    expect(providerSpy).toHaveBeenCalledTimes(1);
+    const entryKeys = Object.keys(tm.entries);
+    expect(entryKeys.length).toBeGreaterThan(0);
+    for (const key of entryKeys) {
+      expect(key).toMatch(/^[0-9a-f]{64}$/);
+      expect(tm.entries[key].translations.fr).toBeDefined();
+    }
+
+    // Second run with the same source and locale hits SHA-256 translation memory without calling the API
+    providerSpy.mockClear();
+    const second = await core.translateDocument(SOURCE, {
+      locale: "fr",
+      translateBatch: providerSpy,
+      translationMemory: tm,
+    });
+    expect(providerSpy).not.toHaveBeenCalled();
+    expect(second).toBe(first);
   });
 
   it("rejects provider output that drops or duplicates a placeholder", async () => {
@@ -163,12 +234,56 @@ describe("provenance and routing", () => {
     expect(page).toContain("const PAGES = { en, es, ja }");
     expect(page).toContain("return PAGES[lang] ?? PAGES.en;");
   });
+
+  it("supports ES, FR, ZH, JA and AR (RTL) locales", () => {
+    for (const loc of ["en", "es", "fr", "zh", "ja", "ar"]) {
+      expect(LOCALES).toContain(loc);
+    }
+    expect(isRtlLocale("ar")).toBe(true);
+    expect(getLocaleDirection("ar")).toBe("rtl");
+    expect(isRtlLocale("es")).toBe(false);
+    expect(getLocaleDirection("zh")).toBe("ltr");
+    expect(core.getLocaleDirection("ar")).toBe("rtl");
+    expect(core.getLocaleDirection("ja")).toBe("ltr");
+  });
 });
 
 describe("providers", () => {
   it("pseudo-translates deterministically and keeps Markdown markers first", async () => {
     const translate = core.createProvider({ name: "pseudo" });
     expect(await translate(["## Hello ⟦0⟧ world", "- item"], "es")).toEqual(["## [es] Héllö ⟦0⟧ wörld", "- [es] ítém"]);
+  });
+
+  it("calls the Gemini generateContent API and parses the JSON array", async () => {
+    const fetchImpl = jest.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        candidates: [
+          {
+            content: {
+              parts: [{ text: '["مرحبا ⟦0⟧"]' }],
+            },
+          },
+        ],
+      }),
+      text: async () => "",
+    }));
+    const translate = core.createProvider({
+      name: "gemini",
+      model: "gemini-2.0-flash",
+      apiKey: "gemini-test-key",
+      fetchImpl,
+    });
+
+    expect(await translate(["Hello ⟦0⟧"], "ar")).toEqual(["مرحبا ⟦0⟧"]);
+    const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, { headers: Record<string, string>; body: string }];
+    expect(url).toBe(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=gemini-test-key"
+    );
+    const body = JSON.parse(init.body);
+    expect(body.systemInstruction.parts[0].text).toContain("Arabic (ar)");
+    expect(JSON.parse(body.contents[0].parts[0].text)).toEqual(["Hello ⟦0⟧"]);
   });
 
   it("calls the Anthropic Messages API and parses the JSON array", async () => {
@@ -216,6 +331,107 @@ describe("providers", () => {
     expect(() => core.parseJsonArray("[1, 2]")).toThrow(/array of strings/);
     expect(() => core.createProvider({ name: "anthropic", model: "m" })).toThrow(/API key/);
     expect(() => core.createProvider({ name: "other", apiKey: "k" })).toThrow(/Unknown provider/);
+  });
+});
+
+describe("consistency checker, glossary validator, quality metrics, and MDX linter", () => {
+  it("flags inconsistent translations of the same English term across files for the same locale", () => {
+    const docs = [
+      {
+        route: "getting-started",
+        locale: "es",
+        source: "# Prerequisites\n\nOnly addresses on an **allowlist** may hold the token.\n",
+        translated: "# Requisitos previos\n\nSolo las direcciones en una **lista blanca** pueden poseer el token.\n",
+      },
+      {
+        route: "compliance-guide",
+        locale: "es",
+        source: "# Prerequisites\n\nOnly addresses on an **allowlist** may hold the token.\n",
+        translated: "# Prerrequisitos\n\nSolo las direcciones en una **lista permitida** pueden poseer el token.\n",
+      },
+    ];
+
+    const issues = core.checkTerminologyConsistency(docs);
+    expect(issues.length).toBeGreaterThanOrEqual(2);
+    expect(issues.map((i: { englishTerm: string }) => i.englishTerm)).toEqual(
+      expect.arrayContaining(["Prerequisites", "allowlist"])
+    );
+  });
+
+  it("auto-validates translation-glossary.json and fails on unknown technical terms", () => {
+    const validResult = core.validateGlossary(
+      { terms: ["Merkle", "stroops"] },
+      [{ route: "getting-started", source: "The **Tessera** SDK uses Soroban XDR and Merkle trees.\n" }]
+    );
+    expect(validResult.valid).toBe(true);
+    expect(validResult.errors).toEqual([]);
+
+    const invalidResult = core.validateGlossary(
+      { terms: ["Merkle"] },
+      [{ route: "architecture", source: "The contract verifies ZKSTARK proofs over QUIC.\n" }]
+    );
+    expect(invalidResult.valid).toBe(false);
+    expect(invalidResult.unknownTerms).toEqual(["QUIC", "ZKSTARK"]);
+    expect(invalidResult.errors.join("\n")).toContain('Unknown technical term "ZKSTARK"');
+  });
+
+  it("computes BLEU-4 score, terminology coverage, and Markdown quality reports", () => {
+    const ref = "The Tessera toolkit tokenizes real-world assets on Stellar with Soroban smart contracts.";
+    expect(core.computeBleuScore(ref, ref)).toBeCloseTo(1, 3);
+    expect(
+      core.computeBleuScore(
+        ref,
+        "The Tessera platform tokenizes real-world assets on Stellar using Soroban contracts."
+      )
+    ).toBeGreaterThan(0.35);
+
+    const covFull = core.computeTerminologyCoverage(
+      "Tessera uses Stellar and Soroban.",
+      "Tessera utiliza Stellar y Soroban."
+    );
+    expect(covFull.coverage).toBe(1);
+    expect(covFull.missing).toEqual([]);
+
+    const covPartial = core.computeTerminologyCoverage(
+      "Tessera uses Stellar and Soroban.",
+      "Tessera utiliza Stellar."
+    );
+    expect(covPartial.coverage).toBeCloseTo(2 / 3, 3);
+    expect(covPartial.missing).toEqual(["Soroban"]);
+
+    const report = core.generateQualityReport([
+      {
+        route: "getting-started",
+        locale: "ar",
+        source: ref,
+        translated: ref,
+      },
+    ]);
+    expect(report.summary.allPassed).toBe(true);
+    expect(report.files[0].direction).toBe("rtl");
+    expect(report.markdown).toContain("MDX i18n Translation Quality Report");
+    expect(report.markdown).toContain("`getting-started`");
+    expect(report.markdown).toContain("`rtl`");
+  });
+
+  it("lints translated MDX for broken links and invalid code blocks", () => {
+    const cleanSource = "# Guide\n\nSee [Overview](/docs/api/overview).\n\n```json\n{\"ok\": true}\n```\n";
+    expect(core.lintTranslatedMdx(cleanSource, cleanSource).valid).toBe(true);
+
+    const brokenJson = "# Guide\n\nSee [Overview](/docs/api/overview).\n\n```json\n{\"ok\": }\n```\n";
+    const jsonLint = core.lintTranslatedMdx(cleanSource, brokenJson);
+    expect(jsonLint.valid).toBe(false);
+    expect(jsonLint.errors.join("\n")).toMatch(/Invalid JSON in code block/);
+
+    const unclosedFence = "# Guide\n\n```ts\nconst x = 1;\n";
+    const fenceLint = core.lintTranslatedMdx(cleanSource, unclosedFence);
+    expect(fenceLint.valid).toBe(false);
+    expect(fenceLint.errors.join("\n")).toMatch(/Unclosed fenced code block/);
+
+    const emptyLink = "# Guide\n\nSee [Overview]().\n";
+    const linkLint = core.lintTranslatedMdx(cleanSource, emptyLink);
+    expect(linkLint.valid).toBe(false);
+    expect(linkLint.errors.join("\n")).toMatch(/Empty link target/);
   });
 });
 

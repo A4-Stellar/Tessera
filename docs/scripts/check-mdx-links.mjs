@@ -28,7 +28,7 @@ const concurrencyArg = Number(args.find((a) => a.startsWith("--concurrency="))?.
 const DOCS_ROOT = resolve(rootArg ?? fileURLToPath(new URL("..", import.meta.url)));
 const TIMEOUT_MS = Number.isFinite(timeoutArg) && timeoutArg > 0 ? timeoutArg : 10000;
 const CONCURRENCY = Number.isFinite(concurrencyArg) && concurrencyArg > 0 ? concurrencyArg : 10;
-const LOCALES = ["en", "es", "fr", "ja", "pt"];
+const LOCALES = ["en", "es", "fr", "zh", "ja", "ar", "pt"];
 
 const SKIP_DIRS = new Set(["node_modules", ".next", ".git", "public"]);
 
