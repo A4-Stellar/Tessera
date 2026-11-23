@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { axe } from "jest-axe";
-import { WasmDisassembler } from "@/components/WasmDisassembler";
+import { registerWatLanguage, WasmDisassembler } from "@/components/WasmDisassembler";
+import { ContractMetadataPanel } from "@/components/ContractMetadataPanel";
 import { buildSorobanWasm } from "../fixtures/sorobanWasm";
 
 function upload(bytes: Uint8Array, fileName = "hello.wasm") {
@@ -37,6 +38,81 @@ describe("WasmDisassembler", () => {
 
     fireEvent.change(screen.getByLabelText(/search instructions/i), { target: { value: "i32.store" } });
     expect(await screen.findByText("No matching lines")).toBeInTheDocument();
+  });
+
+  it("toggles Monaco Editor WAT view and registers WAT Monarch syntax highlighting", async () => {
+    const register = jest.fn();
+    const setMonarchTokensProvider = jest.fn();
+    registerWatLanguage({
+      languages: {
+        getLanguages: () => [],
+        register,
+        setMonarchTokensProvider,
+      },
+    });
+    expect(register).toHaveBeenCalledWith({ id: "wat" });
+    expect(setMonarchTokensProvider).toHaveBeenCalledWith("wat", expect.objectContaining({ tokenPostfix: ".wat" }));
+
+    render(<WasmDisassembler />);
+    upload(buildSorobanWasm());
+
+    fireEvent.click(await screen.findByRole("button", { name: "WAT" }));
+    const monacoBtn = screen.getByRole("button", { name: /monaco editor/i });
+    expect(monacoBtn).toHaveAttribute("aria-pressed", "false");
+
+    fireEvent.click(monacoBtn);
+    expect(monacoBtn).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("wat-monaco-container")).toBeInTheDocument();
+  });
+
+  it("extracts and displays contractenvmeta details in ContractMetadataPanel", async () => {
+    const wasm = buildSorobanWasm({
+      envMetaJson: {
+        contract_name: "tessera_compliance_gate",
+        sdk_version: "25.3.2",
+        interface_hash: "0x9988776655443322",
+      },
+    });
+    const { container } = render(<ContractMetadataPanel wasmBytes={wasm} />);
+
+    expect(screen.getByText("tessera_compliance_gate")).toBeInTheDocument();
+    expect(screen.getByText("25.3.2")).toBeInTheDocument();
+    expect(screen.getByText("0x9988776655443322")).toBeInTheDocument();
+    expect(screen.getByText("protocol 25")).toBeInTheDocument();
+    expect(screen.getByText("1.98.0")).toBeInTheDocument();
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("offloads .wasm parsing to a Web Worker when Worker is available", async () => {
+    const postMessageSpy = jest.fn();
+    const terminateSpy = jest.fn();
+    const OriginalWorker = globalThis.Worker;
+
+    class MockWorker {
+      onmessage: ((event: MessageEvent) => void) | null = null;
+      onerror: ((event: ErrorEvent) => void) | null = null;
+      postMessage = (data: { id: number }) => {
+        postMessageSpy(data);
+        if (this.onmessage) {
+          this.onmessage({ data: { id: data.id, ack: true } } as MessageEvent);
+        }
+      };
+      terminate = terminateSpy;
+    }
+
+    globalThis.Worker = MockWorker as unknown as typeof Worker;
+    try {
+      render(<WasmDisassembler />);
+      upload(buildSorobanWasm(), "worker-contract.wasm");
+
+      expect(await screen.findByText("fn hello(to: Address) -> Vec<Symbol>")).toBeInTheDocument();
+      expect(postMessageSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "inspect", fileName: "worker-contract.wasm" })
+      );
+      expect(terminateSpy).toHaveBeenCalled();
+    } finally {
+      globalThis.Worker = OriginalWorker;
+    }
   });
 
   it("reports files that are not WebAssembly", async () => {

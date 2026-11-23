@@ -45,7 +45,7 @@ Source: `components/WasmSandbox.tsx` · available in every MDX page as `<WasmSan
       <td><code>{"height"}</code></td>
       <td><code>{"number"}</code></td>
       <td>No</td>
-      <td><code>{"560"}</code></td>
+      <td>—</td>
       <td>{"Height in pixels of the sandbox execution viewport."}</td>
     </tr>
     <tr>
@@ -54,6 +54,13 @@ Source: `components/WasmSandbox.tsx` · available in every MDX page as `<WasmSan
       <td>No</td>
       <td><code>{"\"\""}</code></td>
       <td>{"Extra CSS classes for the outer container."}</td>
+    </tr>
+    <tr>
+      <td><code>{"wasmBytes"}</code></td>
+      <td><code>{"Uint8Array<ArrayBufferLike>"}</code></td>
+      <td>No</td>
+      <td>—</td>
+      <td>{"Optional compiled "}<code>{".wasm"}</code>{" binary to instantiate and execute with mock Soroban host functions."}</td>
     </tr>
   </tbody>
 </table>

@@ -24,6 +24,10 @@ function customSection(sectionName: string, base64Xdr: string): number[] {
   return section(0, [...name(sectionName), ...Array.from(Buffer.from(base64Xdr, "base64"))]);
 }
 
+function customTextSection(sectionName: string, textPayload: string): number[] {
+  return section(0, [...name(sectionName), ...Array.from(encoder.encode(textPayload))]);
+}
+
 // XDR produced with @stellar/stellar-sdk (`ScSpecEntry`, `ScMetaEntry` and
 // `ScEnvMetaEntry` `.toXdr()`), stored pre-encoded so the fixture has no
 // runtime encoder dependency:
@@ -34,11 +38,17 @@ const SPEC_XDR = "AAAAAAAAABJHcmVldHMgYW4gYWRkcmVzcy4AAAAAAAVoZWxsbwAAAAAAAAEAAA
 const META_XDR = "AAAAAAAAAAVyc3ZlcgAAAAAAAAYxLjk4LjAAAA==";
 const ENV_META_XDR = "AAAAAAAAABkAAAAA";
 
+export interface BuildSorobanWasmOptions {
+  withSpec?: boolean;
+  budget?: Record<string, number>;
+  envMetaJson?: Record<string, string | number>;
+}
+
 /**
  * A minimal Soroban-shaped module: one host import (`v.g`), one exported
  * function `hello` that calls it, and the three Soroban custom sections.
  */
-export function buildSorobanWasm({ withSpec = true } = {}): Uint8Array {
+export function buildSorobanWasm({ withSpec = true, budget, envMetaJson }: BuildSorobanWasmOptions = {}): Uint8Array {
   const i64 = 0x7e;
   const bytes = [
     0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
@@ -51,6 +61,8 @@ export function buildSorobanWasm({ withSpec = true } = {}): Uint8Array {
     ...(withSpec ? customSection("contractspecv0", SPEC_XDR) : []),
     ...customSection("contractenvmetav0", ENV_META_XDR),
     ...customSection("contractmetav0", META_XDR),
+    ...(envMetaJson ? customTextSection("contractenvmeta", JSON.stringify(envMetaJson)) : []),
+    ...(budget ? customTextSection("soroban_budget", JSON.stringify(budget)) : []),
   ];
   return new Uint8Array(bytes);
 }
