@@ -73,10 +73,47 @@ class TestChaosRunner(unittest.TestCase):
         self.assertEqual(res.fallback_success_rate_pct, 100.0)
         self.assertTrue(res.passed)
 
+    def test_network_tc_netem_iptables_scenario(self):
+        # Issue #445 (1): tc netem delay 200ms 50ms & iptables drop
+        res = self.runner.run_scenario(ChaosScenario.NETWORK_TC_NETEM_IPTABLES, probe_count=10)
+        self.assertEqual(res.scenario, "network_chaos_tc_netem_iptables_drop")
+        self.assertEqual(res.availability_pct, 100.0)
+        self.assertGreaterEqual(res.p95_latency_ms, 200.0)
+        self.assertTrue(res.passed)
+
+    def test_storage_wal_corruption_scenario(self):
+        # Issue #445 (2): Postgres WAL corruption & replica reconnection
+        res = self.runner.run_scenario(ChaosScenario.STORAGE_WAL_CORRUPTION, probe_count=10)
+        self.assertEqual(res.scenario, "storage_chaos_postgres_wal_corruption")
+        self.assertEqual(res.availability_pct, 100.0)
+        self.assertEqual(res.fallback_success_rate_pct, 100.0)
+        self.assertTrue(res.passed)
+
+    def test_contract_malformed_xdr_scenario(self):
+        # Issue #445 (3): Malformed XDR & DLQ quarantine
+        res = self.runner.run_scenario(ChaosScenario.CONTRACT_MALFORMED_XDR, probe_count=10)
+        self.assertEqual(res.scenario, "contract_chaos_malformed_soroban_xdr")
+        self.assertEqual(res.availability_pct, 100.0)
+        self.assertTrue(res.passed)
+
+    def test_slow_consumer_pulsar_dlq_scenario(self):
+        # Issue #445 (4): Slow consumer & DLQ buffer without data loss
+        res = self.runner.run_scenario(ChaosScenario.SLOW_CONSUMER_PULSAR_DLQ, probe_count=10)
+        self.assertEqual(res.scenario, "slow_consumer_pulsar_dlq_fill")
+        self.assertEqual(res.availability_pct, 100.0)
+        self.assertTrue(res.passed)
+
+    def test_chaos_monkey_rto_scenario(self):
+        # Issue #445 (5): Chaos Monkey pod kill & RTO verification
+        res = self.runner.run_scenario(ChaosScenario.CHAOS_MONKEY_RTO, probe_count=10)
+        self.assertEqual(res.scenario, "chaos_monkey_random_pod_kill_rto")
+        self.assertEqual(res.availability_pct, 100.0)
+        self.assertTrue(res.passed)
+
     def test_run_all_and_score_generation(self):
         report = self.runner.run_all()
         self.assertIsInstance(report, ResilienceReport)
-        self.assertEqual(len(report.scenarios), 6)
+        self.assertEqual(len(report.scenarios), 11)
         self.assertGreaterEqual(report.overall_score, 85.0)
         self.assertIn(report.grade, ["A+", "A", "B"])
         self.assertTrue(report.passed)
