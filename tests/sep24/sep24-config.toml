@@ -1,0 +1,42 @@
+# SEP-24 compliance test configuration.
+#
+# Consumed by tests/sep24/README.md when running Stellar's external `sep-tests`
+# suite against a locally running Tessera API. The Rust API itself reads its
+# SEP-24 settings from the environment (see docs/content/docs/sep24.mdx); this
+# file is the mirror config for the external harness.
+
+[server]
+host = "http://localhost:8080"
+network = "testnet"
+# Network passphrase sent in SEP-10 auth challenges.
+network_passphrase = "Test Network ; September 2015"
+
+[sep24]
+transfer_server_url = "http://localhost:8080"
+kyc_server_url = "http://localhost:8080"
+web_auth_endpoint = "http://localhost:8080/auth"
+stellar_toml_path = "/.well-known/stellar.toml"
+interactive_deposit_path = "/sep24/transactions/deposit/interactive"
+transaction_path = "/sep24/transaction"
+transactions_path = "/sep24/transactions"
+
+[asset]
+code = "USDC"
+# Placeholder issuer — replace with a real testnet USDC issuer for live runs.
+# (This is a valid G... strkey used as the API demo signing key; it is NOT an issuer.)
+issuer = "GAIQGTOBTTLLDJ4SWGGESM7UWJ2DI4K3ZNHUSHPDKJL2IE5FKY3BSRAA"
+
+[test]
+# Enables the stubbed allowlist compliance hook in the API.
+test_mode = true
+# KYC re-verification threshold used by the issue #77 admin endpoint.
+reverify_interval_days = 365
+# Interactive UI reached from the deposit response `url`.
+docs_url = "http://localhost:3000"
+
+[endpoints]
+kyc = "/sep24/transactions/{id}/kyc"
+confirm_external = "/sep24/transactions/{id}/confirm_external"
+complete = "/sep24/transactions/{id}/complete"
+reverify = "/sep24/admin/reverify"
+reverify_due = "/sep24/admin/reverify/due"

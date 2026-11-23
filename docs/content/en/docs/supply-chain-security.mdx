@@ -1,0 +1,90 @@
+---
+title: Supply Chain Security & Chain of Trust
+description: SLSA Level 3 build provenance, Sigstore cryptographic signing, reproducible WASM builds, and SBOM attestations.
+---
+
+# Supply Chain Security & Chain of Trust
+
+Tessera implements an end-to-end zero-trust supply chain architecture designed to meet **SLSA (Supply-chain Levels for Software Artifacts) Level 3** requirements. Every release artifact—including container images, compiled Soroban WASM contract binaries, and SDK packages—is cryptographically attested, signed via ambient OIDC identities against the Sigstore transparency log, and validated before deployment.
+
+---
+
+## 1. Threat Model & Security Objectives
+
+In an institutional Real-World Asset (RWA) platform on Stellar, compromising build infrastructure or release pipelines can lead to malicious smart contract deployment or tainted indexing APIs. Tessera mitigates these risks with five defense layers:
+
+1. **Build Provenance**: Non-falsifiable record of how and where artifacts were built.
+2. **Keyless Signing**: Ephemeral cryptographic identities backed by GitHub Actions OIDC and Sigstore (Fulcio / Rekor).
+3. **Reproducible Contract Builds**: Bit-for-bit identical WASM bytecode across independent build environments.
+4. **Vulnerability & License Enforcement**: Continuous vetting of dependencies using `cargo-deny`.
+5. **Software Bill of Materials (SBOM)**: Machine-readable inventories in SPDX format for tracking downstream component vulnerabilities.
+
+---
+
+## 2. Cryptographic Signing via Sigstore
+
+All release artifacts are signed using **Cosign** with ephemeral OIDC tokens provided by GitHub Actions:
+
+- **Identity Provider**: GitHub Actions OIDC (`https://token.actions.githubusercontent.com`).
+- **Certificate Authority**: Sigstore Fulcio issues short-lived X.509 certificates tied to repository and workflow identity (`https://github.com/A4-Stellar/Tessera`).
+- **Transparency Log**: Sigstore Rekor records all signature certificates in a public, immutable, append-only Merkle tree.
+
+### Verifying Signatures Locally
+
+To verify any release artifact or container image before running it:
+
+```bash
+# Verifying container images
+cosign verify \
+  --certificate-identity-regexp "^https://github.com/A4-Stellar/Tessera/" \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+  ghcr.io/a4-stellar/tessera-api:latest
+
+# Verifying binary or WASM blobs
+cosign verify-blob \
+  --signature release-artifact.tar.gz.sig \
+  --certificate release-artifact.tar.gz.pem \
+  --certificate-identity-regexp "^https://github.com/A4-Stellar/Tessera/" \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+  release-artifact.tar.gz
+```
+
+---
+
+## 3. SLSA Level 3 Build Provenance
+
+SLSA provenance attestations format follows the in-toto specification (`slsa.dev/provenance/v1.0`). Provenance generation guarantees:
+
+- Builds are executed on isolated, hosted runners.
+- The execution environment cannot tamper with the provenance output.
+- The build commands, parameters, commit SHA, and dependencies are immutably signed.
+
+### Pre-Deployment Verification Script
+
+Tessera ships with [`scripts/security/verify_provenance.sh`](file:///c:/Users/HP/Tessera/scripts/security/verify_provenance.sh) for automated pre-deployment validation in staging and production pipelines:
+
+```bash
+# Verify artifact against SLSA attestation
+./scripts/security/verify_provenance.sh \
+  --artifact dist/tessera-api \
+  --provenance dist/tessera-api.intoto.jsonl \
+  --source-repo A4-Stellar/Tessera
+```
+
+---
+
+## 4. Reproducible WASM Builds
+
+Soroban smart contracts must be verifiable by external auditors and ledger participants. Tessera's CI pipeline executes parallel compilation of all contracts on independent runners:
+
+1. Two independent ubuntu-latest runners compile contracts using `cargo build --target wasm32-unknown-unknown --release`.
+2. Checksums of each output `.wasm` binary are computed and compared:
+   $$\text{SHA256}(\text{WASM}_{\text{Runner 1}}) == \text{SHA256}(\text{WASM}_{\text{Runner 2}})$$
+3. If any variation exists in timestamp, path metadata, or optimization artifacts, the build pipeline fails immediately.
+
+---
+
+## 5. Software Bill of Materials (SBOM) & Cargo Deny
+
+- **Cargo Deny**: Enforced on every pull request to reject unmaintained dependencies, copyleft licenses incompatible with Apache-2.0, or crates subject to security advisories.
+- **SPDX SBOM**: Automatically produced on release and submitted to GitHub Dependency Graph for automated monitoring against the National Vulnerability Database (NVD).

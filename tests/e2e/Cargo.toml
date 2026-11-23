@@ -6,14 +6,18 @@ description = "End-to-end integration tests for the full Tessera RWA stack."
 license = "Apache-2.0"
 publish = false
 
-# This is a test-only crate. Running:
+# This is a test crate. Running:
 #   cargo test --manifest-path tests/e2e/Cargo.toml -- --test-threads=1
 # will spin up Docker Compose, run the full RWA workflow, and tear down.
 [[test]]
 name = "system_suite"
 path = "system_suite.rs"
 
-[dev-dependencies]
+[[bin]]
+name = "system_suite_replay"
+path = "system_suite.rs"
+
+[dependencies]
 # Async runtime
 tokio = { version = "1.37", features = ["full"] }
 
@@ -35,3 +39,7 @@ stellar-strkey = { version = "0.0.8" }
 
 # Pretty test output
 pretty_assertions = { version = "1" }
+
+# Property-based testing
+proptest = "1"
+

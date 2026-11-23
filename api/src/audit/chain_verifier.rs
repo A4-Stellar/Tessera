@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::audit::mmr::{verify_audit_mmr_proof, AuditMmr, AuditMmrProof};
+
 /// Audit log entry with hash chain linkage.
 /// #300: Hash-chain all logs sequentially: Hn = SHA256(Hn-1 || LogData).
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -83,6 +85,7 @@ pub struct AuditTrailVerifier {
     entries: Vec<AuditLogEntry>,
     root_hash: [u8; 32],
     last_stellar_commitment: Option<String>,
+    mmr: AuditMmr,
 }
 
 impl AuditTrailVerifier {
@@ -92,11 +95,12 @@ impl AuditTrailVerifier {
             entries: Vec::new(),
             root_hash: [0u8; 32],
             last_stellar_commitment: None,
+            mmr: AuditMmr::new(),
         }
     }
 
     /// Append a new administrative event to the audit trail.
-    /// #300: Hash-chain entries sequentially.
+    /// #300: Hash-chain entries sequentially and append to MMR.
     pub fn append_event(
         &mut self,
         event_type: String,
@@ -110,9 +114,69 @@ impl AuditTrailVerifier {
 
         let entry = AuditLogEntry::new(id, event_type, actor, resource, action, details, previous_hash);
         self.root_hash = entry.entry_hash;
+        let _ = self.mmr.append_str(&entry.timestamp.to_string(), &entry.entry_hash);
         self.entries.push(entry.clone());
 
         entry
+    }
+
+    /// Record an encrypted log segment in the audit trail and MMR structure.
+    /// Issue #48 requirement (5): verify that no log segments have been deleted or tampered with.
+    pub fn record_log_segment(
+        &mut self,
+        key_version: u32,
+        segment_hash: [u8; 32],
+        timestamp: u64,
+    ) -> Result<(AuditLogEntry, AuditMmrProof), String> {
+        let entry = self.append_event(
+            "log_segment_encrypted".to_string(),
+            format!("key_version:{}", key_version),
+            "logging_subsystem".to_string(),
+            "ENCRYPT".to_string(),
+            hex::encode(segment_hash),
+        );
+
+        let leaf_index = self.mmr.leaf_count().saturating_sub(1);
+        let proof = self
+            .mmr
+            .proof(leaf_index)
+            .ok_or_else(|| format!("Failed to generate MMR proof for leaf {leaf_index}"))?;
+
+        Ok((entry, proof))
+    }
+
+    /// Verify MMR inclusion proof for a log segment to ensure it has not been deleted or tampered with.
+    pub fn verify_log_segment_inclusion(
+        &self,
+        proof: &AuditMmrProof,
+    ) -> Result<bool, String> {
+        let Ok(leaf_bytes) = hex::decode(&proof.leaf_hash) else {
+            return Err("Invalid hex in leaf_hash".to_string());
+        };
+        if leaf_bytes.len() != 32 {
+            return Err("Leaf hash must be 32 bytes".to_string());
+        }
+        let mut leaf = [0u8; 32];
+        leaf.copy_from_slice(&leaf_bytes);
+
+        if !verify_audit_mmr_proof(&leaf, proof) {
+            return Err("MMR inclusion proof mathematical check failed".to_string());
+        }
+
+        let current_root = hex::encode(self.mmr.root());
+        if proof.root != current_root {
+            return Err(format!(
+                "Root mismatch: proof root {}, current MMR root {}",
+                proof.root, current_root
+            ));
+        }
+
+        Ok(true)
+    }
+
+    /// Get current MMR root hex string.
+    pub fn mmr_root_hex(&self) -> String {
+        hex::encode(self.mmr.root())
     }
 
     /// Verify the integrity of the entire audit trail.
@@ -242,5 +306,29 @@ mod tests {
 
         // Second entry should have first entry's hash as previous
         assert_eq!(entry2.previous_hash, entry1.entry_hash);
+    }
+
+    #[test]
+    fn test_log_segment_mmr_inclusion_verification() {
+        let mut trail = AuditTrailVerifier::new();
+
+        let segment_hash1 = [0x11u8; 32];
+        let segment_hash2 = [0x22u8; 32];
+
+        let (_entry1, proof1) = trail
+            .record_log_segment(1, segment_hash1, 1700000000)
+            .expect("Failed to record segment 1");
+
+        let (_entry2, proof2) = trail
+            .record_log_segment(2, segment_hash2, 1700000100)
+            .expect("Failed to record segment 2");
+
+        // Verify valid inclusion proofs
+        assert!(trail.verify_log_segment_inclusion(&proof2).is_ok());
+
+        // Tampering with the leaf hash fails
+        let mut tampered_proof = proof2.clone();
+        tampered_proof.leaf_hash = hex::encode([0x99u8; 32]);
+        assert!(trail.verify_log_segment_inclusion(&tampered_proof).is_err());
     }
 }

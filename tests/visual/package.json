@@ -9,6 +9,7 @@
     "test:visual:report": "playwright show-report test-results/html-report"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
     "@playwright/test": "^1.63.0",
     "@types/node": "^20.14.0",
     "@types/pixelmatch": "^5.2.6",
