@@ -245,6 +245,46 @@ pub fn router(state: AppState) -> Router {
             crate::graphql::create_graphql_router()
                 .route_layer(middleware::from_fn(track_request_metrics)),
         )
+        // Issue #50: Stellar SEP-30 Account Recovery Server with Social Recovery Multisig
+        .merge({
+            let sep30_state = Arc::new(sep30::Sep30ServerState::new(Arc::new(std::sync::RwLock::new(
+                crate::audit::chain_verifier::AuditTrailVerifier::new(),
+            ))));
+            Router::new()
+                .route(
+                    "/sep30/accounts/:address",
+                    axum::routing::post(sep30::register_account).get(sep30::get_account),
+                )
+                .route(
+                    "/sep30/accounts/:address/recover",
+                    axum::routing::put(sep30::recover_account),
+                )
+                .route(
+                    "/sep30/accounts/:address/sign",
+                    axum::routing::post(sep30::recover_account),
+                )
+                .route(
+                    "/sep30/accounts/:address/sign/:signing_address",
+                    axum::routing::post(sep30::recover_account),
+                )
+                .route(
+                    "/v1/sep30/accounts/:address",
+                    axum::routing::post(sep30::register_account).get(sep30::get_account),
+                )
+                .route(
+                    "/v1/sep30/accounts/:address/recover",
+                    axum::routing::put(sep30::recover_account),
+                )
+                .route(
+                    "/v1/sep30/accounts/:address/sign",
+                    axum::routing::post(sep30::recover_account),
+                )
+                .route(
+                    "/v1/sep30/accounts/:address/sign/:signing_address",
+                    axum::routing::post(sep30::recover_account),
+                )
+                .with_state(sep30_state)
+        })
         .layer(TimeoutLayer::new(Duration::from_secs(env_value(
             "RWA_REQUEST_TIMEOUT_SECS",
             REQUEST_TIMEOUT_SECS,

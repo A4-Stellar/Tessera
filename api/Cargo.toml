@@ -55,6 +55,8 @@ arrow = { version = "54", default-features = false, features = ["ipc"] }
 parquet = { version = "54", default-features = false, features = ["arrow", "snap"] }
 rocksdb = "0.22"
 pulsar = { version = "6.9", features = ["tokio", "lz4", "snap", "zstd", "compression"] }
+mpc-signer = { path = "../services/mpc-signer" }
+ed25519-dalek = { version = "2", default-features = false }
 
 [dev-dependencies]
 insta = { version = "1", features = ["json"] }
