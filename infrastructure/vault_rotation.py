@@ -1,9 +1,17 @@
-import hvac
-import psycopg2
+try:
+    import hvac
+except ImportError:  # pragma: no cover - optional in test environments without hvac
+    hvac = None
+
+try:
+    import psycopg2
+except ImportError:  # pragma: no cover - optional in test environments without psycopg2
+    psycopg2 = None
+
 import logging
 import time
 import threading
-from typing import Dict, Optional, Callable
+from typing import Any, Dict, Optional, Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 import os
@@ -13,18 +21,29 @@ import sys
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Issue #423: 1h (3600s) short-lived dynamic secret TTL default
+DEFAULT_LEASE_TTL_SECONDS = 3600
+DEFAULT_K8S_JWT_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+
+
 @dataclass
 class VaultConfig:
-    """HashiCorp Vault configuration"""
+    """HashiCorp Vault configuration (supports Kubernetes ServiceAccount JWT auth & 1h TTLs)"""
     url: str
-    token: str
+    token: Optional[str] = None
     database_mount: str = "database"
-    role_name: str = "api-readonly"
+    role_name: str = "tessera-api-postgres"
+    redis_role_name: str = "tessera-api-redis"
+    k8s_auth_mount: str = "kubernetes"
+    k8s_role_name: str = "tessera-api"
+    k8s_jwt_path: str = DEFAULT_K8S_JWT_PATH
+    default_ttl_seconds: int = DEFAULT_LEASE_TTL_SECONDS
     namespace: Optional[str] = None
+
 
 @dataclass
 class DatabaseCredentials:
-    """Dynamic database credentials from Vault"""
+    """Dynamic database or Redis AUTH credentials from Vault (1h TTL)"""
     username: str
     password: str
     lease_id: str
@@ -32,33 +51,52 @@ class DatabaseCredentials:
     renewable: bool
     expires_at: datetime
 
-class DatabaseConnectionPool:
-    """Manages database connection pool with dynamic credentials"""
 
-    def __init__(self, host: str, port: int, database: str):
+class DatabaseConnectionPool:
+    """Manages database connection pool with dynamic 1h-TTL Vault credentials"""
+
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        database: str,
+        connect_fn: Optional[Callable[..., Any]] = None,
+    ):
         self.host = host
         self.port = port
         self.database = database
+        self.connect_fn = connect_fn
         self.credentials: Optional[DatabaseCredentials] = None
         self.connection_pool: list = []
         self.max_connections = 10
+        self.is_closed: bool = False
         self.lock = threading.Lock()
 
     def update_credentials(self, credentials: DatabaseCredentials) -> None:
         """Update connection pool with new credentials"""
         with self.lock:
-            logger.info(f"Updating connection pool with new credentials for user: {credentials.username}")
+            logger.info(
+                f"Updating connection pool with new credentials for user: {credentials.username}"
+            )
 
             # Close existing connections
             self._close_all_connections()
 
-            # Store new credentials
+            # Store new credentials and mark pool open
             self.credentials = credentials
+            self.is_closed = False
 
             # Create new connection pool with new credentials
             self._initialize_pool()
 
             logger.info("Connection pool updated successfully")
+
+    def close_pool_on_lease_expiry(self) -> None:
+        """Explicitly close all active connections when a Vault lease expires."""
+        with self.lock:
+            self._close_all_connections()
+            self.credentials = None
+            self.is_closed = True
 
     def _close_all_connections(self) -> None:
         """Close all existing database connections"""
@@ -75,14 +113,18 @@ class DatabaseConnectionPool:
         if not self.credentials:
             raise ValueError("No credentials available")
 
+        connector = self.connect_fn or (psycopg2.connect if psycopg2 is not None else None)
+        if connector is None:
+            return
+
         for _ in range(self.max_connections):
             try:
-                conn = psycopg2.connect(
+                conn = connector(
                     host=self.host,
                     port=self.port,
                     database=self.database,
                     user=self.credentials.username,
-                    password=self.credentials.password
+                    password=self.credentials.password,
                 )
                 self.connection_pool.append(conn)
             except Exception as e:
@@ -91,8 +133,8 @@ class DatabaseConnectionPool:
     def get_connection(self):
         """Get a connection from the pool"""
         with self.lock:
-            if not self.connection_pool:
-                raise RuntimeError("Connection pool is empty")
+            if self.is_closed or not self.connection_pool:
+                raise RuntimeError("Connection pool is closed or empty")
             return self.connection_pool[0]
 
     def health_check(self) -> bool:
@@ -107,15 +149,16 @@ class DatabaseConnectionPool:
             logger.error(f"Health check failed: {e}")
             return False
 
+
 class VaultRotationEngine:
     """
-    Manages dynamic secret rotation using HashiCorp Vault
+    Manages dynamic secret rotation using HashiCorp Vault (Issue #423)
 
     Features:
-    - Generate short-lived PostgreSQL credentials (24h TTL)
-    - Automatic credential renewal before expiration
-    - Graceful connection pool updates
-    - Automatic revocation of expired credentials
+    - Kubernetes ServiceAccount JWT authentication (POST /v1/auth/kubernetes/login)
+    - Short-lived PostgreSQL & Redis AUTH credentials (1h / 3600s TTL)
+    - Background lease renewal via PUT /v1/sys/leases/renew before expiration
+    - Explicit SQL/Redis pool closure and K8s JWT re-authentication on lease expiry
     """
 
     def __init__(
@@ -124,7 +167,9 @@ class VaultRotationEngine:
         db_host: str,
         db_port: int,
         db_name: str,
-        rotation_callback: Optional[Callable[[DatabaseCredentials], None]] = None
+        rotation_callback: Optional[Callable[[DatabaseCredentials], None]] = None,
+        vault_client: Optional[Any] = None,
+        connect_fn: Optional[Callable[..., Any]] = None,
     ):
         self.vault_config = vault_config
         self.db_host = db_host
@@ -132,207 +177,278 @@ class VaultRotationEngine:
         self.db_name = db_name
         self.rotation_callback = rotation_callback
 
-        # Initialize Vault client
-        self.vault_client = hvac.Client(
-            url=vault_config.url,
-            token=vault_config.token,
-            namespace=vault_config.namespace
-        )
+        if vault_client is not None:
+            self.vault_client = vault_client
+        else:
+            if hvac is None:
+                raise RuntimeError("hvac is required when no vault_client is injected")
+            self.vault_client = hvac.Client(
+                url=vault_config.url,
+                token=vault_config.token,
+                namespace=vault_config.namespace,
+            )
 
-        # Verify Vault connection
-        if not self.vault_client.is_authenticated():
+        if not self.vault_config.token and os.path.exists(self.vault_config.k8s_jwt_path):
+            self.authenticate_kubernetes()
+
+        if hasattr(self.vault_client, "is_authenticated") and not self.vault_client.is_authenticated():
             raise RuntimeError("Failed to authenticate with Vault")
 
         logger.info("Connected to HashiCorp Vault successfully")
 
         # Database connection pool
-        self.connection_pool = DatabaseConnectionPool(db_host, db_port, db_name)
+        self.connection_pool = DatabaseConnectionPool(
+            db_host, db_port, db_name, connect_fn=connect_fn
+        )
 
-        # Current credentials
+        # Current PostgreSQL and Redis credentials
         self.current_credentials: Optional[DatabaseCredentials] = None
+        self.current_redis_credentials: Optional[DatabaseCredentials] = None
 
         # Rotation thread
         self.rotation_thread: Optional[threading.Thread] = None
         self.stop_rotation = threading.Event()
 
-        # Renewal margin (renew when 80% of lease duration has passed)
-        self.renewal_margin = 0.8
+        # Renewal margin (renew when 75% of 1h lease duration has passed)
+        self.renewal_margin = 0.75
 
-    def generate_credentials(self) -> DatabaseCredentials:
+        # Telemetry counters
+        self.renewals_succeeded = 0
+        self.renewals_failed = 0
+        self.reauthentications = 0
+        self.pool_closures = 0
+
+    def authenticate_kubernetes(self, jwt: Optional[str] = None) -> str:
         """
-        Generate new dynamic database credentials from Vault
-
-        Returns:
-            DatabaseCredentials with 24-hour TTL
+        Authenticate with Vault using the pod's Kubernetes ServiceAccount JWT
+        (`POST /v1/auth/kubernetes/login`).
         """
-        logger.info("Requesting new database credentials from Vault")
+        token_jwt = jwt
+        if token_jwt is None:
+            with open(self.vault_config.k8s_jwt_path, "r", encoding="utf-8") as f:
+                token_jwt = f.read().strip()
 
-        try:
-            # Request dynamic credentials from Vault
-            response = self.vault_client.secrets.database.generate_credentials(
-                name=self.vault_config.role_name,
-                mount_point=self.vault_config.database_mount
+        if not token_jwt:
+            raise ValueError("Kubernetes ServiceAccount JWT is empty")
+
+        auth_api = getattr(self.vault_client, "auth", None)
+        if auth_api is not None and hasattr(auth_api, "kubernetes"):
+            resp = auth_api.kubernetes.login(
+                role=self.vault_config.k8s_role_name,
+                jwt=token_jwt,
+                mount_point=self.vault_config.k8s_auth_mount,
             )
-
-            data = response['data']
-            lease_duration = response['lease_duration']
-
-            credentials = DatabaseCredentials(
-                username=data['username'],
-                password=data['password'],
-                lease_id=response['lease_id'],
-                lease_duration=lease_duration,
-                renewable=response.get('renewable', False),
-                expires_at=datetime.now() + timedelta(seconds=lease_duration)
+        elif hasattr(self.vault_client, "kubernetes_login"):
+            resp = self.vault_client.kubernetes_login(
+                role=self.vault_config.k8s_role_name,
+                jwt=token_jwt,
+                mount_point=self.vault_config.k8s_auth_mount,
             )
+        else:
+            raise RuntimeError("Vault client does not support Kubernetes auth login")
 
-            logger.info(
-                f"Generated credentials for user: {credentials.username}, "
-                f"expires at: {credentials.expires_at}, "
-                f"lease_id: {credentials.lease_id}"
-            )
+        client_token = resp["auth"]["client_token"]
+        self.vault_config.token = client_token
+        self.vault_client.token = client_token
+        return client_token
 
-            return credentials
-
-        except Exception as e:
-            logger.error(f"Failed to generate credentials: {e}")
-            raise
-
-    def renew_credentials(self, credentials: DatabaseCredentials) -> DatabaseCredentials:
+    def generate_credentials(
+        self,
+        role_name: Optional[str] = None,
+        now: Optional[datetime] = None,
+    ) -> DatabaseCredentials:
         """
-        Renew existing credentials lease
+        Generate new dynamic database credentials from Vault with 1-hour (3600s) TTL.
+        """
+        target_role = role_name or self.vault_config.role_name
+        current_time = now or datetime.now()
+        logger.info(f"Requesting new dynamic credentials from Vault for role {target_role}")
 
-        Args:
-            credentials: Current credentials to renew
+        response = self.vault_client.secrets.database.generate_credentials(
+            name=target_role,
+            mount_point=self.vault_config.database_mount,
+        )
 
-        Returns:
-            Updated credentials with extended lease
+        data = response["data"]
+        lease_duration = int(
+            response.get("lease_duration") or self.vault_config.default_ttl_seconds
+        )
+
+        credentials = DatabaseCredentials(
+            username=data["username"],
+            password=data["password"],
+            lease_id=response["lease_id"],
+            lease_duration=lease_duration,
+            renewable=response.get("renewable", True),
+            expires_at=current_time + timedelta(seconds=lease_duration),
+        )
+
+        logger.info(
+            f"Generated 1h-TTL credentials for user: {credentials.username}, "
+            f"expires at: {credentials.expires_at}, "
+            f"lease_id: {credentials.lease_id}"
+        )
+        return credentials
+
+    def generate_redis_credentials(
+        self, now: Optional[datetime] = None
+    ) -> DatabaseCredentials:
+        """Generate dynamic 1h-TTL Redis AUTH credentials from Vault."""
+        creds = self.generate_credentials(
+            role_name=self.vault_config.redis_role_name,
+            now=now,
+        )
+        self.current_redis_credentials = creds
+        return creds
+
+    def renew_credentials(
+        self,
+        credentials: DatabaseCredentials,
+        now: Optional[datetime] = None,
+    ) -> DatabaseCredentials:
+        """
+        Renew existing credentials lease via `PUT /v1/sys/leases/renew`.
         """
         if not credentials.renewable:
             logger.warning("Credentials are not renewable, generating new ones")
-            return self.generate_credentials()
+            return self.generate_credentials(now=now)
 
-        logger.info(f"Renewing credentials lease: {credentials.lease_id}")
+        current_time = now or datetime.now()
+        logger.info(f"Renewing credentials lease via PUT /v1/sys/leases/renew: {credentials.lease_id}")
 
-        try:
-            response = self.vault_client.sys.renew_lease(
-                lease_id=credentials.lease_id
-            )
+        response = self.vault_client.sys.renew_lease(
+            lease_id=credentials.lease_id,
+            increment=self.vault_config.default_ttl_seconds,
+        )
 
-            lease_duration = response['lease_duration']
-
-            # Update credentials with new lease info
-            credentials.lease_duration = lease_duration
-            credentials.expires_at = datetime.now() + timedelta(seconds=lease_duration)
-
-            logger.info(f"Credentials renewed, new expiration: {credentials.expires_at}")
-
-            return credentials
-
-        except Exception as e:
-            logger.error(f"Failed to renew credentials: {e}")
-            # Fall back to generating new credentials
-            return self.generate_credentials()
+        lease_duration = int(
+            response.get("lease_duration") or self.vault_config.default_ttl_seconds
+        )
+        credentials.lease_duration = lease_duration
+        credentials.expires_at = current_time + timedelta(seconds=lease_duration)
+        self.renewals_succeeded += 1
+        return credentials
 
     def revoke_credentials(self, credentials: DatabaseCredentials) -> None:
-        """
-        Revoke database credentials in Vault
-
-        Args:
-            credentials: Credentials to revoke
-        """
+        """Revoke database credentials in Vault."""
         logger.info(f"Revoking credentials lease: {credentials.lease_id}")
-
         try:
             self.vault_client.sys.revoke_lease(credentials.lease_id)
             logger.info("Credentials revoked successfully")
         except Exception as e:
             logger.error(f"Failed to revoke credentials: {e}")
 
-    def rotate_credentials(self) -> None:
+    def rotate_credentials(
+        self,
+        grace_period_seconds: float = 0.0,
+        now: Optional[datetime] = None,
+    ) -> None:
         """
-        Perform credential rotation:
-        1. Generate new credentials
+        Perform credential rotation for PostgreSQL and Redis:
+        1. Generate new 1h-TTL credentials
         2. Update connection pool
         3. Revoke old credentials
         """
         logger.info("Starting credential rotation")
-
-        # Store old credentials for revocation
         old_credentials = self.current_credentials
 
+        new_credentials = self.generate_credentials(now=now)
+        self.generate_redis_credentials(now=now)
+
+        self.connection_pool.update_credentials(new_credentials)
+        if self.connection_pool.connection_pool and not self.connection_pool.health_check():
+            raise RuntimeError("Connection pool health check failed after rotation")
+
+        self.current_credentials = new_credentials
+
+        if self.rotation_callback:
+            self.rotation_callback(new_credentials)
+
+        if old_credentials:
+            if grace_period_seconds > 0:
+                time.sleep(grace_period_seconds)
+            self.revoke_credentials(old_credentials)
+
+        logger.info("Credential rotation completed successfully")
+
+    def maintain_leases_once(
+        self,
+        now: Optional[datetime] = None,
+        jwt: Optional[str] = None,
+    ) -> str:
+        """
+        Single maintenance tick for Postgres and Redis dynamic secret leases:
+        - Renews active leases via `PUT /v1/sys/leases/renew` when due.
+        - If renewal fails or a lease expires while Vault is unreachable:
+          1. Immediately closes the active DB connection pool and invalidates Redis AUTH tokens.
+          2. Re-authenticates via Kubernetes ServiceAccount JWT and rotates credentials
+             as soon as Vault becomes reachable again.
+        """
+        current_time = now or datetime.now()
+
+        if self.current_credentials is None or self.current_redis_credentials is None:
+            self.authenticate_kubernetes(jwt=jwt)
+            self.rotate_credentials(now=current_time)
+            self.reauthentications += 1
+            return "reauthenticated"
+
+        pg_remaining = (self.current_credentials.expires_at - current_time).total_seconds()
+        redis_remaining = (
+            self.current_redis_credentials.expires_at - current_time
+        ).total_seconds()
+
+        # Check if already expired
+        if pg_remaining <= 0 or redis_remaining <= 0:
+            self.connection_pool.close_pool_on_lease_expiry()
+            self.current_credentials = None
+            self.current_redis_credentials = None
+            self.pool_closures += 1
+            try:
+                self.authenticate_kubernetes(jwt=jwt)
+                self.rotate_credentials(now=current_time)
+                self.reauthentications += 1
+                return "reauthenticated"
+            except Exception as err:
+                logger.error(f"Vault unreachable after lease expiry; pool remains closed: {err}")
+                return "pool_closed_on_expiry"
+
+        renew_window = self.current_credentials.lease_duration * (1.0 - self.renewal_margin)
+        if pg_remaining > renew_window and redis_remaining > renew_window:
+            return "no_action"
+
         try:
-            # Generate new credentials
-            new_credentials = self.generate_credentials()
-
-            # Update connection pool with new credentials
-            self.connection_pool.update_credentials(new_credentials)
-
-            # Verify connection pool is healthy
-            if not self.connection_pool.health_check():
-                raise RuntimeError("Connection pool health check failed after rotation")
-
-            # Update current credentials
-            self.current_credentials = new_credentials
-
-            # Call rotation callback if provided
-            if self.rotation_callback:
-                self.rotation_callback(new_credentials)
-
-            # Revoke old credentials (after a grace period)
-            if old_credentials:
-                # Wait 30 seconds to ensure all active connections are closed
-                logger.info("Waiting 30 seconds before revoking old credentials")
-                time.sleep(30)
-                self.revoke_credentials(old_credentials)
-
-            logger.info("Credential rotation completed successfully")
-
-        except Exception as e:
-            logger.error(f"Credential rotation failed: {e}")
-            # If rotation fails and we have old credentials, keep using them
-            if old_credentials:
-                logger.warning("Keeping old credentials after rotation failure")
-                self.current_credentials = old_credentials
-            raise
+            self.current_credentials = self.renew_credentials(
+                self.current_credentials, now=current_time
+            )
+            self.current_redis_credentials = self.renew_credentials(
+                self.current_redis_credentials, now=current_time
+            )
+            return "renewed"
+        except Exception as err:
+            self.renewals_failed += 1
+            logger.warning(f"Lease renewal failed ({err}); closing pool and attempting re-auth")
+            self.connection_pool.close_pool_on_lease_expiry()
+            self.current_credentials = None
+            self.current_redis_credentials = None
+            self.pool_closures += 1
+            try:
+                self.authenticate_kubernetes(jwt=jwt)
+                self.rotate_credentials(now=current_time)
+                self.reauthentications += 1
+                return "reauthenticated"
+            except Exception:
+                return "pool_closed_on_expiry"
 
     def _rotation_loop(self) -> None:
-        """
-        Background thread that monitors credential expiration and triggers rotation
-        """
+        """Background thread that monitors credential expiration and triggers renewal/rotation."""
         logger.info("Starting credential rotation loop")
-
         while not self.stop_rotation.is_set():
             try:
-                if not self.current_credentials:
-                    # Initial credential generation
-                    logger.info("No credentials available, generating initial credentials")
-                    self.rotate_credentials()
-                else:
-                    # Check if credentials need renewal
-                    now = datetime.now()
-                    time_until_expiry = (self.current_credentials.expires_at - now).total_seconds()
-                    renewal_threshold = self.current_credentials.lease_duration * self.renewal_margin
-
-                    if time_until_expiry <= (self.current_credentials.lease_duration - renewal_threshold):
-                        logger.info(
-                            f"Credentials will expire in {time_until_expiry} seconds, "
-                            f"triggering rotation"
-                        )
-                        self.rotate_credentials()
-                    else:
-                        logger.debug(
-                            f"Credentials still valid for {time_until_expiry} seconds"
-                        )
-
-                # Sleep for 5 minutes before next check
-                self.stop_rotation.wait(300)
-
+                self.maintain_leases_once()
+                self.stop_rotation.wait(60)
             except Exception as e:
                 logger.error(f"Error in rotation loop: {e}")
-                # Sleep for 1 minute before retrying
-                self.stop_rotation.wait(60)
-
+                self.stop_rotation.wait(30)
         logger.info("Rotation loop stopped")
 
     def start(self) -> None:
@@ -341,135 +457,85 @@ class VaultRotationEngine:
             logger.warning("Rotation engine is already running")
             return
 
-        logger.info("Starting credential rotation engine")
-
         self.stop_rotation.clear()
         self.rotation_thread = threading.Thread(target=self._rotation_loop, daemon=True)
         self.rotation_thread.start()
 
-        logger.info("Credential rotation engine started")
-
     def stop(self) -> None:
         """Stop the credential rotation engine"""
-        logger.info("Stopping credential rotation engine")
-
         self.stop_rotation.set()
-
         if self.rotation_thread:
             self.rotation_thread.join(timeout=10)
-
-        # Revoke current credentials
         if self.current_credentials:
             self.revoke_credentials(self.current_credentials)
-
-        # Close all connections
+        if self.current_redis_credentials:
+            self.revoke_credentials(self.current_redis_credentials)
         self.connection_pool._close_all_connections()
-
-        logger.info("Credential rotation engine stopped")
 
     def get_connection(self):
         """Get a database connection from the pool"""
         return self.connection_pool.get_connection()
 
-    def health_check(self) -> Dict[str, any]:
-        """
-        Get health status of the rotation engine
-
-        Returns:
-            Dictionary with health status information
-        """
+    def health_check(self) -> Dict[str, Any]:
+        """Get health status of the rotation engine"""
         if not self.current_credentials:
-            return {
-                "healthy": False,
-                "message": "No credentials available"
-            }
+            return {"healthy": False, "message": "No credentials available"}
 
         now = datetime.now()
         time_until_expiry = (self.current_credentials.expires_at - now).total_seconds()
-
         return {
-            "healthy": self.connection_pool.health_check(),
+            "healthy": not self.connection_pool.is_closed,
             "credentials": {
                 "username": self.current_credentials.username,
                 "expires_at": self.current_credentials.expires_at.isoformat(),
                 "time_until_expiry_seconds": time_until_expiry,
-                "lease_id": self.current_credentials.lease_id
+                "lease_id": self.current_credentials.lease_id,
             },
             "connection_pool": {
                 "size": len(self.connection_pool.connection_pool),
-                "max_size": self.connection_pool.max_connections
-            }
+                "max_size": self.connection_pool.max_connections,
+                "is_closed": self.connection_pool.is_closed,
+            },
         }
 
-def rotation_callback_example(credentials: DatabaseCredentials) -> None:
-    """
-    Example callback function called after credential rotation
 
-    This can be used to:
-    - Update application configuration
-    - Trigger application restarts
-    - Send notifications
-    - Log rotation events
-    """
+def rotation_callback_example(credentials: DatabaseCredentials) -> None:
     logger.info(f"Rotation callback: New credentials for user {credentials.username}")
 
-    # Example: Write credentials to application config
-    # with open('/etc/app/db_config.json', 'w') as f:
-    #     json.dump({
-    #         'username': credentials.username,
-    #         'password': credentials.password,
-    #         'expires_at': credentials.expires_at.isoformat()
-    #     }, f)
-
-    # Example: Send SIGHUP to application to reload config
-    # os.kill(app_pid, signal.SIGHUP)
 
 def main():
-    """
-    Example usage of the Vault Rotation Engine
-    """
-    # Configuration from environment variables
     vault_config = VaultConfig(
-        url=os.getenv('VAULT_ADDR', 'http://localhost:8200'),
-        token=os.getenv('VAULT_TOKEN'),
-        database_mount=os.getenv('VAULT_DB_MOUNT', 'database'),
-        role_name=os.getenv('VAULT_ROLE_NAME', 'api-readonly'),
-        namespace=os.getenv('VAULT_NAMESPACE')
+        url=os.getenv("VAULT_ADDR", "http://localhost:8200"),
+        token=os.getenv("VAULT_TOKEN"),
+        database_mount=os.getenv("VAULT_DB_MOUNT", "database"),
+        role_name=os.getenv("VAULT_ROLE_NAME", "tessera-api-postgres"),
+        redis_role_name=os.getenv("VAULT_REDIS_ROLE_NAME", "tessera-api-redis"),
+        namespace=os.getenv("VAULT_NAMESPACE"),
     )
+    db_host = os.getenv("DB_HOST", "localhost")
+    db_port = int(os.getenv("DB_PORT", "5432"))
+    db_name = os.getenv("DB_NAME", "tessera")
 
-    db_host = os.getenv('DB_HOST', 'localhost')
-    db_port = int(os.getenv('DB_PORT', '5432'))
-    db_name = os.getenv('DB_NAME', 'tessera')
-
-    # Create rotation engine
     engine = VaultRotationEngine(
         vault_config=vault_config,
         db_host=db_host,
         db_port=db_port,
         db_name=db_name,
-        rotation_callback=rotation_callback_example
+        rotation_callback=rotation_callback_example,
     )
 
-    # Handle graceful shutdown
     def signal_handler(sig, frame):
-        logger.info("Received shutdown signal")
         engine.stop()
         sys.exit(0)
 
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
-
-    # Start the engine
     engine.start()
-
-    # Keep main thread alive
-    logger.info("Rotation engine is running. Press Ctrl+C to stop.")
 
     while True:
         time.sleep(60)
-        # Print health status every minute
-        health = engine.health_check()
-        logger.info(f"Health check: {health}")
+        logger.info(f"Health check: {engine.health_check()}")
+
 
 if __name__ == "__main__":
     main()

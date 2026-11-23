@@ -143,6 +143,25 @@ async fn main() {
         None => tracing::info!("SPIFFE SVID loading disabled; set SPIFFE_SVID_DIR to enable it"),
     }
 
+    // Issue #423: authenticate with HashiCorp Vault via Kubernetes ServiceAccount
+    // JWT, fetch 1h-TTL dynamic Postgres and Redis credentials, and spawn the
+    // background lease renewal task (`PUT /v1/sys/leases/renew`).
+    match security::vault::init_from_env() {
+        Some(vault_manager) => {
+            if let Err(error) = vault_manager.initialize_on_startup().await {
+                tracing::warn!(
+                    %error,
+                    "initial Vault dynamic secret fetch failed; renewal task will retry"
+                );
+            }
+            let _ = security::vault::spawn_lease_renewal(
+                Arc::clone(&vault_manager),
+                shutdown_rx.clone(),
+            );
+        }
+        None => tracing::info!("Vault dynamic secrets disabled; set VAULT_ADDR to enable it"),
+    }
+
     // Issue #159: only the elected leader polls Soroban RPC.
     state.node_role = cluster::leader_election::spawn(
         cluster::leader_election::ElectionConfig::from_env(),

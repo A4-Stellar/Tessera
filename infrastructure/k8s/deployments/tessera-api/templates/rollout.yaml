@@ -106,13 +106,29 @@ spec:
             - name: metrics
               containerPort: 9090
               protocol: TCP
-          {{- if or .Values.env .Values.mtls.enabled }}
+          {{- if or .Values.env .Values.mtls.enabled .Values.vault.enabled }}
           env:
             {{- if .Values.mtls.enabled }}
             - name: SPIFFE_SVID_DIR
               value: /var/run/spiffe.svid
             - name: SPIFFE_SERVICE_NAME
               value: tessera-api
+            {{- end }}
+            {{- if .Values.vault.enabled }}
+            - name: VAULT_ADDR
+              value: {{ .Values.vault.address | quote }}
+            - name: VAULT_K8S_MOUNT
+              value: {{ .Values.vault.k8sMount | quote }}
+            - name: VAULT_K8S_ROLE
+              value: {{ .Values.vault.k8sRole | quote }}
+            - name: VAULT_K8S_JWT_PATH
+              value: {{ .Values.vault.serviceAccountTokenPath | quote }}
+            - name: VAULT_DB_MOUNT
+              value: {{ .Values.vault.databaseMount | quote }}
+            - name: VAULT_PG_ROLE
+              value: {{ .Values.vault.postgresRole | quote }}
+            - name: VAULT_REDIS_ROLE
+              value: {{ .Values.vault.redisRole | quote }}
             {{- end }}
             {{- with .Values.env }}
             {{- toYaml . | nindent 12 }}
@@ -128,11 +144,18 @@ spec:
             {{- toYaml .Values.readinessProbe | nindent 12 }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
-          {{- if .Values.mtls.enabled }}
+          {{- if or .Values.mtls.enabled .Values.vault.enabled }}
           volumeMounts:
+            {{- if .Values.mtls.enabled }}
             - name: spiffe-svid
               mountPath: /var/run/spiffe.svid
               readOnly: true
+            {{- end }}
+            {{- if .Values.vault.enabled }}
+            - name: vault-k8s-sa-token
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
+            {{- end }}
           {{- end }}
           securityContext:
             runAsNonRoot: true
@@ -200,8 +223,9 @@ spec:
               cpu: 500m
               memory: 256Mi
         {{- end }}
-      {{- if .Values.mtls.enabled }}
+      {{- if or .Values.mtls.enabled .Values.vault.enabled }}
       volumes:
+        {{- if .Values.mtls.enabled }}
         - name: spiffe-svid
           emptyDir: {}
         - name: spire-cli
@@ -213,6 +237,17 @@ spec:
         - name: envoy-config
           configMap:
             name: {{ include "tessera-api.fullname" . }}-envoy
+        {{- end }}
+        {{- if .Values.vault.enabled }}
+        # Projected ServiceAccount JWT for HashiCorp Vault Kubernetes auth (#423).
+        # No Kubernetes Secret objects are used; DB/Redis credentials never touch etcd.
+        - name: vault-k8s-sa-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: {{ .Values.vault.tokenExpirationSeconds | default 3600 }}
+        {{- end }}
       {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:

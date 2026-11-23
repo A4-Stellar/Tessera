@@ -132,5 +132,21 @@ mtls:
     # the sidecar, then plain HTTP to the application container.
     inboundPort: 8443
 
+# -- HashiCorp Vault dynamic secrets for PostgreSQL and Redis (issue #423).
+# Database and Redis credentials are fetched in-memory via the pod's projected
+# Kubernetes ServiceAccount JWT (POST /v1/auth/kubernetes/login) with 1h TTLs
+# and renewed via PUT /v1/sys/leases/renew. Zero Kubernetes Secret objects are
+# created or mounted so credentials never touch etcd.
+vault:
+  enabled: false
+  address: "http://vault.vault.svc.cluster.local:8200"
+  k8sMount: "kubernetes"
+  k8sRole: "tessera-api"
+  databaseMount: "database"
+  postgresRole: "tessera-api-postgres"
+  redisRole: "tessera-api-redis"
+  serviceAccountTokenPath: "/var/run/secrets/kubernetes.io/serviceaccount/token"
+  tokenExpirationSeconds: 3600
+
 argo-rollouts:
   enabled: false
