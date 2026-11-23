@@ -1,11 +1,16 @@
 import {
   MAX_COMPARED_ASSETS,
+  SEC_EDGAR_GOLDEN_FIXTURES,
   buildComparisonCsv,
   buildComparisonRows,
+  buildSignedEdgarComparisonPdf,
+  classifyChangeHighlight,
   concentrationBand,
   csvField,
   giniCoefficient,
   inferDividendSchedule,
+  parseEdgarForm4Csv,
+  reconcileCapTableWithEdgar,
   trailingAnnualYieldPercent,
   type CompareAsset,
 } from "../lib/cap-table-compare";
@@ -173,5 +178,120 @@ describe("CSV export", () => {
     expect(lines).toContain("Gini coefficient,0.500,0.610");
     expect(lines).toContain("Dividend schedule,Quarterly,Quarterly");
     expect(csv.endsWith("\r\n")).toBe(true);
+  });
+});
+
+describe("SEC EDGAR Form 4 Cap-Table Reconciliation (Issue #476)", () => {
+  it("parses SEC EDGAR Form 4 CSV golden dataset records", () => {
+    const records = parseEdgarForm4Csv(SEC_EDGAR_GOLDEN_FIXTURES.csv);
+    expect(records).toHaveLength(4);
+    expect(records[0]).toMatchObject({
+      cik: "0001849821",
+      accessionNumber: "0001849821-26-000041",
+      holderName: "Apex Institutional Partners LP",
+      shares: 400_000,
+    });
+  });
+
+  it("classifies balance changes into none (<=5%), yellow (>5%), and red (>10%)", () => {
+    expect(classifyChangeHighlight(0)).toBe("none");
+    expect(classifyChangeHighlight(5.0)).toBe("none");
+    expect(classifyChangeHighlight(5.01)).toBe("yellow");
+    expect(classifyChangeHighlight(-7.5)).toBe("yellow");
+    expect(classifyChangeHighlight(10.0)).toBe("yellow");
+    expect(classifyChangeHighlight(10.01)).toBe("red");
+    expect(classifyChangeHighlight(-15.0)).toBe("red");
+  });
+
+  it("detects new holders, departed holders, changed balances, yellow/red alerts, and triggers >1% supply compliance webhook", () => {
+    const edgarRecords = parseEdgarForm4Csv(SEC_EDGAR_GOLDEN_FIXTURES.csv);
+    const report = reconcileCapTableWithEdgar(
+      SEC_EDGAR_GOLDEN_FIXTURES.onChainHolders,
+      edgarRecords,
+      {
+        assetId: SEC_EDGAR_GOLDEN_FIXTURES.assetId,
+        cik: SEC_EDGAR_GOLDEN_FIXTURES.cik,
+        totalSupply: SEC_EDGAR_GOLDEN_FIXTURES.totalSupply,
+        generatedAt: "2026-11-23T12:00:00.000Z",
+      }
+    );
+
+    expect(report.newHoldersCount).toBe(1);
+    expect(report.departedHoldersCount).toBe(1);
+    expect(report.changedBalancesCount).toBe(2);
+    expect(report.unchangedCount).toBe(1);
+
+    // Apex (+7.5%) -> yellow; Beacon (-15%), Delta (-100% departed), Emerald (+100% new) -> 3 red
+    expect(report.yellowAlertCount).toBe(1);
+    expect(report.redAlertCount).toBe(3);
+
+    const apex = report.rows.find((r) => r.holderName.includes("Apex"))!;
+    expect(apex.status).toBe("changed_balance");
+    expect(apex.absoluteChange).toBe(30_000);
+    expect(apex.percentChange).toBeCloseTo(7.5, 2);
+    expect(apex.highlight).toBe("yellow");
+
+    const beacon = report.rows.find((r) => r.holderName.includes("Beacon"))!;
+    expect(beacon.status).toBe("changed_balance");
+    expect(beacon.absoluteChange).toBe(-37_500);
+    expect(beacon.percentChange).toBeCloseTo(-15.0, 2);
+    expect(beacon.highlight).toBe("red");
+
+    const delta = report.rows.find((r) => r.holderName.includes("Delta"))!;
+    expect(delta.status).toBe("departed_holder");
+    expect(delta.onChainShares).toBe(0);
+    expect(delta.highlight).toBe("red");
+
+    const emerald = report.rows.find((r) => r.holderName.includes("Emerald"))!;
+    expect(emerald.status).toBe("new_holder");
+    expect(emerald.edgarShares).toBe(0);
+    expect(emerald.onChainShares).toBe(45_000);
+    expect(emerald.highlight).toBe("red");
+
+    // Total discrepancy = 30k + 37.5k + 50k + 45k = 162,500 shares = 16.25% of 1M supply (> 1%)
+    expect(report.totalDiscrepancyShares).toBe(162_500);
+    expect(report.totalDiscrepancyPercentOfSupply).toBeCloseTo(16.25, 2);
+    expect(report.complianceWebhookTriggered).toBe(true);
+    expect(report.webhookPayload).not.toBeNull();
+    expect(report.webhookPayload?.event).toBe("cap_table.edgar_discrepancy");
+    expect(report.webhookPayload?.flaggedHolders).toHaveLength(4);
+    expect(report.signature).toHaveLength(64);
+  });
+
+  it("does not trigger compliance webhook when discrepancy is <= 1% of total supply", () => {
+    const edgar = parseEdgarForm4Csv(
+      [
+        "cik,accession_number,filing_date,reporting_owner,stellar_address,shares_owned_following_transaction",
+        "0001849821,0001849821-26-000001,2026-10-01,Minor Holder,GMINORHOLDER11111111111111111111111111111111111111111111,100000",
+      ].join("\n")
+    );
+    const report = reconcileCapTableWithEdgar(
+      [{ address: "GMINORHOLDER11111111111111111111111111111111111111111111", balance: "100500" }],
+      edgar,
+      { totalSupply: 1_000_000 }
+    );
+    // 500 / 1,000,000 = 0.05% of total supply (<= 1.0%)
+    expect(report.totalDiscrepancyPercentOfSupply).toBeCloseTo(0.05, 4);
+    expect(report.complianceWebhookTriggered).toBe(false);
+    expect(report.webhookPayload).toBeNull();
+  });
+
+  it("exports a cryptographically signed %PDF-1.4 binary report", () => {
+    const edgarRecords = parseEdgarForm4Csv(SEC_EDGAR_GOLDEN_FIXTURES.csv);
+    const report = reconcileCapTableWithEdgar(
+      SEC_EDGAR_GOLDEN_FIXTURES.onChainHolders,
+      edgarRecords,
+      { totalSupply: SEC_EDGAR_GOLDEN_FIXTURES.totalSupply }
+    );
+
+    const pdfBytes = buildSignedEdgarComparisonPdf(report);
+    const pdfText = new TextDecoder().decode(pdfBytes);
+
+    expect(pdfText.startsWith("%PDF-1.4\n")).toBe(true);
+    expect(pdfText).toContain("TESSERA INSTITUTIONAL CAP TABLE RECONCILIATION REPORT");
+    expect(pdfText).toContain("DIGITAL AUDIT SIGNATURE");
+    expect(pdfText).toContain(report.signature);
+    expect(pdfText).toContain("Apex Institutional Partners LP");
+    expect(pdfText.trimEnd().endsWith("%%EOF")).toBe(true);
   });
 });

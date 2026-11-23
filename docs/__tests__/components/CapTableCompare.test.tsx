@@ -207,6 +207,52 @@ describe("CapTableCompare", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("HTTP 503");
   });
+
+  it("reconciles an uploaded SEC EDGAR Form 4 CSV against on-chain holders, highlights >5% yellow and >10% red changes, and exports a signed PDF", async () => {
+    const createObjectURL = jest.fn(() => "blob:edgar-pdf");
+    const revokeObjectURL = jest.fn();
+    Object.assign(URL, { createObjectURL, revokeObjectURL });
+    const click = jest.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+
+    render(<CapTableCompare />);
+
+    // Load the SEC Form 4 Golden Dataset
+    fireEvent.click(screen.getByRole("button", { name: /Load SEC Form 4 Golden Dataset/i }));
+
+    expect(screen.getByTestId("edgar-compliance-webhook-alert")).toHaveTextContent(
+      /Compliance Webhook Triggered \(cap_table\.edgar_discrepancy\)/i
+    );
+
+    const apexRow = screen.getByTestId(
+      "edgar-diff-row-GAA6774APEXINSTITUTIONALPARTNERSLP777777777777777777LP2Q"
+    );
+    expect(apexRow).toHaveAttribute("data-highlight", "yellow");
+    expect(apexRow).toHaveAttribute("data-status", "changed_balance");
+
+    const beaconRow = screen.getByTestId(
+      "edgar-diff-row-GBB8912BEACONSOVEREIGNCREDITLLC888888888888888888888M77R"
+    );
+    expect(beaconRow).toHaveAttribute("data-highlight", "red");
+    expect(beaconRow).toHaveAttribute("data-status", "changed_balance");
+
+    const deltaRow = screen.getByTestId(
+      "edgar-diff-row-GDD4420DELTALEGACYHOLDINGSINC1111111111111111111111X88B"
+    );
+    expect(deltaRow).toHaveAttribute("data-status", "departed_holder");
+    expect(deltaRow).toHaveAttribute("data-highlight", "red");
+
+    const emeraldRow = screen.getByTestId(
+      "edgar-diff-row-GEE5531EMERALDRWAYIELDFUND2222222222222222222222222Z19C"
+    );
+    expect(emeraldRow).toHaveAttribute("data-status", "new_holder");
+    expect(emeraldRow).toHaveAttribute("data-highlight", "red");
+
+    // Export Signed PDF
+    fireEvent.click(screen.getByRole("button", { name: /Export Signed PDF/i }));
+    expect(createObjectURL).toHaveBeenCalled();
+    expect(click).toHaveBeenCalled();
+    click.mockRestore();
+  });
 });
 
 describe("loadCompareAsset", () => {

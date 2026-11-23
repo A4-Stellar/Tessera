@@ -5,15 +5,22 @@ import { useWebSocket } from "@/hooks/useWebSocket";
 import { API_BASE_URL } from "@/lib/api";
 import {
   MAX_COMPARED_ASSETS,
+  SEC_EDGAR_GOLDEN_FIXTURES,
   buildComparisonCsv,
   buildComparisonJson,
   buildComparisonRows,
+  buildSignedEdgarComparisonPdf,
   concentrationBand,
   giniCoefficient,
   inferDividendSchedule,
+  parseEdgarForm4Csv,
+  reconcileCapTableWithEdgar,
   trailingAnnualYieldPercent,
   type CompareAsset,
   type ComparisonRow,
+  type EdgarReconciliationReport,
+  type HolderDiffStatus,
+  type OnChainHolderRecord,
 } from "@/lib/cap-table-compare";
 
 export type { CompareAsset } from "@/lib/cap-table-compare";
@@ -185,9 +192,10 @@ function LiveRefresh({ url, contracts, onChange }: { url: string; contracts: Map
 
 // ── Export ──────────────────────────────────────────────────────────────────
 
-function download(filename: string, content: string, type: string) {
+function download(filename: string, content: string | Uint8Array, type: string) {
   if (typeof URL === "undefined" || typeof URL.createObjectURL !== "function") return;
-  const url = URL.createObjectURL(new Blob([content], { type }));
+  const blobPart = content instanceof Uint8Array ? (content.buffer as ArrayBuffer) : content;
+  const url = URL.createObjectURL(new Blob([blobPart], { type }));
   const link = document.createElement("a");
   link.href = url;
   link.download = filename;
@@ -196,6 +204,13 @@ function download(filename: string, content: string, type: string) {
   link.remove();
   URL.revokeObjectURL(url);
 }
+
+const DIFF_STATUS_LABEL: Record<HolderDiffStatus, string> = {
+  new_holder: "New holder",
+  departed_holder: "Departed holder",
+  changed_balance: "Changed balance",
+  unchanged: "Unchanged",
+};
 
 // ── Component ───────────────────────────────────────────────────────────────
 
@@ -250,6 +265,42 @@ export function CapTableCompare({
   const [notice, setNotice] = useState("");
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
   const refreshTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  const [edgarCsvText, setEdgarCsvText] = useState<string>("");
+  const [edgarHolders] = useState<OnChainHolderRecord[]>(SEC_EDGAR_GOLDEN_FIXTURES.onChainHolders);
+
+  const edgarReport = useMemo<EdgarReconciliationReport | null>(() => {
+    if (!edgarCsvText.trim()) return null;
+    const records = parseEdgarForm4Csv(edgarCsvText);
+    if (records.length === 0) return null;
+    return reconcileCapTableWithEdgar(edgarHolders, records, {
+      assetId: selected[0] ?? SEC_EDGAR_GOLDEN_FIXTURES.assetId,
+      cik: records[0]?.cik ?? SEC_EDGAR_GOLDEN_FIXTURES.cik,
+      totalSupply: SEC_EDGAR_GOLDEN_FIXTURES.totalSupply,
+    });
+  }, [edgarCsvText, edgarHolders, selected]);
+
+  const handleEdgarCsvFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (typeof file.text === "function") {
+      const text = await file.text();
+      setEdgarCsvText(text);
+    } else {
+      const reader = new FileReader();
+      reader.onload = () => setEdgarCsvText(String(reader.result ?? ""));
+      reader.readAsText(file);
+    }
+  };
+
+  const handleLoadGoldenEdgarDataset = () => {
+    setEdgarCsvText(SEC_EDGAR_GOLDEN_FIXTURES.csv);
+  };
+
+  const handleExportSignedPdf = () => {
+    if (!edgarReport) return;
+    const pdfBytes = buildSignedEdgarComparisonPdf(edgarReport);
+    download("cap-table-edgar-reconciliation.pdf", pdfBytes, "application/pdf");
+  };
 
   useEffect(() => {
     if (assetsProp) setCatalog(assetsProp);
@@ -554,6 +605,144 @@ export function CapTableCompare({
           )}
         </>
       )}
+
+      {/* SEC EDGAR Form 4 Cap-Table Reconciliation Section (Issue #476) */}
+      <div className="mt-6 border-t border-white/10 pt-4" data-testid="edgar-reconciliation-panel">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h4 className="text-sm font-semibold text-base-100">
+              SEC EDGAR Form 4 Cap-Table Reconciliation
+            </h4>
+            <p className="text-xs text-base-300">
+              Compare on-chain holder balances (GET /v1/assets/:id/holders) against an uploaded SEC EDGAR Form 4 CSV filing. Changes &gt; 5% are flagged yellow; &gt; 10% are flagged red.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="cursor-pointer rounded-md border border-white/15 px-3 py-1.5 text-xs font-medium text-base-100 hover:bg-white/10">
+              <span>Upload EDGAR Form 4 CSV</span>
+              <input
+                type="file"
+                accept=".csv,text/csv"
+                aria-label="Upload EDGAR Form 4 CSV"
+                onChange={handleEdgarCsvFileUpload}
+                className="sr-only"
+              />
+            </label>
+            <button
+              type="button"
+              onClick={handleLoadGoldenEdgarDataset}
+              className="rounded-md border border-white/15 px-3 py-1.5 text-xs font-medium text-base-100 hover:bg-white/10"
+            >
+              Load SEC Form 4 Golden Dataset
+            </button>
+            {edgarReport && (
+              <button
+                type="button"
+                onClick={handleExportSignedPdf}
+                className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-200 hover:bg-emerald-500/20"
+              >
+                Export Signed PDF
+              </button>
+            )}
+          </div>
+        </div>
+
+        {edgarReport && (
+          <div className="space-y-3">
+            {edgarReport.complianceWebhookTriggered && (
+              <div
+                role="status"
+                data-testid="edgar-compliance-webhook-alert"
+                className="rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200"
+              >
+                <strong>Compliance Webhook Triggered (cap_table.edgar_discrepancy):</strong> Discrepancy of{" "}
+                {edgarReport.totalDiscrepancyShares.toLocaleString("en-US")} shares (
+                {edgarReport.totalDiscrepancyPercentOfSupply.toFixed(2)}% of total supply) exceeds the 1.00% regulatory threshold for CIK{" "}
+                {edgarReport.cik}.
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+              <div className="rounded border border-white/10 p-2">
+                <span className="block text-base-300">New / Departed Holders</span>
+                <strong className="text-base-100">
+                  +{edgarReport.newHoldersCount} new / -{edgarReport.departedHoldersCount} departed
+                </strong>
+              </div>
+              <div className="rounded border border-white/10 p-2">
+                <span className="block text-base-300">Changed / Unchanged</span>
+                <strong className="text-base-100">
+                  {edgarReport.changedBalancesCount} changed / {edgarReport.unchangedCount} unchanged
+                </strong>
+              </div>
+              <div className="rounded border border-white/10 p-2">
+                <span className="block text-base-300">Threshold Alerts</span>
+                <strong className="text-base-100">
+                  {edgarReport.yellowAlertCount} yellow (&gt;5%) · {edgarReport.redAlertCount} red (&gt;10%)
+                </strong>
+              </div>
+              <div className="rounded border border-white/10 p-2">
+                <span className="block text-base-300">Audit Signature (SHA-256)</span>
+                <code className="block truncate text-[11px] text-emerald-300" data-testid="edgar-report-signature">
+                  {edgarReport.signature}
+                </code>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table
+                aria-label="SEC EDGAR Form 4 Cap Table Reconciliation"
+                className="w-full min-w-[36rem] text-xs"
+              >
+                <thead>
+                  <tr className="border-b border-white/10 text-left text-base-200">
+                    <th scope="col" className="px-2 py-1.5">Holder / Address</th>
+                    <th scope="col" className="px-2 py-1.5">EDGAR Form 4 Shares</th>
+                    <th scope="col" className="px-2 py-1.5">On-Chain Shares</th>
+                    <th scope="col" className="px-2 py-1.5">Delta (Abs / %)</th>
+                    <th scope="col" className="px-2 py-1.5">Status</th>
+                    <th scope="col" className="px-2 py-1.5">Threshold</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {edgarReport.rows.map((row) => {
+                    const rowTone =
+                      row.highlight === "red"
+                        ? "bg-rose-500/15 text-rose-100"
+                        : row.highlight === "yellow"
+                        ? "bg-amber-400/15 text-amber-100"
+                        : "text-base-200";
+                    const sign = row.absoluteChange > 0 ? "+" : "";
+                    return (
+                      <tr
+                        key={row.address}
+                        data-testid={`edgar-diff-row-${row.address}`}
+                        data-highlight={row.highlight}
+                        data-status={row.status}
+                        className={`border-b border-white/5 ${rowTone}`}
+                      >
+                        <th scope="row" className="px-2 py-1.5 text-left font-medium">
+                          <span>{row.holderName}</span>
+                          <span className="block font-mono text-[10px] text-base-300">{row.address}</span>
+                        </th>
+                        <td className="px-2 py-1.5 font-mono">{row.edgarShares.toLocaleString("en-US")}</td>
+                        <td className="px-2 py-1.5 font-mono">{row.onChainShares.toLocaleString("en-US")}</td>
+                        <td className="px-2 py-1.5 font-mono">
+                          {sign}
+                          {row.absoluteChange.toLocaleString("en-US")} ({sign}
+                          {row.percentChange.toFixed(2)}%)
+                        </td>
+                        <td className="px-2 py-1.5">{DIFF_STATUS_LABEL[row.status]}</td>
+                        <td className="px-2 py-1.5 font-semibold uppercase">{row.highlight}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </div>
     </section>
   );
 }

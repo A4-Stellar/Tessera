@@ -5,6 +5,8 @@ pub mod audit;
 pub mod compliance;
 pub mod dividends;
 pub mod dlq;
+#[rustfmt::skip]
+pub mod edgar;
 pub mod events;
 pub mod export;
 pub mod holders;
@@ -197,6 +199,10 @@ pub fn router(state: AppState) -> Router {
         .nest("/v1", data_routes)
         .route("/v1/ws", get(crate::ws::handler))
         .route("/v1/admin/dlq/retry", axum::routing::post(dlq::retry))
+        .route(
+            "/v1/admin/cap-table/import-edgar",
+            axum::routing::post(edgar::import_edgar),
+        )
         // Issue #26: per-key differential-privacy budget consumption.
         .route("/v1/admin/privacy/budget", get(privacy::budget))
         // `route_layer` (rather than `layer`) so the middleware runs after
