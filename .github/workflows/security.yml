@@ -18,6 +18,8 @@ on:
   workflow_dispatch: {}
 
 permissions:
+  # Least privilege for the scanning jobs. The dependency-remediation job
+  # below narrows/elevates its own permissions to what the bot needs.
   contents: read
   security-events: write
 
@@ -156,3 +158,40 @@ jobs:
         with:
           sarif_file: attack-surface.sarif
           category: tessera-attack-surface-scan
+
+  # Job 5: Automated dependency remediation (Rust + npm advisories).
+  # Only the weekly schedule and manual dispatch open PRs/issues; the push and
+  # PR triggers above keep their existing read-only scan behaviour.
+  dependency-remediation:
+    name: Dependency Remediation Bot
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    # Write access is scoped to this job only: the bot creates blobs/trees/
+    # commits/branches for fix PRs via the Git Data API and opens issues.
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          # The bot needs full history to resolve the base branch commit.
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      # DRY_RUN: set the repository variable DRY_RUN=true (or append
+      # --dry-run to the command below) to make the bot print the PRs/issues
+      # and deny.toml edits it *would* make, without any network writes.
+      # The maintainer defaults to SECURITY_MAINTAINER / GITHUB_REPOSITORY_OWNER.
+      - name: Run dependency remediation bot
+        run: python scripts/security/audit_crates.py --bot --repo "${{ github.repository }}" --token "${{ secrets.GITHUB_TOKEN }}" --maintainer "${{ vars.SECURITY_MAINTAINER || github.repository_owner }}" --base main
