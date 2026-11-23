@@ -17,6 +17,7 @@ pub mod proofs;
 )]
 pub mod search;
 pub mod security;
+pub mod sep24;
 #[expect(
     dead_code,
     reason = "The simulation placeholder is not part of the active API router."
@@ -190,6 +191,39 @@ pub fn router(state: AppState) -> Router {
         .route("/version", get(version))
         .route("/health", get(health))
         .route("/metrics", get(metrics))
+        // SEP-24 (Hosted Deposit and Withdrawal) lives at the API root so an
+        // anchor's `stellar.toml` can advertise standard paths. These routes
+        // use the module-local volatile store and require no `AppState`.
+        // NOTE: the global anonymizer middleware pseudonymises KYC fields
+        // (email, first_name, last_name, dob, tax_id, …) for non-admin callers;
+        // SEP-24 status/amount/XDR fields are unaffected.
+        .route("/.well-known/stellar.toml", get(sep24::stellar_toml))
+        .route(
+            "/sep24/transactions/deposit/interactive",
+            axum::routing::post(sep24::interactive_deposit),
+        )
+        .route("/sep24/transaction", get(sep24::get_transaction))
+        .route("/sep24/transactions", get(sep24::list_transactions))
+        .route(
+            "/sep24/transactions/:id/confirm_external",
+            axum::routing::post(sep24::confirm_external),
+        )
+        .route(
+            "/sep24/transactions/:id/complete",
+            axum::routing::post(sep24::complete),
+        )
+        .route(
+            "/sep24/transactions/:id/kyc",
+            axum::routing::post(sep24::submit_kyc),
+        )
+        .route(
+            "/sep24/admin/reverify",
+            axum::routing::post(sep24::reverify),
+        )
+        .route(
+            "/sep24/admin/reverify/due",
+            get(sep24::reverify_due),
+        )
         .route(
             "/v1/assets/:id/proofs/verify",
             axum::routing::post(proofs::verify),
@@ -343,6 +377,13 @@ async fn index() -> Json<serde_json::Value> {
             "GET /v1/proofs/mmr",
             "GET /v1/proofs/mmr/:ledger_seq?account=:address",
             "GET /v1/admin/privacy/budget",
+            "GET /.well-known/stellar.toml",
+            "POST /sep24/transactions/deposit/interactive",
+            "GET /sep24/transaction",
+            "GET /sep24/transactions",
+            "POST /sep24/transactions/:id/kyc",
+            "POST /sep24/admin/reverify",
+            "GET /sep24/admin/reverify/due",
             "GET /health",
             "GET /metrics"
         ],

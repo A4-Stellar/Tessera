@@ -1,0 +1,54 @@
+# Dependabot keeps routine dependency bumps flowing separately from the
+# security remediation bot (scripts/security/audit_crates.py --bot), which
+# handles HIGH/CRITICAL advisories by opening fix PRs and security issues.
+version: 2
+updates:
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "deps(cargo)"
+
+  - package-ecosystem: "npm"
+    directory: "/docs"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "deps(npm)"
+
+  - package-ecosystem: "npm"
+    directory: "/scripts/synthetic-monitor"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "deps(npm)"
+
+  - package-ecosystem: "npm"
+    directory: "/infrastructure/cloudflare"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "deps(npm)"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "deps(actions)"
