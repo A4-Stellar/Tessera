@@ -10,8 +10,10 @@
  *      RSA/ECDSA via a `JWT_JWKS_URL` JWKS document),
  *   4. rate limits per client IP with a sliding-window counter kept in the
  *      `RATE_LIMIT` Workers KV namespace,
- *   5. serves `GET /stats` and `GET /assets` from the edge Cache API with a
- *      stale-while-revalidate policy, and
+ *   5. serves `GET /stats`, `GET /assets`, and `GET /assets/:id` from the edge
+ *      Cache API with `Cache-Control: s-maxage=10`, Soroban-event-driven KV
+ *      cache invalidation, cache-key normalization, single-flight request
+ *      coalescing, and `Cf-Cache-Status` Logpush observability, and
  *   6. proxies every other request to `ORIGIN_URL`.
  *
  * The module deliberately avoids Node-only APIs so the same file runs both in
@@ -25,8 +27,38 @@
  * Defaults
  * ------------------------------------------------------------------------- */
 
-/** Paths (default-branch ``/stats`` aliases included) that get edge caching. */
+/** Paths (default-branch `/stats` aliases included) that get edge caching. */
 export const DEFAULT_CACHE_PATHS = ['/stats', '/assets', '/v1/stats', '/v1/assets'];
+
+/** Default edge `s-maxage` directive (seconds) for cached GET responses (#422). */
+export const DEFAULT_CACHE_S_MAXAGE_SECONDS = 10;
+
+/** KV key storing the list of contract/asset IDs invalidated by the Soroban indexer (#422). */
+export const INVALIDATED_CONTRACTS_KV_KEY = 'invalidated_contracts';
+
+/**
+ * Known query parameters preserved and sorted alphabetically during cache-key
+ * normalisation (#422). Unknown/tracking query parameters are stripped.
+ */
+export const DEFAULT_KNOWN_QUERY_PARAMS = Object.freeze([
+  'asset_id',
+  'contract_id',
+  'cursor',
+  'filter',
+  'holder',
+  'issuer',
+  'jurisdiction',
+  'limit',
+  'network',
+  'offset',
+  'order',
+  'page',
+  'search',
+  'sort',
+  'status',
+  'symbol',
+  'type',
+]);
 
 /** Methods the edge forwards. Everything else is rejected with `405`. */
 export const DEFAULT_ALLOWED_METHODS = ['GET', 'HEAD', 'POST', 'OPTIONS'];
@@ -183,6 +215,7 @@ export const INJECTION_PATTERNS = Object.freeze([
 
 /** Health/liveness probes are exempt from the empty-User-Agent rule. */
 const HEALTH_PATHS = new Set(['/health', '/version', '/']);
+void HEALTH_PATHS;
 
 /* ------------------------------------------------------------------------- *
  * Tiny env parsers + configuration resolution
@@ -236,8 +269,10 @@ export function resolveConfig(env = {}) {
     rateLimitFailOpen: envBool(bindings.RATE_LIMIT_FAIL_OPEN, true),
     cachePaths: envList(bindings.CACHE_PATHS, DEFAULT_CACHE_PATHS),
     cacheTtlSeconds: envInt(bindings.CACHE_TTL_SECONDS, 30),
+    cacheSMaxAgeSeconds: envInt(bindings.CACHE_S_MAXAGE_SECONDS, DEFAULT_CACHE_S_MAXAGE_SECONDS),
     cacheStaleSeconds: envInt(bindings.CACHE_STALE_SECONDS, 120),
     cacheMaxBytes: envInt(bindings.CACHE_MAX_BYTES, 524288),
+    knownQueryParams: envList(bindings.KNOWN_QUERY_PARAMS, DEFAULT_KNOWN_QUERY_PARAMS).map((p) => p.toLowerCase()),
     jwtAlgorithms: envList(bindings.JWT_ALGORITHMS, ['RS256', 'ES256', 'HS256']).map((alg) => alg.toUpperCase()),
     jwtSecret: envString(bindings.JWT_SECRET),
     jwtJwksUrl: envString(bindings.JWT_JWKS_URL),
@@ -646,7 +681,10 @@ export async function verifyJwt(token, config, deps = {}) {
     const keys = await fetchJwks(config, deps);
     const jwk = selectJwk(keys, header, spec);
     if (!jwk) {
-      throw new JwtError('unknown_key', header.kid ? `No JWKS key matches kid "${header.kid}".` : 'No JWKS key matches the token algorithm.');
+      throw new JwtError(
+        'unknown_key',
+        header.kid ? `No JWKS key matches kid "${header.kid}".` : 'No JWKS key matches the token algorithm.'
+      );
     }
     key = await cryptoImpl.subtle.importKey('jwk', jwk, spec.importParams, false, ['verify']);
   }
@@ -666,8 +704,11 @@ export async function verifyJwt(token, config, deps = {}) {
 }
 
 /* ------------------------------------------------------------------------- *
- * Edge caching (Cache API + stale-while-revalidate)
+ * Edge caching, Soroban KV invalidation, normalisation & request coalescing
  * ------------------------------------------------------------------------- */
+
+/** Module-level map of in-flight origin fetches keyed by normalized cache URL (#422). */
+const defaultInFlightRequests = new Map();
 
 /** Resolve the Cache API implementation, preferring an injected/bound cache. */
 export function getCacheStorage(env = {}, deps = {}) {
@@ -680,17 +721,243 @@ export function getCacheStorage(env = {}, deps = {}) {
   return null;
 }
 
-/** Only unauthenticated `GET`s to the configured static paths are cacheable. */
+/** Resolve the KV namespace used for Soroban-event-driven cache invalidation (#422). */
+export function getInvalidationKv(env = {}) {
+  if (!env || typeof env !== 'object') return null;
+  if (env.CACHE_INVALIDATION && typeof env.CACHE_INVALIDATION.get === 'function') return env.CACHE_INVALIDATION;
+  if (env.INVALIDATED_CONTRACTS && typeof env.INVALIDATED_CONTRACTS.get === 'function') {
+    return env.INVALIDATED_CONTRACTS;
+  }
+  if (env.RATE_LIMIT && typeof env.RATE_LIMIT.get === 'function') return env.RATE_LIMIT;
+  return null;
+}
+
+/**
+ * Extract the asset or contract identifier from `/assets/:id`, `/v1/assets/:id`,
+ * or query parameters (`asset_id` / `contract_id`).
+ */
+export function extractAssetId(requestOrUrl) {
+  const rawUrl = typeof requestOrUrl === 'string' ? requestOrUrl : requestOrUrl.url;
+  const url = new URL(rawUrl);
+  const match = /^\/(?:v1\/)?assets\/([^/]+)$/.exec(url.pathname);
+  if (match && match[1]) {
+    try {
+      return decodeURIComponent(match[1]);
+    } catch {
+      return match[1];
+    }
+  }
+  return url.searchParams.get('asset_id') || url.searchParams.get('contract_id') || null;
+}
+
+function matchesCachePathPattern(pathname, configuredPaths) {
+  for (const pattern of configuredPaths) {
+    if (!pattern) continue;
+    if (pattern === pathname) return true;
+    // If `/assets` or `/v1/assets` is in cachePaths, also allow single-resource `/assets/:id` and `/v1/assets/:id`
+    if (pattern === '/assets' && /^\/assets\/[^/]+$/.test(pathname)) return true;
+    if (pattern === '/v1/assets' && /^\/v1\/assets\/[^/]+$/.test(pathname)) return true;
+    if (pattern.includes(':')) {
+      const regexSource = `^${pattern
+        .split('/')
+        .map((seg) => (seg.startsWith(':') ? '[^/]+' : seg.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+        .join('/')}$`;
+      if (new RegExp(regexSource).test(pathname)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Only unauthenticated `GET`s to the configured static paths (`GET /assets`,
+ * `GET /assets/:id`, `GET /stats`, and their `/v1` aliases) are cacheable.
+ */
 export function isCacheableRequest(request, config) {
   if ((request.method || 'GET').toUpperCase() !== 'GET') return false;
   if (request.headers.has('authorization')) return false;
   const pathname = new URL(request.url).pathname;
-  return config.cachePaths.includes(pathname);
+  return matchesCachePathPattern(pathname, config.cachePaths);
 }
 
-function buildCacheKey(request) {
-  const url = new URL(request.url);
-  return new Request(`${url.origin}${url.pathname}${url.search}`, { method: 'GET' });
+/**
+ * Normalise a request URL for cache-key generation (#422):
+ * strips unknown query parameters and sorts known query parameters alphabetically.
+ */
+export function normalizeCacheUrl(inputUrl, config = resolveConfig({})) {
+  const url = new URL(typeof inputUrl === 'string' ? inputUrl : inputUrl.url);
+  const allowed = new Set((config.knownQueryParams || DEFAULT_KNOWN_QUERY_PARAMS).map((k) => k.toLowerCase()));
+  const retained = [];
+  for (const [key, value] of url.searchParams.entries()) {
+    const lowerKey = key.toLowerCase();
+    if (allowed.has(lowerKey)) {
+      retained.push([lowerKey, value]);
+    }
+  }
+  retained.sort((a, b) => (a[0] === b[0] ? a[1].localeCompare(b[1]) : a[0].localeCompare(b[0])));
+  const normalizedParams = new URLSearchParams();
+  for (const [key, value] of retained) {
+    normalizedParams.append(key, value);
+  }
+  const query = normalizedParams.toString();
+  return `${url.origin}${url.pathname}${query ? `?${query}` : ''}`;
+}
+
+/** Build a normalized GET `Request` used as the Cache API lookup key (#422). */
+export function buildCacheKey(request, config = resolveConfig({})) {
+  return new Request(normalizeCacheUrl(request.url, config), { method: 'GET' });
+}
+
+/**
+ * Pushes a list of invalidated contract/asset IDs from a Soroban polling cycle
+ * into the Cloudflare KV namespace (#422).
+ */
+export async function pushInvalidatedContracts(kv, contractIds, options = {}) {
+  if (!kv || typeof kv.put !== 'function') {
+    throw new Error('A valid Cloudflare KV namespace binding is required to push invalidated contracts.');
+  }
+  const list = Array.isArray(contractIds) ? contractIds : [contractIds];
+  const normalized = [...new Set(list.map((id) => String(id ?? '').trim()).filter(Boolean))];
+  const payload = {
+    contractIds: normalized,
+    updatedAt: options.now ?? Date.now(),
+    ledgerSequence: options.ledgerSequence ?? null,
+  };
+  const putOptions = options.ttlSeconds ? { expirationTtl: Math.max(60, Number(options.ttlSeconds)) } : undefined;
+  await kv.put(INVALIDATED_CONTRACTS_KV_KEY, JSON.stringify(payload), putOptions);
+  return payload;
+}
+
+/**
+ * Reads the current set of invalidated contract/asset IDs from Workers KV (#422).
+ *
+ * @returns {Promise<Set<string>>}
+ */
+export async function getInvalidatedContracts(kv) {
+  if (!kv || typeof kv.get !== 'function') return new Set();
+  let raw = null;
+  try {
+    raw = await kv.get(INVALIDATED_CONTRACTS_KV_KEY);
+  } catch {
+    return new Set();
+  }
+  if (!raw) return new Set();
+
+  let parsed = raw;
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (!trimmed) return new Set();
+    if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
+      try {
+        parsed = JSON.parse(trimmed);
+      } catch {
+        return new Set(
+          trimmed
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean)
+        );
+      }
+    } else {
+      return new Set(
+        trimmed
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+      );
+    }
+  }
+
+  if (Array.isArray(parsed)) {
+    return new Set(parsed.map((item) => String(item ?? '').trim()).filter(Boolean));
+  }
+  if (parsed && typeof parsed === 'object') {
+    const candidates = parsed.contractIds || parsed.contracts || parsed.assets || [];
+    if (Array.isArray(candidates)) {
+      return new Set(candidates.map((item) => String(item ?? '').trim()).filter(Boolean));
+    }
+  }
+  return new Set();
+}
+
+/**
+ * Checks whether an incoming request targets an asset/contract that has been
+ * invalidated by the Soroban event poller in Workers KV (#422).
+ */
+export async function isRequestInvalidated(request, env = {}, config = resolveConfig(env)) {
+  void config;
+  const kv = getInvalidationKv(env);
+  if (!kv) return false;
+
+  const invalidatedSet = await getInvalidatedContracts(kv);
+  if (invalidatedSet.has('*')) return true;
+
+  const assetId = extractAssetId(request);
+  if (assetId) {
+    if (invalidatedSet.has(String(assetId))) return true;
+    try {
+      const directFlag = await kv.get(`invalidated:${assetId}`);
+      if (directFlag) return true;
+    } catch {
+      // Ignore transient KV error and fall back to set lookup
+    }
+  }
+
+  const pathname = new URL(request.url).pathname;
+  if ((pathname === '/assets' || pathname === '/v1/assets') && invalidatedSet.size > 0) {
+    if (envBool(env && env.INVALIDATE_ASSET_LIST_ON_EVENT, false) || invalidatedSet.has('assets')) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Emits a structured Logpush observability record containing `Cf-Cache-Status`
+ * and request metadata (#422).
+ */
+export function emitLogpushRecord(record, env = {}, ctx = {}, deps = {}) {
+  const payload = {
+    timestamp: new Date(deps.now ?? Date.now()).toISOString(),
+    cfCacheStatus: record.cfCacheStatus,
+    'Cf-Cache-Status': record.cfCacheStatus,
+    requestId: record.requestId || null,
+    method: record.method || 'GET',
+    pathname: record.pathname || '/',
+    normalizedCacheKey: record.normalizedCacheKey || null,
+    assetId: record.assetId || null,
+    invalidated: Boolean(record.invalidated),
+    coalesced: Boolean(record.coalesced),
+    status: record.status ?? 200,
+    clientIp: record.clientIp || 'unknown',
+  };
+
+  if (typeof deps.logpush === 'function') {
+    deps.logpush(payload);
+  } else if (Array.isArray(deps.logpush)) {
+    deps.logpush.push(payload);
+  }
+
+  if (deps.logger && typeof deps.logger.info === 'function') {
+    deps.logger.info(JSON.stringify(payload));
+  }
+
+  const logpushEndpoint = env && typeof env.LOGPUSH_ENDPOINT === 'string' ? env.LOGPUSH_ENDPOINT.trim() : '';
+  if (logpushEndpoint) {
+    const fetchImpl = deps.fetch || globalThis.fetch;
+    if (typeof fetchImpl === 'function') {
+      const promise = fetchImpl(
+        new Request(logpushEndpoint, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(payload),
+        })
+      ).catch(() => {});
+      if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(promise);
+    }
+  }
+
+  return payload;
 }
 
 function isCacheableOriginResponse(response, config) {
@@ -707,18 +974,34 @@ async function bufferResponse(response) {
   const headers = new Headers(response.headers);
   return {
     body,
+    status: response.status,
+    statusText: response.statusText,
     headers,
     response: new Response(body, {
       status: response.status,
       statusText: response.statusText,
-      headers,
+      headers: new Headers(headers),
     }),
   };
 }
 
-function withCacheMarker(response, marker) {
+function applyEdgeCacheControl(headers, config) {
+  const existing = headers.get('cache-control') || '';
+  if (/no-store/i.test(existing)) return;
+  const sMaxAge = config.cacheSMaxAgeSeconds || DEFAULT_CACHE_S_MAXAGE_SECONDS;
+  if (!/\bs-maxage=\d+/i.test(existing)) {
+    headers.set('cache-control', `public, s-maxage=${sMaxAge}, stale-while-revalidate=${config.cacheStaleSeconds}`);
+  }
+}
+
+function withCacheMarker(response, marker, config, extraHeaders = {}) {
   const headers = new Headers(response.headers);
   headers.set('x-edge-cache', marker);
+  headers.set('Cf-Cache-Status', marker);
+  if (config) applyEdgeCacheControl(headers, config);
+  for (const [k, v] of Object.entries(extraHeaders)) {
+    headers.set(k, v);
+  }
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,
@@ -726,11 +1009,13 @@ function withCacheMarker(response, marker) {
   });
 }
 
-async function materializeCached(cached, marker, ageSeconds) {
+async function materializeCached(cached, marker, ageSeconds, config) {
   const body = await cached.arrayBuffer();
   const headers = new Headers(cached.headers);
   headers.delete('x-edge-stored-at');
   headers.set('x-edge-cache', marker);
+  headers.set('Cf-Cache-Status', marker);
+  if (config) applyEdgeCacheControl(headers, config);
   if (Number.isFinite(ageSeconds)) headers.set('age', String(Math.max(0, Math.floor(ageSeconds))));
   return new Response(body, {
     status: cached.status,
@@ -748,42 +1033,51 @@ function maybeNotModified(request, response) {
   const headers = new Headers();
   headers.set('etag', etag);
   headers.set('x-edge-cache', 'HIT');
+  headers.set('Cf-Cache-Status', 'HIT');
   const cacheControl = response.headers.get('cache-control');
   if (cacheControl) headers.set('cache-control', cacheControl);
   return new Response(null, { status: 304, headers });
 }
 
-async function fetchAndStore(request, env, config, deps, cache, cacheKey) {
+async function fetchAndStoreBuffered(request, env, config, deps, cache, cacheKey) {
   const originResponse = await fetchFromOrigin(request, env, config, deps);
-  if (!cache || !isCacheableOriginResponse(originResponse, config)) return originResponse;
-
   let buffered;
   try {
-    buffered = await bufferResponse(originResponse.clone());
+    buffered = await bufferResponse(originResponse);
   } catch {
-    return originResponse;
+    return {
+      body: null,
+      status: originResponse.status,
+      statusText: originResponse.statusText,
+      headers: new Headers(originResponse.headers),
+      fallbackResponse: originResponse,
+    };
   }
 
-  const cacheHeaders = new Headers(buffered.headers);
-  cacheHeaders.set('x-edge-stored-at', String(deps.now));
-  try {
-    await cache.put(
-      cacheKey,
-      new Response(buffered.body, {
-        status: originResponse.status,
-        statusText: originResponse.statusText,
-        headers: cacheHeaders,
-      })
-    );
-  } catch {
-    // Cache writes are best effort; a miss only costs an extra origin call.
+  if (cache && isCacheableOriginResponse(buffered.response, config)) {
+    applyEdgeCacheControl(buffered.headers, config);
+    const cacheHeaders = new Headers(buffered.headers);
+    cacheHeaders.set('x-edge-stored-at', String(deps.now));
+    try {
+      await cache.put(
+        cacheKey,
+        new Response(buffered.body, {
+          status: buffered.status,
+          statusText: buffered.statusText,
+          headers: cacheHeaders,
+        })
+      );
+    } catch {
+      // Cache writes are best effort; a miss only costs an extra origin call.
+    }
   }
-  return buffered.response;
+
+  return buffered;
 }
 
 async function revalidateCache(request, env, config, deps, cache, cacheKey) {
   try {
-    await fetchAndStore(request, env, config, deps, cache, cacheKey);
+    await fetchAndStoreBuffered(request, env, config, deps, cache, cacheKey);
   } catch (error) {
     if (deps.logger && typeof deps.logger.warn === 'function') {
       deps.logger.warn(`[edge-shield] stale-while-revalidate failed: ${error.message}`);
@@ -791,11 +1085,47 @@ async function revalidateCache(request, env, config, deps, cache, cacheKey) {
   }
 }
 
-async function handleCacheableRequest(request, env, ctx, config, deps) {
+async function handleCacheableRequest(request, env, ctx, config, deps, meta = {}) {
   const cache = getCacheStorage(env, deps);
-  const cacheKey = buildCacheKey(request);
+  const cacheKey = buildCacheKey(request, config);
   const freshSeconds = config.cacheTtlSeconds;
   const staleSeconds = config.cacheTtlSeconds + config.cacheStaleSeconds;
+  const url = new URL(request.url);
+  const assetId = extractAssetId(request);
+
+  // Check Soroban-event-driven KV cache invalidation (#422)
+  const invalidated = await isRequestInvalidated(request, env, config);
+  if (invalidated) {
+    if (cache && typeof cache.delete === 'function') {
+      try {
+        await cache.delete(cacheKey);
+      } catch {
+        // Ignore cache eviction error
+      }
+    }
+    const originResponse = await fetchFromOrigin(request, env, config, deps);
+    const response = withCacheMarker(originResponse, 'BYPASS', config, {
+      'x-edge-cache-invalidated': 'true',
+    });
+    emitLogpushRecord(
+      {
+        cfCacheStatus: 'BYPASS',
+        requestId: meta.requestId,
+        method: request.method,
+        pathname: url.pathname,
+        normalizedCacheKey: cacheKey.url,
+        assetId,
+        invalidated: true,
+        coalesced: false,
+        status: response.status,
+        clientIp: meta.clientIp,
+      },
+      env,
+      ctx,
+      deps
+    );
+    return response;
+  }
 
   let cached = null;
   if (cache) {
@@ -811,17 +1141,107 @@ async function handleCacheableRequest(request, env, ctx, config, deps) {
     const ageSeconds = storedAt > 0 ? Math.max(0, (deps.now - storedAt) / 1000) : Number.POSITIVE_INFINITY;
 
     if (ageSeconds <= freshSeconds) {
-      return maybeNotModified(request, await materializeCached(cached, 'HIT', ageSeconds));
+      const hitResponse = maybeNotModified(
+        request,
+        await materializeCached(cached, 'HIT', ageSeconds, config)
+      );
+      emitLogpushRecord(
+        {
+          cfCacheStatus: 'HIT',
+          requestId: meta.requestId,
+          method: request.method,
+          pathname: url.pathname,
+          normalizedCacheKey: cacheKey.url,
+          assetId,
+          invalidated: false,
+          coalesced: false,
+          status: hitResponse.status,
+          clientIp: meta.clientIp,
+        },
+        env,
+        ctx,
+        deps
+      );
+      return hitResponse;
     }
     if (ageSeconds <= staleSeconds) {
       const revalidation = revalidateCache(request, env, config, deps, cache, cacheKey);
       if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(revalidation);
       else await revalidation;
-      return materializeCached(cached, 'STALE', ageSeconds);
+      const staleResponse = await materializeCached(cached, 'STALE', ageSeconds, config);
+      emitLogpushRecord(
+        {
+          cfCacheStatus: 'STALE',
+          requestId: meta.requestId,
+          method: request.method,
+          pathname: url.pathname,
+          normalizedCacheKey: cacheKey.url,
+          assetId,
+          invalidated: false,
+          coalesced: false,
+          status: staleResponse.status,
+          clientIp: meta.clientIp,
+        },
+        env,
+        ctx,
+        deps
+      );
+      return staleResponse;
     }
   }
 
-  return withCacheMarker(await fetchAndStore(request, env, config, deps, cache, cacheKey), 'MISS');
+  // Single-flight request coalescing for concurrent cache misses (#422)
+  const inFlight = deps.inFlight || defaultInFlightRequests;
+  const inflightKey = cacheKey.url;
+  let coalesced = false;
+  let flightPromise = inFlight.get(inflightKey);
+
+  if (flightPromise) {
+    coalesced = true;
+  } else {
+    flightPromise = (async () => {
+      try {
+        return await fetchAndStoreBuffered(request, env, config, deps, cache, cacheKey);
+      } finally {
+        inFlight.delete(inflightKey);
+      }
+    })();
+    inFlight.set(inflightKey, flightPromise);
+  }
+
+  const shared = await flightPromise;
+  const rawResponse =
+    shared.body !== null
+      ? new Response(shared.body, {
+          status: shared.status,
+          statusText: shared.statusText,
+          headers: new Headers(shared.headers),
+        })
+      : shared.fallbackResponse;
+
+  const missResponse = withCacheMarker(rawResponse, 'MISS', config, {
+    'x-edge-coalesced': coalesced ? 'true' : 'false',
+  });
+
+  emitLogpushRecord(
+    {
+      cfCacheStatus: 'MISS',
+      requestId: meta.requestId,
+      method: request.method,
+      pathname: url.pathname,
+      normalizedCacheKey: cacheKey.url,
+      assetId,
+      invalidated: false,
+      coalesced,
+      status: missResponse.status,
+      clientIp: meta.clientIp,
+    },
+    env,
+    ctx,
+    deps
+  );
+
+  return missResponse;
 }
 
 /* ------------------------------------------------------------------------- *
@@ -981,11 +1401,32 @@ export async function handleRequest(request, env = {}, ctx = {}, deps = {}) {
 
   // 6. Cache-first serving for the static read endpoints.
   if (isCacheableRequest(request, config)) {
-    return respond(await handleCacheableRequest(request, env, ctx, config, edgeDeps), rateHeaders);
+    return respond(
+      await handleCacheableRequest(request, env, ctx, config, edgeDeps, { requestId, clientIp }),
+      rateHeaders
+    );
   }
 
   // 7. Proxy everything else.
-  return respond(await fetchFromOrigin(request, env, config, edgeDeps), rateHeaders);
+  const originResponse = await fetchFromOrigin(request, env, config, edgeDeps);
+  emitLogpushRecord(
+    {
+      cfCacheStatus: 'DYNAMIC',
+      requestId,
+      method: request.method,
+      pathname: url.pathname,
+      normalizedCacheKey: null,
+      assetId: extractAssetId(request),
+      invalidated: false,
+      coalesced: false,
+      status: originResponse.status,
+      clientIp,
+    },
+    env,
+    ctx,
+    edgeDeps
+  );
+  return respond(originResponse, { ...rateHeaders, 'Cf-Cache-Status': 'DYNAMIC' });
 }
 
 export default {
@@ -993,7 +1434,7 @@ export default {
    * Cloudflare Workers module entry point.
    *
    * @param {Request} request
-   * @param {Record<string, unknown>} env bindings (`RATE_LIMIT`, `ORIGIN_URL`, secrets…)
+   * @param {Record<string, unknown>} env bindings (`RATE_LIMIT`, `CACHE_INVALIDATION`, `ORIGIN_URL`, secrets…)
    * @param {{waitUntil?: (promise: Promise<unknown>) => void}} ctx
    */
   async fetch(request, env, ctx) {

@@ -23,6 +23,10 @@ workers_dev = true
 binding = "RATE_LIMIT"
 id = "REPLACE_WITH_KV_NAMESPACE_ID"
 
+[[kv_namespaces]]
+binding = "CACHE_INVALIDATION"
+id = "REPLACE_WITH_CACHE_INVALIDATION_KV_ID"
+
 # ---------------------------------------------------------------------------
 # Plain-text bindings. Override per environment as needed.
 # ---------------------------------------------------------------------------
@@ -38,6 +42,7 @@ RATE_LIMIT_FAIL_OPEN = "true"
 
 # Static REST responses cached at the edge with stale-while-revalidate.
 CACHE_PATHS = "/stats,/assets,/v1/stats,/v1/assets"
+CACHE_S_MAXAGE_SECONDS = "10"
 CACHE_TTL_SECONDS = "30"
 CACHE_STALE_SECONDS = "120"
 
