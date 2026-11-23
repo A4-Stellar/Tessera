@@ -1,0 +1,76 @@
+# =============================================================================
+# Grafana OnCall Integration & Automated P1 Triage Configuration (Issue #474)
+#
+# Escalation Chain:
+#   notify(channel) (0m) -> 5 min -> notify(on-call engineer) -> 15 min -> notify(manager)
+#
+# Automated Triage Runbook Execution:
+#   On P1 alerts, triggers `tessera-orchestrator` automated triage bot to execute:
+#   1. check_postgres_connection_count (with step timeout & automatic rollback)
+#   2. restart_stuck_indexer_pod       (with step timeout & automatic rollback)
+#   3. flush_redis_cache               (with step timeout & automatic rollback)
+#   Posts structured Slack payload `{action, outcome, duration_ms, next_step}`
+#   and appends every action to the SHA-256 hash-chained immutable audit trail.
+# =============================================================================
+
+apiVersion: monitoring.tessera.io/v1
+kind: GrafanaOnCallIntegration
+metadata:
+  name: tessera-production-oncall
+  namespace: monitoring
+spec:
+  integration_type: alertmanager
+  slack_channel: "#tessera-incidents"
+  triage_bot:
+    enabled: true
+    priority_trigger: P1
+    sla_deadline_seconds: 90
+    step_timeout_seconds: 15
+    rollback_on_failure: true
+    audit_log_mode: immutable_sha256_chain
+    slack_output_schema:
+      required_fields:
+        - action
+        - outcome
+        - duration_ms
+        - next_step
+    runbook_actions:
+      - id: check_postgres_connection_count
+        runbook_url: docs/runbooks/database-pool.md
+        timeout_seconds: 15
+        rollback_action: restore_postgres_pool_limits
+      - id: restart_stuck_indexer_pod
+        runbook_url: docs/runbooks/indexer-lag.md
+        timeout_seconds: 25
+        rollback_action: rollback_indexer_pod_deployment
+      - id: flush_redis_cache
+        runbook_url: docs/runbooks/api-errors.md
+        timeout_seconds: 15
+        rollback_action: restore_redis_cache_snapshot
+
+  escalation_chain:
+    name: tessera-p1-escalation
+    steps:
+      - stage: 1
+        type: notify_channel
+        action: "notify(channel)"
+        target: "#tessera-incidents"
+        wait_before_seconds: 0
+      - stage: 2
+        type: wait
+        duration: 5m
+        duration_seconds: 300
+      - stage: 3
+        type: notify_on_call_engineer
+        action: "notify(on-call engineer)"
+        target: "primary-sre-schedule"
+        wait_before_seconds: 300
+      - stage: 4
+        type: wait
+        duration: 15m
+        duration_seconds: 900
+      - stage: 5
+        type: notify_manager
+        action: "notify(manager)"
+        target: "engineering-manager"
+        wait_before_seconds: 900

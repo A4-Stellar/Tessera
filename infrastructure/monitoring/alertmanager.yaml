@@ -6,11 +6,20 @@ route:
   repeat_interval: 4h
   routes:
     - matchers: [severity="critical"]
+      receiver: grafana-oncall-p1
+      continue: true
+    - matchers: [severity="critical"]
       receiver: pagerduty
       continue: false
     - matchers: [severity="warning"]
       receiver: warning-chat
 receivers:
+  - name: grafana-oncall-p1
+    webhook_configs:
+      - url_file: /etc/alertmanager/secrets/grafana-oncall-webhook-url
+        send_resolved: true
+      - url: http://tessera-orchestrator.monitoring.svc.cluster.local:9095/v1/triage/webhook
+        send_resolved: true
   - name: pagerduty
     pagerduty_configs:
       - routing_key_file: /etc/alertmanager/secrets/pagerduty-routing-key

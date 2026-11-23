@@ -10,6 +10,8 @@ pub mod config;
 pub mod dns;
 pub mod failover;
 pub mod postgres;
+#[rustfmt::skip]
+pub mod triage;
 pub mod types;
 
 pub use failover::{
