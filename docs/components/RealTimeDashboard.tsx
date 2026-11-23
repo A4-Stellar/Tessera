@@ -1,27 +1,31 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import React, { Suspense, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Cell,
-  ComposedChart,
-  Line,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
+  CandlestickSeries,
+  ColorType,
+  HistogramSeries,
+  createChart,
+  createSeriesMarkers,
+  type CandlestickData,
+  type HistogramData,
+  type IChartApi,
+  type ISeriesApi,
+  type SeriesMarker,
+  type Time,
+  type UTCTimestamp,
+} from "lightweight-charts";
 import { API_BASE_URL } from "@/lib/api";
-import { useWebSocket } from "@/hooks/useWebSocket";
+import { useEventStream, type StreamComplianceEvent } from "@/hooks/useEventStream";
+import { useDebouncedResizeObserver } from "@/hooks/useDebouncedResizeObserver";
+import { AnomalyAlert, extractAnomalyFromEvent, type AnomalyInfo } from "@/components/AnomalyAlert";
 
 // ---------------------------------------------------------------------------
-// Types
+// Types & Helper Functions
 // ---------------------------------------------------------------------------
 
-/** Raw event shape returned by the /v1/ws WebSocket endpoint. */
-interface WsEvent {
+/** A contract event as streamed by `GET /v1/ws` and listed by `GET /v1/events`. */
+export interface StreamEvent {
   id: number;
   contract: string;
   event_type: string;
@@ -30,799 +34,580 @@ interface WsEvent {
   data: Record<string, unknown>;
 }
 
-/** Parsed transfer event for the activity feed. */
-interface TransferRecord {
-  id: number;
-  timestamp: string;
-  from: string;
-  to: string;
-  amount: string;
-  asset: string;
-  ledger: number;
-}
+export type ConnectionStatus = "connecting" | "syncing" | "live" | "reconnecting";
 
-/** Parsed dividend event for the dividend feed. */
-interface DividendRecord {
-  id: number;
-  timestamp: string;
-  asset: string;
-  amountPerShare: string;
-  totalDistributed: string;
-  ledger: number;
-}
-
-/** OHLC candlestick data point. */
-interface CandleData {
-  time: number;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  volume: number;
-}
-
-/** Volume bar data point. */
-interface VolumeBar {
-  time: number;
-  volume: number;
-  color: string;
-}
-
-/** Aggregated dashboard statistics. */
-interface DashboardStats {
-  totalTransfers: number;
-  totalVolume: number;
-  totalDividends: number;
-  activeAssets: number;
-}
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-const CANDLE_INTERVAL_MS = 60_000; // 1-minute candles
-const MAX_CANDLES = 120; // Keep last 2 hours of 1m candles
-const MAX_FEED_ITEMS = 50;
-const MAX_CHART_VOLUME_BARS = 60;
-
-const CHART_COLORS = {
-  bullish: "#34d399",
-  bearish: "#f87171",
-  volume: "#38bdf8",
-  grid: "#1e293b",
-  text: "#94a3b8",
-  crosshair: "#475569",
+export const STATUS_LABEL: Record<ConnectionStatus, string> = {
+  connecting: "Connecting…",
+  syncing: "Syncing missed events…",
+  live: "Live",
+  reconnecting: "Reconnecting…",
 };
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+const MAX_BARS = 2_000;
+const SEEN_CAPACITY = 10_000;
+const BASE_RECONNECT_MS = 500;
+const MAX_RECONNECT_MS = 30_000;
 
-function truncateAddress(address: string): string {
-  if (address.length <= 16) return address;
-  return `${address.slice(0, 8)}…${address.slice(-6)}`;
+function apiRoot(baseUrl: string): string {
+  return baseUrl.replace(/\/+$/, "").replace(/\/v1$/, "");
 }
 
-function formatNumber(value: number, decimals = 2): string {
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(decimals)}M`;
-  if (value >= 1_000) return `${(value / 1_000).toFixed(decimals)}K`;
-  return value.toFixed(decimals);
-}
-
-function formatTimestamp(iso: string): string {
-  try {
-    const d = new Date(iso);
-    return d.toLocaleTimeString("en-US", {
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-    });
-  } catch {
-    return iso;
-  }
-}
-
-function getWsUrl(baseUrl: string): string {
-  const trimmed = baseUrl.replace(/\/+$/, "");
-  const httpBase = trimmed.endsWith("/v1")
-    ? trimmed.slice(0, -3)
-    : trimmed;
-  const wsBase = httpBase.replace(/^http/, "ws");
-  return `${wsBase}/v1/ws`;
-}
-
-function extractAmount(data: Record<string, unknown>): string {
-  const raw = data.amount ?? data.value ?? data.balance ?? "0";
-  return String(raw);
-}
-
-function extractAsset(data: Record<string, unknown>): string {
-  const raw = data.asset ?? data.symbol ?? data.token ?? "Unknown";
-  return String(raw);
-}
-
-function extractPrice(data: Record<string, unknown>): number | null {
-  const raw = data.price ?? data.amount ?? data.value;
-  if (raw == null) return null;
-  const num = Number(raw);
-  return Number.isFinite(num) ? num : null;
-}
-
-// ---------------------------------------------------------------------------
-// Candlestick shape component for recharts
-// ---------------------------------------------------------------------------
-
-interface CandleWickProps {
-  x?: number;
-  y?: number;
-  width?: number;
-  height?: number;
-  payload?: CandleData;
-}
-
-function CandleWick({ x = 0, y = 0, width = 0, height = 0, payload }: CandleWickProps) {
-  if (!payload) return null;
-  const { open, close, high, low } = payload;
-  const isBullish = close >= open;
-  const color = isBullish ? CHART_COLORS.bullish : CHART_COLORS.bearish;
-  const centerX = x + width / 2;
-  const bodyTop = y + (Math.max(open, close) / (high - low || 1)) * height;
-  const bodyBottom = y + (Math.min(open, close) / (high - low || 1)) * height;
-  const bodyHeight = Math.max(bodyBottom - bodyTop, 1);
-
-  return (
-    <g>
-      {/* Wick (high-low line) */}
-      <line
-        x1={centerX}
-        y1={y}
-        x2={centerX}
-        y2={y + height}
-        stroke={color}
-        strokeWidth={1}
-      />
-      {/* Body (open-close rectangle) */}
-      <rect
-        x={x + width * 0.15}
-        y={bodyTop}
-        width={width * 0.7}
-        height={bodyHeight}
-        fill={color}
-        stroke={color}
-        strokeWidth={1}
-        rx={1}
-      />
-    </g>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Custom tooltip components
-// ---------------------------------------------------------------------------
-
-interface TooltipPayloadItem {
-  payload?: CandleData;
-}
-
-function CandleTooltip({
-  active,
-  payload,
-}: {
-  active?: boolean;
-  payload?: TooltipPayloadItem[];
-}) {
-  if (!active || !payload?.length) return null;
-  const candle = payload[0].payload;
-  if (!candle) return null;
-
-  const isBullish = candle.close >= candle.open;
-  const change = candle.close - candle.open;
-  const changePct = candle.open !== 0 ? (change / candle.open) * 100 : 0;
-
-  return (
-    <div className="rounded-lg border border-base-600 bg-base-850 px-3 py-2 text-xs shadow-xl">
-      <div className="mb-1 font-mono text-[10px] text-base-300">
-        {new Date(candle.time).toLocaleTimeString()}
-      </div>
-      <div className="grid grid-cols-2 gap-x-4 gap-y-0.5">
-        <span className="text-base-300">Open</span>
-        <span className="text-right font-mono text-base-100">
-          {candle.open.toFixed(4)}
-        </span>
-        <span className="text-base-300">High</span>
-        <span className="text-right font-mono text-emerald-400">
-          {candle.high.toFixed(4)}
-        </span>
-        <span className="text-base-300">Low</span>
-        <span className="text-right font-mono text-red-400">
-          {candle.low.toFixed(4)}
-        </span>
-        <span className="text-base-300">Close</span>
-        <span className="text-right font-mono text-base-100">
-          {candle.close.toFixed(4)}
-        </span>
-        <span className="text-base-300">Change</span>
-        <span
-          className={`text-right font-mono ${isBullish ? "text-emerald-400" : "text-red-400"}`}
-        >
-          {change >= 0 ? "+" : ""}
-          {change.toFixed(4)} ({changePct >= 0 ? "+" : ""}
-          {changePct.toFixed(2)}%)
-        </span>
-        <span className="text-base-300">Volume</span>
-        <span className="text-right font-mono text-sky-400">
-          {formatNumber(candle.volume)}
-        </span>
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Stat card component
-// ---------------------------------------------------------------------------
-
-interface StatCardProps {
-  label: string;
-  value: string;
-  subtext?: string;
-  accent?: "emerald" | "sky" | "amber" | "violet";
-}
-
-function StatCard({ label, value, subtext, accent = "emerald" }: StatCardProps) {
-  const accentMap = {
-    emerald: "text-emerald-400",
-    sky: "text-sky-400",
-    amber: "text-amber-400",
-    violet: "text-violet-400",
-  };
-
-  return (
-    <div className="rounded-xl border border-base-600/50 bg-base-800/50 p-4">
-      <div className="text-xs font-medium uppercase tracking-wider text-base-300">
-        {label}
-      </div>
-      <div className={`mt-1 text-2xl font-bold ${accentMap[accent]}`}>
-        {value}
-      </div>
-      {subtext && <div className="mt-0.5 text-xs text-base-300">{subtext}</div>}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Connection status badge
-// ---------------------------------------------------------------------------
-
-function ConnectionBadge({
-  status,
-  reconnectAttempts,
-}: {
-  status: string;
-  reconnectAttempts: number;
-}) {
-  const statusConfig: Record<string, { color: string; label: string }> = {
-    connecting: { color: "bg-amber-400", label: "Connecting…" },
-    open: { color: "bg-emerald-400", label: "Live" },
-    closing: { color: "bg-amber-400", label: "Closing…" },
-    closed: { color: "bg-red-400", label: "Disconnected" },
-    reconnecting: {
-      color: "bg-amber-400",
-      label: `Reconnecting (${reconnectAttempts})…`,
-    },
-  };
-
-  const config = statusConfig[status] ?? statusConfig.closed;
-
-  return (
-    <div className="flex items-center gap-2 rounded-full border border-base-600/50 bg-base-800/50 px-3 py-1.5">
-      <span className="relative flex h-2.5 w-2.5">
-        {status === "open" && (
-          <span
-            className={`absolute inline-flex h-full w-full animate-ping rounded-full ${config.color} opacity-60`}
-          />
-        )}
-        <span
-          className={`relative inline-flex h-2.5 w-2.5 rounded-full ${config.color}`}
-        />
-      </span>
-      <span className="text-xs font-medium text-base-100">{config.label}</span>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Main component
-// ---------------------------------------------------------------------------
-
-export interface RealTimeDashboardProps {
-  /** Overrides NEXT_PUBLIC_API_BASE_URL for demos/tests. */
-  apiBaseUrl?: string;
-  /** WebSocket subscription topics (comma-separated). */
-  topics?: string;
-  /** Maximum number of candles to display. */
-  maxCandles?: number;
+/** `http(s)://host[/v1]` → `ws(s)://host/v1/ws`. */
+export function toWebSocketUrl(baseUrl: string): string {
+  return `${apiRoot(baseUrl).replace(/^http/, "ws")}/v1/ws`;
 }
 
 /**
- * Real-time streaming dashboard displaying live asset transfer activity,
- * price fluctuations (candlestick chart), and dividend events via WebSocket.
- *
- * Connects to `GET /v1/ws` and subscribes to specified topics. New data
- * points are smoothly appended to charts without full page re-renders.
- * Connection drops trigger automatic reconnection with exponential backoff
- * and missed-message buffering.
+ * Delay before reconnect attempt `attempt` (0-based): exponential growth
+ * capped at 30 s, with jitter over the upper half of the window so clients
+ * that dropped together do not reconnect together.
  */
-export function RealTimeDashboard({
-  apiBaseUrl = API_BASE_URL,
-  topics = "transfer,dividend,price",
-  maxCandles = MAX_CANDLES,
-}: RealTimeDashboardProps) {
-  const wsUrl = useMemo(() => getWsUrl(apiBaseUrl), [apiBaseUrl]);
+export function reconnectDelay(attempt: number, random: () => number = Math.random): number {
+  const ceiling = Math.min(MAX_RECONNECT_MS, BASE_RECONNECT_MS * 2 ** attempt);
+  return Math.round(ceiling / 2 + (random() * ceiling) / 2);
+}
 
-  // Chart data stored in refs for smooth appending without re-renders
-  const candlesRef = useRef<CandleData[]>([]);
-  const volumeBarsRef = useRef<VolumeBar[]>([]);
-  const [chartData, setChartData] = useState<{
-    candles: CandleData[];
-    volumes: VolumeBar[];
-  }>({ candles: [], volumes: [] });
-
-  // Feed data
-  const [transfers, setTransfers] = useState<TransferRecord[]>([]);
-  const [dividends, setDividends] = useState<DividendRecord[]>([]);
-  const [stats, setStats] = useState<DashboardStats>({
-    totalTransfers: 0,
-    totalVolume: 0,
-    totalDividends: 0,
-    activeAssets: 0,
-  });
-
-  // Track which assets we've seen for the active count
-  const seenAssetsRef = useRef<Set<string>>(new Set());
-
-  // Throttle chart state updates to avoid excessive re-renders
-  const lastChartUpdateRef = useRef(0);
-  const CHART_UPDATE_THROTTLE_MS = 250;
-
-  const flushChartData = useCallback(() => {
-    const now = Date.now();
-    if (now - lastChartUpdateRef.current < CHART_UPDATE_THROTTLE_MS) return;
-    lastChartUpdateRef.current = now;
-    setChartData({
-      candles: [...candlesRef.current],
-      volumes: [...volumeBarsRef.current],
-    });
-  }, []);
-
-  const processEvent = useCallback(
-    (raw: unknown) => {
-      if (typeof raw !== "object" || raw === null) return;
-      const event = raw as WsEvent;
-      const eventType = event.event_type?.toLowerCase() ?? "";
-      const data = event.data ?? {};
-      const timestamp = event.timestamp ?? new Date().toISOString();
-      const asset = extractAsset(data);
-      const amount = extractAmount(data);
-
-      // Update seen assets
-      seenAssetsRef.current.add(asset);
-
-      // Handle transfer events
-      if (eventType.includes("transfer") || eventType.includes("payment")) {
-        const transfer: TransferRecord = {
-          id: event.id,
-          timestamp,
-          from: truncateAddress(String(data.from ?? data.sender ?? "—")),
-          to: truncateAddress(String(data.to ?? data.recipient ?? "—")),
-          amount,
-          asset,
-          ledger: event.ledger,
-        };
-
-        setTransfers((prev) => [transfer, ...prev].slice(0, MAX_FEED_ITEMS));
-
-        const numericAmount = Number(amount) || 0;
-        setStats((prev) => ({
-          ...prev,
-          totalTransfers: prev.totalTransfers + 1,
-          totalVolume: prev.totalVolume + numericAmount,
-          activeAssets: seenAssetsRef.current.size,
-        }));
-      }
-
-      // Handle dividend events
-      if (eventType.includes("dividend") || eventType.includes("distribution")) {
-        const dividend: DividendRecord = {
-          id: event.id,
-          timestamp,
-          asset,
-          amountPerShare: String(data.amount_per_share ?? data.amount ?? "0"),
-          totalDistributed: String(data.total ?? data.total_distributed ?? "0"),
-          ledger: event.ledger,
-        };
-
-        setDividends((prev) => [dividend, ...prev].slice(0, MAX_FEED_ITEMS));
-
-        setStats((prev) => ({
-          ...prev,
-          totalDividends: prev.totalDividends + 1,
-          activeAssets: seenAssetsRef.current.size,
-        }));
-      }
-
-      // Handle price events — aggregate into candles
-      const price = extractPrice(data);
-      if (price != null && price > 0) {
-        const candleTime =
-          Math.floor(new Date(timestamp).getTime() / CANDLE_INTERVAL_MS) *
-          CANDLE_INTERVAL_MS;
-
-        const candles = candlesRef.current;
-        const lastCandle = candles[candles.length - 1];
-
-        if (lastCandle && lastCandle.time === candleTime) {
-          // Update existing candle
-          lastCandle.high = Math.max(lastCandle.high, price);
-          lastCandle.low = Math.min(lastCandle.low, price);
-          lastCandle.close = price;
-          lastCandle.volume += Number(amount) || 0;
-        } else {
-          // Create new candle
-          const newCandle: CandleData = {
-            time: candleTime,
-            open: price,
-            high: price,
-            low: price,
-            close: price,
-            volume: Number(amount) || 0,
-          };
-          candles.push(newCandle);
-
-          // Trim old candles
-          if (candles.length > maxCandles) {
-            candles.splice(0, candles.length - maxCandles);
-          }
-        }
-
-        // Update volume bars
-        const volumeBars = volumeBarsRef.current;
-        const lastBar = volumeBars[volumeBars.length - 1];
-        const barColor =
-          price >= (lastCandle?.open ?? price)
-            ? CHART_COLORS.bullish
-            : CHART_COLORS.bearish;
-
-        if (lastBar && lastBar.time === candleTime) {
-          lastBar.volume += Number(amount) || 0;
-          lastBar.color = barColor;
-        } else {
-          volumeBars.push({
-            time: candleTime,
-            volume: Number(amount) || 0,
-            color: barColor,
-          });
-          if (volumeBars.length > MAX_CHART_VOLUME_BARS) {
-            volumeBars.splice(0, volumeBars.length - MAX_CHART_VOLUME_BARS);
-          }
-        }
-
-        flushChartData();
-      }
-    },
-    [maxCandles, flushChartData],
-  );
-
-  const handleMessage = useCallback(
-    (data: unknown) => {
-      processEvent(data);
-    },
-    [processEvent],
-  );
-
-  const { status, isConnected, send, reconnect, reconnectAttempts, bufferedMessages } =
-    useWebSocket({
-      url: wsUrl,
-      onMessage: handleMessage,
-      onOpen: () => {
-        // Send subscriptions after connection opens
-        const topicList = topics
-          .split(",")
-          .map((t) => t.trim())
-          .filter(Boolean);
-        topicList.forEach((topic) => {
-          send(`subscribe:${topic}`);
-        });
-      },
-      autoReconnect: true,
-      initialReconnectDelay: 1_000,
-      maxReconnectDelay: 30_000,
-      maxReconnectAttempts: 10,
-    });
-
-  // ---------------------------------------------------------------------------
-  // Chart data preparation
-  // ---------------------------------------------------------------------------
-
-  const chartCandles = chartData.candles;
-  const chartVolumes = chartData.volumes;
-
-  // Calculate price range for YAxis domain
-  const priceDomain = useMemo(() => {
-    if (chartCandles.length === 0) return [0, 1] as [number, number];
-    let min = Infinity;
-    let max = -Infinity;
-    for (const c of chartCandles) {
-      if (c.low < min) min = c.low;
-      if (c.high > max) max = c.high;
-    }
-    const padding = (max - min) * 0.05 || 0.01;
-    return [min - padding, max + padding] as [number, number];
-  }, [chartCandles]);
-
-  const volumeDomain = useMemo(() => {
-    if (chartVolumes.length === 0) return [0, 1] as [number, number];
-    let max = 0;
-    for (const v of chartVolumes) {
-      if (v.volume > max) max = v.volume;
-    }
-    return [0, max * 1.1 || 1] as [number, number];
-  }, [chartVolumes]);
-
-  // ---------------------------------------------------------------------------
-  // Render
-  // ---------------------------------------------------------------------------
-
+function isStreamEvent(value: unknown): value is StreamEvent {
+  const event = value as StreamEvent;
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h2 className="text-xl font-bold text-base-50">Real-Time Dashboard</h2>
-          <p className="text-sm text-base-300">
-            Live asset transfers, price activity, and dividend events
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          {bufferedMessages.length > 0 && (
-            <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-300">
-              {bufferedMessages.length} buffered
-            </span>
-          )}
-          <ConnectionBadge status={status} reconnectAttempts={reconnectAttempts} />
-          {status === "closed" && (
-            <button
-              onClick={reconnect}
-              className="rounded-lg border border-base-600 bg-base-800 px-3 py-1.5 text-xs font-medium text-base-100 transition-colors hover:bg-base-700"
-            >
-              Reconnect
-            </button>
-          )}
-        </div>
-      </div>
+    typeof event === "object" &&
+    event !== null &&
+    typeof event.id === "number" &&
+    typeof event.contract === "string" &&
+    typeof event.event_type === "string" &&
+    typeof event.ledger === "number" &&
+    typeof event.data === "object" &&
+    event.data !== null
+  );
+}
 
-      {/* Stats row */}
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-        <StatCard
-          label="Total Transfers"
-          value={stats.totalTransfers.toLocaleString()}
-          accent="emerald"
-        />
-        <StatCard
-          label="Total Volume"
-          value={formatNumber(stats.totalVolume)}
-          accent="sky"
-        />
-        <StatCard
-          label="Dividend Events"
-          value={stats.totalDividends.toLocaleString()}
-          accent="amber"
-        />
-        <StatCard
-          label="Active Assets"
-          value={stats.activeAssets.toLocaleString()}
-          accent="violet"
-        />
-      </div>
+function parseEvent(message: unknown): StreamEvent | null {
+  if (typeof message !== "string") return null;
+  try {
+    const value: unknown = JSON.parse(message);
+    return isStreamEvent(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
 
-      {/* Charts row */}
-      <div className="grid gap-6 lg:grid-cols-3">
-        {/* Candlestick chart */}
-        <div className="rounded-xl border border-base-600/50 bg-base-800/50 p-4 lg:col-span-2">
-          <div className="mb-3 flex items-center justify-between">
-            <h3 className="text-sm font-semibold text-base-100">
-              Price Chart (1m candles)
-            </h3>
-            <span className="text-xs text-base-300">
-              {chartCandles.length} candles
-            </span>
-          </div>
-          {chartCandles.length > 0 ? (
-            <ResponsiveContainer width="100%" height={300}>
-              <ComposedChart data={chartCandles} margin={{ top: 5, right: 5, bottom: 5, left: 5 }}>
-                <CartesianGrid stroke={CHART_COLORS.grid} strokeDasharray="3 3" />
-                <XAxis
-                  dataKey="time"
-                  tickFormatter={(val: number) =>
-                    new Date(val).toLocaleTimeString("en-US", {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })
-                  }
-                  stroke={CHART_COLORS.text}
-                  tick={{ fill: CHART_COLORS.text, fontSize: 10 }}
-                  minTickGap={30}
-                />
-                <YAxis
-                  domain={priceDomain}
-                  stroke={CHART_COLORS.text}
-                  tick={{ fill: CHART_COLORS.text, fontSize: 10 }}
-                  width={60}
-                  tickFormatter={(val: number) => val.toFixed(4)}
-                />
-                <Tooltip content={<CandleTooltip />} />
-                <Bar dataKey="high" shape={<CandleWick />} isAnimationActive={false} />
-              </ComposedChart>
-            </ResponsiveContainer>
-          ) : (
-            <div className="flex h-[300px] items-center justify-center text-sm text-base-300">
-              {isConnected
-                ? "Waiting for price data…"
-                : "Connect to the WebSocket to see live price data."}
-            </div>
-          )}
-        </div>
+function toNumber(value: unknown): number | null {
+  const raw =
+    typeof value === "object" && value !== null && "amount" in value
+      ? (value as { amount: unknown }).amount
+      : value;
+  const n = typeof raw === "string" || typeof raw === "number" ? Number(raw) : NaN;
+  return Number.isFinite(n) ? n : null;
+}
 
-        {/* Volume chart */}
-        <div className="rounded-xl border border-base-600/50 bg-base-800/50 p-4">
-          <div className="mb-3 flex items-center justify-between">
-            <h3 className="text-sm font-semibold text-base-100">Volume</h3>
-            <span className="text-xs text-base-300">
-              {chartVolumes.length} bars
-            </span>
-          </div>
-          {chartVolumes.length > 0 ? (
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={chartVolumes} margin={{ top: 5, right: 5, bottom: 5, left: 5 }}>
-                <CartesianGrid stroke={CHART_COLORS.grid} strokeDasharray="3 3" />
-                <XAxis
-                  dataKey="time"
-                  tickFormatter={(val: number) =>
-                    new Date(val).toLocaleTimeString("en-US", {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })
-                  }
-                  stroke={CHART_COLORS.text}
-                  tick={{ fill: CHART_COLORS.text, fontSize: 10 }}
-                  minTickGap={30}
-                />
-                <YAxis
-                  domain={volumeDomain}
-                  stroke={CHART_COLORS.text}
-                  tick={{ fill: CHART_COLORS.text, fontSize: 10 }}
-                  width={50}
-                  tickFormatter={(val: number) => formatNumber(val, 0)}
-                />
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: "#11141b",
-                    border: "1px solid #333a49",
-                    borderRadius: "8px",
-                    fontSize: "12px",
-                  }}
-                  labelFormatter={(val: number) =>
-                    new Date(val).toLocaleTimeString()
-                  }
-                  formatter={(value: number) => [formatNumber(value), "Volume"]}
-                />
-                <Bar dataKey="volume" isAnimationActive={false}>
-                  {chartVolumes.map((bar, index) => (
-                    <Cell key={index} fill={bar.color} fillOpacity={0.7} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          ) : (
-            <div className="flex h-[300px] items-center justify-center text-sm text-base-300">
-              {isConnected
-                ? "Waiting for volume data…"
-                : "Connect to the WebSocket to see live volume data."}
-            </div>
-          )}
-        </div>
-      </div>
+export interface Bar {
+  time: UTCTimestamp;
+  open?: number;
+  high?: number;
+  low?: number;
+  close?: number;
+  volume: number;
+}
 
-      {/* Feeds row */}
-      <div className="grid gap-6 lg:grid-cols-2">
-        {/* Transfer activity feed */}
-        <div className="rounded-xl border border-base-600/50 bg-base-800/50 p-4">
-          <div className="mb-3 flex items-center justify-between">
-            <h3 className="text-sm font-semibold text-base-100">
-              Transfer Activity
-            </h3>
-            <span className="text-xs text-base-300">
-              {transfers.length} events
-            </span>
-          </div>
-          {transfers.length > 0 ? (
-            <div className="max-h-[300px] space-y-2 overflow-y-auto pr-1">
-              {transfers.map((t) => (
-                <div
-                  key={t.id}
-                  className="flex items-center justify-between rounded-lg border border-base-600/30 bg-base-800/30 px-3 py-2 text-xs"
-                >
-                  <div className="flex items-center gap-2">
-                    <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 font-mono text-[10px] text-emerald-400">
-                      {t.asset}
-                    </span>
-                    <span className="font-mono text-base-200">
-                      {t.from} → {t.to}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <span className="font-mono text-sky-400">
-                      {formatNumber(Number(t.amount), 4)}
-                    </span>
-                    <span className="text-base-300">
-                      {formatTimestamp(t.timestamp)}
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="flex h-[200px] items-center justify-center text-sm text-base-300">
-              {isConnected
-                ? "Waiting for transfer events…"
-                : "Connect to the WebSocket to see live transfers."}
-            </div>
-          )}
-        </div>
+export interface ApplyResult {
+  changed: Bar[];
+  rebuild: boolean;
+  markersChanged: boolean;
+}
 
-        {/* Dividend events feed */}
-        <div className="rounded-xl border border-base-600/50 bg-base-800/50 p-4">
-          <div className="mb-3 flex items-center justify-between">
-            <h3 className="text-sm font-semibold text-base-100">
-              Dividend Events
-            </h3>
-            <span className="text-xs text-base-300">
-              {dividends.length} events
-            </span>
-          </div>
-          {dividends.length > 0 ? (
-            <div className="max-h-[300px] space-y-2 overflow-y-auto pr-1">
-              {dividends.map((d) => (
-                <div
-                  key={d.id}
-                  className="flex items-center justify-between rounded-lg border border-base-600/30 bg-base-800/30 px-3 py-2 text-xs"
-                >
-                  <div className="flex items-center gap-2">
-                    <span className="rounded bg-amber-500/10 px-1.5 py-0.5 font-mono text-[10px] text-amber-400">
-                      {d.asset}
-                    </span>
-                    <span className="text-base-200">Distribution</span>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <span className="font-mono text-amber-400">
-                      {formatNumber(Number(d.totalDistributed), 4)} total
-                    </span>
-                    <span className="text-base-300">
-                      {formatTimestamp(d.timestamp)}
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="flex h-[200px] items-center justify-center text-sm text-base-300">
-              {isConnected
-                ? "Waiting for dividend events…"
-                : "Connect to the WebSocket to see live dividends."}
-            </div>
-          )}
-        </div>
+/** Folds contract events into interval bars and dividend markers. */
+export class ChartBuckets {
+  private readonly bars = new Map<number, Bar>();
+  private markerList: SeriesMarker<Time>[] = [];
+  private latest = -Infinity;
+
+  constructor(
+    private readonly assetContract: string,
+    private readonly dividendContract: string | undefined,
+    private readonly decimals: number = 7,
+    private readonly intervalSeconds: number = 60
+  ) {}
+
+  apply(events: StreamEvent[]): ApplyResult {
+    const changed = new Map<number, Bar>();
+    let rebuild = false;
+    let markersChanged = false;
+
+    for (const event of events) {
+      const seconds = event.timestamp ? Date.parse(event.timestamp) / 1000 : NaN;
+      if (!Number.isFinite(seconds)) continue;
+      const time = (Math.floor(seconds / this.intervalSeconds) * this.intervalSeconds) as UTCTimestamp;
+
+      if (event.contract === this.assetContract && event.event_type === "transfer") {
+        const amount = toNumber(event.data.amount);
+        if (amount === null) continue;
+        this.bar(time).volume += amount / 10 ** this.decimals;
+      } else if (event.contract === this.assetContract && event.event_type === "valuation") {
+        const cents = toNumber(event.data.value);
+        if (cents === null) continue;
+        const price = cents / 100;
+        const bar = this.bar(time);
+        bar.open ??= price;
+        bar.high = Math.max(bar.high ?? price, price);
+        bar.low = Math.min(bar.low ?? price, price);
+        bar.close = price;
+      } else if (
+        event.contract === this.dividendContract &&
+        (event.event_type === "created" || event.event_type === "claim")
+      ) {
+        this.bar(time);
+        this.markerList.push({
+          time,
+          position: "aboveBar",
+          shape: "arrowDown",
+          color: "#fbbf24",
+          text: event.event_type === "created" ? "Dividend" : "Claim",
+        });
+        markersChanged = true;
+      } else {
+        continue;
+      }
+
+      changed.set(time, this.bars.get(time) as Bar);
+      rebuild ||= time < this.latest;
+      this.latest = Math.max(this.latest, time);
+    }
+
+    if (this.bars.size > MAX_BARS) {
+      const keep = new Set(this.sortedTimes().slice(-Math.floor(MAX_BARS * 0.9)));
+      for (const time of this.bars.keys()) if (!keep.has(time)) this.bars.delete(time);
+      this.markerList = this.markerList.filter((m) => keep.has(m.time as number));
+      rebuild = true;
+      markersChanged = true;
+    }
+
+    return {
+      changed: [...changed.values()].sort((a, b) => a.time - b.time),
+      rebuild,
+      markersChanged,
+    };
+  }
+
+  allBars(): Bar[] {
+    return this.sortedTimes().map((time) => this.bars.get(time) as Bar);
+  }
+
+  markers(): SeriesMarker<Time>[] {
+    return [...this.markerList].sort((a, b) => (a.time as number) - (b.time as number));
+  }
+
+  private bar(time: UTCTimestamp): Bar {
+    let bar = this.bars.get(time);
+    if (!bar) {
+      bar = { time, volume: 0 };
+      this.bars.set(time, bar);
+    }
+    return bar;
+  }
+
+  private sortedTimes(): number[] {
+    return [...this.bars.keys()].sort((a, b) => a - b);
+  }
+}
+
+function hasPrice(bar: Bar): boolean {
+  return bar.open !== undefined;
+}
+
+function toCandle(bar: Bar): CandlestickData<Time> {
+  return {
+    time: bar.time,
+    open: bar.open as number,
+    high: bar.high as number,
+    low: bar.low as number,
+    close: bar.close as number,
+  };
+}
+
+function toVolume(bar: Bar): HistogramData<Time> {
+  return { time: bar.time, value: bar.volume };
+}
+
+async function fetchHistory(
+  baseUrl: string,
+  contracts: string[],
+  signal?: AbortSignal
+): Promise<StreamEvent[]> {
+  try {
+    const response = await fetch(`${apiRoot(baseUrl)}/v1/events`, { signal });
+    if (!response.ok) return [];
+    const events: unknown = await response.json();
+    return Array.isArray(events)
+      ? events.filter(isStreamEvent).filter((event) => contracts.includes(event.contract))
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Heavy Visualisations (Lazy Loaded with Accessible Loading Skeleton)
+// ---------------------------------------------------------------------------
+
+const LazyComplianceHeatmap = React.lazy(
+  () => import("@/components/ComplianceHeatmap")
+);
+
+export function HeatmapSkeleton() {
+  return (
+    <div
+      aria-busy="true"
+      aria-live="polite"
+      aria-label="Loading compliance heatmap…"
+      className="flex h-72 items-center justify-center rounded-xl border border-white/10 bg-base-900/60 p-6 text-sm text-base-300"
+    >
+      <div className="flex items-center gap-3">
+        <span className="h-4 w-4 animate-spin rounded-full border-2 border-brand-500 border-t-transparent" />
+        <span>Loading jurisdiction compliance heatmap…</span>
       </div>
     </div>
   );
 }
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
+
+export interface RealTimeDashboardProps {
+  /** Asset id for SSE events endpoint: GET /v1/assets/:id/events */
+  assetId?: string | number;
+  /** Asset token contract (`C…`): its transfers drive volume, its valuation updates drive price. */
+  assetContract?: string;
+  /** Dividend contract (`C…`): its `created` and `claim` events are marked on the chart. */
+  dividendContract?: string;
+  /** Token decimals used to scale transfer amounts. Defaults to 7. */
+  decimals?: number;
+  /** Candle width in seconds. Defaults to 60. */
+  intervalSeconds?: number;
+  /** Overrides `NEXT_PUBLIC_API_BASE_URL`. */
+  apiBaseUrl?: string;
+  className?: string;
+}
+
+export function RealTimeDashboard({
+  assetId = "1",
+  assetContract = "CASSETTOKEN",
+  dividendContract,
+  decimals = 7,
+  intervalSeconds = 60,
+  apiBaseUrl = API_BASE_URL,
+  className = "",
+}: RealTimeDashboardProps) {
+  const headingId = useId();
+  const [status, setStatus] = useState<ConnectionStatus>("connecting");
+
+  // Hook 1: useDebouncedResizeObserver for responsive chart re-rendering
+  const { ref: chartContainerRef, width: chartWidth } = useDebouncedResizeObserver<HTMLDivElement>(120);
+
+  // Hook 2: useEventStream connecting to GET /v1/assets/:id/events SSE endpoint
+  const sseEndpoint = `${apiRoot(apiBaseUrl)}/v1/assets/${assetId}/events`;
+  const [anomaly, setAnomaly] = useState<AnomalyInfo | null>(null);
+
+  const handleIncomingComplianceEvent = useCallback((event: StreamComplianceEvent) => {
+    const alert = extractAnomalyFromEvent(event);
+    if (alert) {
+      setAnomaly(alert);
+    }
+  }, []);
+
+  const {
+    events: complianceEvents,
+    status: sseStatus,
+    reconnect: reconnectSse,
+  } = useEventStream(sseEndpoint, {
+    autoReconnect: true,
+    initialReconnectDelay: 500,
+    maxReconnectDelay: 30000,
+    onEvent: handleIncomingComplianceEvent,
+  });
+
+  // TradingView Lightweight-charts rendering & WebSocket stream
+  useEffect(() => {
+    const container = chartContainerRef.current;
+    if (!container) return;
+
+    let chart: IChartApi | null = null;
+    let candles: ISeriesApi<"Candlestick"> | null = null;
+    let volume: ISeriesApi<"Histogram"> | null = null;
+    let markers: ReturnType<typeof createSeriesMarkers> | null = null;
+
+    try {
+      chart = createChart(container, {
+        autoSize: true,
+        layout: { background: { type: ColorType.Solid, color: "transparent" }, textColor: "#a5abba" },
+        grid: {
+          vertLines: { color: "rgba(255, 255, 255, 0.06)" },
+          horzLines: { color: "rgba(255, 255, 255, 0.06)" },
+        },
+        timeScale: { timeVisible: true, secondsVisible: false },
+      });
+
+      candles = chart.addSeries(CandlestickSeries, {
+        upColor: "#34d399",
+        borderUpColor: "#34d399",
+        wickUpColor: "#34d399",
+        downColor: "#ef4444",
+        borderDownColor: "#ef4444",
+        wickDownColor: "#ef4444",
+      });
+      candles.priceScale().applyOptions({ scaleMargins: { top: 0.1, bottom: 0.3 } });
+
+      volume = chart.addSeries(HistogramSeries, {
+        color: "rgba(56, 189, 248, 0.5)",
+        priceFormat: { type: "volume" },
+        priceScaleId: "",
+      });
+      volume.priceScale().applyOptions({ scaleMargins: { top: 0.75, bottom: 0 } });
+      markers = createSeriesMarkers(volume, []);
+    } catch {
+      // In tests or environments where canvas / lightweight-charts is mocked
+    }
+
+    let disposed = false;
+    const buckets = new ChartBuckets(assetContract, dividendContract, decimals, intervalSeconds);
+    const contracts = dividendContract ? [assetContract, dividendContract] : [assetContract];
+    const seen = new Set<string>();
+    let queue: StreamEvent[] = [];
+    let frame = 0;
+
+    const draw = () => {
+      frame = 0;
+      const { changed, rebuild, markersChanged } = buckets.apply(queue);
+      queue = [];
+      if (rebuild) {
+        const bars = buckets.allBars();
+        candles?.setData(bars.filter(hasPrice).map(toCandle));
+        volume?.setData(bars.map(toVolume));
+      } else {
+        for (const bar of changed) {
+          if (hasPrice(bar)) candles?.update(toCandle(bar));
+          volume?.update(toVolume(bar));
+        }
+      }
+      if (markersChanged && markers) markers.setMarkers(buckets.markers());
+    };
+
+    const enqueue = (events: StreamEvent[]) => {
+      if (disposed) return;
+      for (const event of events) {
+        const key = `${event.ledger}:${event.id}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        if (seen.size > SEEN_CAPACITY) seen.delete(seen.values().next().value as string);
+        queue.push(event);
+
+        // Check if matching anomaly detector (issue #30)
+        const possibleAnomaly = extractAnomalyFromEvent({
+          id: event.id,
+          event_type: event.event_type,
+          timestamp: event.timestamp || new Date().toISOString(),
+          ledger: event.ledger,
+          data: event.data,
+        });
+        if (possibleAnomaly) {
+          setAnomaly(possibleAnomaly);
+        }
+      }
+      if (queue.length > 0 && frame === 0) frame = requestAnimationFrame(draw);
+    };
+
+    let socket: WebSocket | null = null;
+    let history: AbortController | null = null;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    let attempt = 0;
+
+    const connect = () => {
+      clearTimeout(retryTimer);
+      setStatus(attempt === 0 ? "connecting" : "reconnecting");
+      if (typeof WebSocket === "undefined") return;
+
+      const ws = new WebSocket(toWebSocketUrl(apiBaseUrl));
+      socket = ws;
+      let pending: StreamEvent[] | null = [];
+
+      ws.onopen = () => {
+        for (const contract of contracts) ws.send(`subscribe:${contract}`);
+        setStatus("syncing");
+        history?.abort();
+        history = new AbortController();
+        fetchHistory(apiBaseUrl, contracts, history.signal)
+          .then(enqueue, () => undefined)
+          .finally(() => {
+            if (socket !== ws) return;
+            const buffered = pending ?? [];
+            pending = null;
+            enqueue(buffered);
+            attempt = 0;
+            setStatus("live");
+          });
+      };
+
+      ws.onmessage = (message: MessageEvent) => {
+        const event = parseEvent(message.data);
+        if (!event) return;
+        if (pending) pending.push(event);
+        else enqueue([event]);
+      };
+
+      ws.onerror = () => ws.close();
+      ws.onclose = () => {
+        if (disposed || socket !== ws) return;
+        socket = null;
+        setStatus("reconnecting");
+        retryTimer = setTimeout(connect, reconnectDelay(attempt++));
+      };
+    };
+
+    const reconnectNow = () => {
+      if (!socket && !disposed) {
+        attempt = 0;
+        connect();
+      }
+    };
+    if (typeof window !== "undefined") {
+      window.addEventListener("online", reconnectNow);
+    }
+    connect();
+
+    return () => {
+      disposed = true;
+      clearTimeout(retryTimer);
+      if (typeof cancelAnimationFrame !== "undefined") {
+        cancelAnimationFrame(frame);
+      }
+      history?.abort();
+      if (typeof window !== "undefined") {
+        window.removeEventListener("online", reconnectNow);
+      }
+      socket?.close(1000);
+      chart?.remove();
+    };
+  }, [assetContract, dividendContract, decimals, intervalSeconds, apiBaseUrl]);
+
+  return (
+    <section
+      aria-labelledby={headingId}
+      className={`space-y-6 rounded-xl border border-white/10 bg-base-900 p-4 ${className}`}
+      data-testid="realtime-dashboard"
+    >
+      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-4">
+        <div>
+          <h3 id={headingId} className="text-base font-bold text-base-50">
+            Real-Time Compliance &amp; Activity Dashboard
+          </h3>
+          <p className="mt-1 text-xs text-base-300">
+            Streaming events via WebSocket and SSE (<code className="text-brand-300">GET /v1/assets/{assetId}/events</code>)
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          <span
+            role="status"
+            aria-live="polite"
+            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-base-950 px-3 py-1 text-xs text-base-200"
+          >
+            <span
+              aria-hidden="true"
+              className={`h-2 w-2 rounded-full ${
+                status === "live" ? "bg-emerald-400" : "animate-pulse bg-gold-400"
+              }`}
+            />
+            {STATUS_LABEL[status]}
+          </span>
+          {sseStatus === "disconnected" && (
+            <button
+              type="button"
+              onClick={reconnectSse}
+              className="rounded-lg border border-white/10 bg-base-800 px-3 py-1 text-xs font-semibold text-base-100 hover:bg-base-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
+            >
+              Reconnect SSE
+            </button>
+          )}
+        </div>
+      </header>
+
+      {/* AnomalyAlert component (issue #30) */}
+      {anomaly && (
+        <AnomalyAlert
+          anomaly={anomaly}
+          onDismiss={() => setAnomaly(null)}
+        />
+      )}
+
+      {/* Lightweight-charts container observed by useDebouncedResizeObserver */}
+      <div
+        ref={chartContainerRef}
+        role="img"
+        aria-label="Candlestick chart of asset valuation in USD with transfer volume bars and dividend markers"
+        className="h-80 w-full rounded-lg border border-white/5 bg-base-950 p-2"
+      />
+
+      {/* Heavy Visualisation: ComplianceHeatmap powered by d3.js (React.lazy + Suspense) */}
+      <Suspense fallback={<HeatmapSkeleton />}>
+        <LazyComplianceHeatmap events={complianceEvents} refreshIntervalMs={5000} />
+      </Suspense>
+
+      {/* Real-time Compliance Events Feed */}
+      <div className="rounded-xl border border-white/10 bg-base-950/80 p-4">
+        <div className="mb-3 flex items-center justify-between">
+          <h4 className="text-sm font-semibold text-base-100">
+            Real-Time Compliance Events ({complianceEvents.length})
+          </h4>
+          <span className="text-xs text-base-400">SSE: /v1/assets/{assetId}/events</span>
+        </div>
+
+        <div
+          role="log"
+          aria-live="polite"
+          aria-atomic="false"
+          tabIndex={0}
+          aria-label="Real-time compliance event stream"
+          className="max-h-60 space-y-2 overflow-y-auto pr-1 text-xs focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
+        >
+          {complianceEvents.length > 0 ? (
+            complianceEvents.map((evt, idx) => {
+              const allowed = evt.is_allowed !== false;
+              return (
+                <div
+                  key={evt.id ?? idx}
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-white/5 bg-base-900 p-2"
+                >
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`rounded px-1.5 py-0.5 font-mono text-[10px] font-bold ${
+                        allowed
+                          ? "border border-emerald-500/40 bg-emerald-500/20 text-emerald-300"
+                          : "border border-red-500/40 bg-red-500/20 text-red-300"
+                      }`}
+                    >
+                      {allowed ? "ALLOWED" : "BLOCKED"}
+                    </span>
+                    <span className="font-mono text-base-200">
+                      {evt.jurisdiction ? `[${evt.jurisdiction}]` : "[GL]"} {evt.account || "GACCOUNT"}
+                    </span>
+                    {evt.reason && (
+                      <span className="text-base-400 text-[11px]">— {evt.reason}</span>
+                    )}
+                  </div>
+                  <span className="font-mono text-xs text-base-400">
+                    {new Date(evt.timestamp).toLocaleTimeString()}
+                  </span>
+                </div>
+              );
+            })
+          ) : (
+            <div className="flex h-20 items-center justify-center text-xs text-base-400">
+              Awaiting real-time compliance events from SSE endpoint…
+            </div>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+export default RealTimeDashboard;

@@ -145,6 +145,7 @@ pub fn router(state: AppState) -> Router {
     let data_routes = Router::new()
         .route("/stats", get(stats::get))
         .route("/events", get(events::list))
+        .route("/rsocket", get(crate::rsocket::handler))
         .route("/assets", get(assets::list))
         .route("/assets/:id", get(assets::detail))
         .route("/assets/:id/events", get(assets::events))

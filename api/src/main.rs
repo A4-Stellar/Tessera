@@ -34,6 +34,7 @@ mod services;
 pub mod storage;
 pub mod tracing;
 mod ws;
+pub mod rsocket;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
