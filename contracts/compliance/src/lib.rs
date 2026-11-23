@@ -788,3 +788,6 @@ impl ComplianceContract {
 pub mod zk_balance_verifier;
 pub mod zk_range_proof;
 pub mod zk_verifier;
+
+#[cfg(test)]
+mod mutation_test;

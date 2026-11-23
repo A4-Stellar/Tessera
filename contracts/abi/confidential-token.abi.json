@@ -1,0 +1,331 @@
+{
+  "contract": "confidential-token",
+  "moduleDoc": "Confidential asset-token contract for institutional investors.\r\n\nBalances and transfer amounts are Pedersen commitments `C = v*G + r*H` on\r\nBLS12-381 G1 (see [`pedersen`]); only the holder knows the openings\r\n`(v, r)`. A transfer publishes a commitment to the hidden amount plus an\r\naggregated Bulletproofs range proof (see [`bulletproofs`]) showing that\r\nboth the amount and the sender's remaining balance are in `[0, 2^64)`.\r\nBecause commitments are additively homomorphic the contract updates\r\nbalances without learning any value:\r\n\n```text\r\navailable[from] <- available[from] - C_amount     (proven >= 0)\r\npending[to]     <- pending[to]     + C_amount\r\n```\r\n\nIncoming funds land in a separate `pending` commitment and are merged with\r\n`apply_pending`. Otherwise an incoming transfer would change the sender's\r\nbalance commitment between proof generation and submission and invalidate\r\nthe proof (front-running).\r\n\nVerifying a 2x64-bit aggregated proof is one ~280-term multi-scalar\r\nmultiplication. On the current Soroban cost model (the host subgroup-checks\r\nevery MSM input) that is several times the per-transaction CPU limit, so\r\nverification can run as a resumable session: `begin_transfer` checks the\r\nproof and fixes every Fiat-Shamir scalar, permissionless `verify_step`\r\ncalls evaluate bounded chunks of the MSM into an accumulator, and `finish`\r\nchecks the sum is the identity and settles. The one-shot\r\n`confidential_transfer` / `burn` run the identical checks in one call for\r\nnetworks whose limits allow it.\r\n\nCompliance is unchanged from the public asset token: both parties must\r\npass the compliance contract's `is_allowed` identity allowlist check, and\r\nissuance (`mint`) and redemption (`burn`) amounts stay public, so total\r\nsupply is always auditable. The recipient learns the transfer opening from\r\nthe encrypted `memo`, which the contract passes through as opaque bytes.",
+  "generated_at": "2026-11-23T12:28:42.990Z",
+  "methods": [
+    {
+      "name": "initialize",
+      "doc": "Invokes `initialize` on confidential-token.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "name",
+          "type": "String"
+        },
+        {
+          "name": "symbol",
+          "type": "String"
+        },
+        {
+          "name": "decimals",
+          "type": "u32"
+        },
+        {
+          "name": "compliance_contract",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "public_parameters",
+      "doc": "Public verifier parameters stored at initialization.",
+      "inputs": [],
+      "output": "PublicParameters"
+    },
+    {
+      "name": "extend_generators",
+      "doc": "Derive the next `count` Bulletproofs generator pairs with `hash_to_g1`. Permissionless and deterministic, so anyone can finish the setup, split across as many transactions as the budget needs. Returns how many pairs exist.",
+      "inputs": [
+        {
+          "name": "count",
+          "type": "u32"
+        }
+      ],
+      "output": "u32"
+    },
+    {
+      "name": "generators_ready",
+      "doc": "Invokes `generators_ready` on confidential-token.",
+      "inputs": [],
+      "output": "bool"
+    },
+    {
+      "name": "mint",
+      "doc": "Issue `amount` publicly to `to`. The amount is committed with zero blinding (`amount*G`) into the recipient's pending balance; issuance stays visible so total supply is auditable.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "to",
+          "type": "Address"
+        },
+        {
+          "name": "amount",
+          "type": "i128"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "confidential_transfer",
+      "doc": "Move a hidden amount from `from` to `to`, verifying in one call.  `proof` must be an aggregated range proof, bound to `transfer_context(from, to)`, over the two commitments `[amount_commitment, available(from) - amount_commitment]`. See the crate docs for when to use `begin_transfer` instead.",
+      "inputs": [
+        {
+          "name": "from",
+          "type": "Address"
+        },
+        {
+          "name": "to",
+          "type": "Address"
+        },
+        {
+          "name": "amount_commitment",
+          "type": "Point"
+        },
+        {
+          "name": "proof",
+          "type": "RangeProof"
+        },
+        {
+          "name": "memo",
+          "type": "Bytes"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "begin_transfer",
+      "doc": "Start a transfer whose proof is verified across several transactions. Performs every check of `confidential_transfer` except the final MSM and returns the session id for `verify_step` / `finish`.",
+      "inputs": [
+        {
+          "name": "from",
+          "type": "Address"
+        },
+        {
+          "name": "to",
+          "type": "Address"
+        },
+        {
+          "name": "amount_commitment",
+          "type": "Point"
+        },
+        {
+          "name": "proof",
+          "type": "RangeProof"
+        },
+        {
+          "name": "memo",
+          "type": "Bytes"
+        }
+      ],
+      "output": "u64"
+    },
+    {
+      "name": "burn",
+      "doc": "Redeem a public `amount` from the spendable balance, verifying in one call. `proof` is a single range proof, bound to `burn_context(from, amount)`, over `available(from) - amount*G`, proving the balance stays non-negative.",
+      "inputs": [
+        {
+          "name": "from",
+          "type": "Address"
+        },
+        {
+          "name": "amount",
+          "type": "i128"
+        },
+        {
+          "name": "proof",
+          "type": "RangeProof"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "begin_burn",
+      "doc": "Multi-transaction variant of `burn`.",
+      "inputs": [
+        {
+          "name": "from",
+          "type": "Address"
+        },
+        {
+          "name": "amount",
+          "type": "i128"
+        },
+        {
+          "name": "proof",
+          "type": "RangeProof"
+        }
+      ],
+      "output": "u64"
+    },
+    {
+      "name": "verify_step",
+      "doc": "Evaluate up to `max_points` more MSM terms of a session. Permissionless: the result is fully determined by the stored session, so anyone may pay to advance it. Returns the number of terms still outstanding.",
+      "inputs": [
+        {
+          "name": "session_id",
+          "type": "u64"
+        },
+        {
+          "name": "max_points",
+          "type": "u32"
+        }
+      ],
+      "output": "u32"
+    },
+    {
+      "name": "finish",
+      "doc": "Settle a fully evaluated session. Permissionless: the owner authorized the operation in `begin_*`, and settlement re-checks compliance, the pause flag and that the owner's balance has not moved since.",
+      "inputs": [
+        {
+          "name": "session_id",
+          "type": "u64"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "get_session",
+      "doc": "Invokes `get_session` on confidential-token.",
+      "inputs": [
+        {
+          "name": "session_id",
+          "type": "u64"
+        }
+      ],
+      "output": "Option<VerificationSession>"
+    },
+    {
+      "name": "apply_pending",
+      "doc": "Merge the pending balance into the spendable balance.",
+      "inputs": [
+        {
+          "name": "holder",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "transfer_context",
+      "doc": "Fiat-Shamir context a transfer proof must be bound to: this contract, both parties, the sender's nonce and current spendable commitment.",
+      "inputs": [
+        {
+          "name": "from",
+          "type": "Address"
+        },
+        {
+          "name": "to",
+          "type": "Address"
+        }
+      ],
+      "output": "Bytes"
+    },
+    {
+      "name": "burn_context",
+      "doc": "Fiat-Shamir context a burn proof must be bound to.",
+      "inputs": [
+        {
+          "name": "from",
+          "type": "Address"
+        },
+        {
+          "name": "amount",
+          "type": "i128"
+        }
+      ],
+      "output": "Bytes"
+    },
+    {
+      "name": "available_balance",
+      "doc": "Invokes `available_balance` on confidential-token.",
+      "inputs": [
+        {
+          "name": "holder",
+          "type": "Address"
+        }
+      ],
+      "output": "Point"
+    },
+    {
+      "name": "pending_balance",
+      "doc": "Invokes `pending_balance` on confidential-token.",
+      "inputs": [
+        {
+          "name": "holder",
+          "type": "Address"
+        }
+      ],
+      "output": "Point"
+    },
+    {
+      "name": "nonce",
+      "doc": "Invokes `nonce` on confidential-token.",
+      "inputs": [
+        {
+          "name": "holder",
+          "type": "Address"
+        }
+      ],
+      "output": "u64"
+    },
+    {
+      "name": "total_supply",
+      "doc": "Invokes `total_supply` on confidential-token.",
+      "inputs": [],
+      "output": "u64"
+    },
+    {
+      "name": "name",
+      "doc": "Invokes `name` on confidential-token.",
+      "inputs": [],
+      "output": "String"
+    },
+    {
+      "name": "symbol",
+      "doc": "Invokes `symbol` on confidential-token.",
+      "inputs": [],
+      "output": "String"
+    },
+    {
+      "name": "decimals",
+      "doc": "Invokes `decimals` on confidential-token.",
+      "inputs": [],
+      "output": "u32"
+    },
+    {
+      "name": "compliance_contract",
+      "doc": "Invokes `compliance_contract` on confidential-token.",
+      "inputs": [],
+      "output": "Address"
+    },
+    {
+      "name": "pause",
+      "doc": "Invokes `pause` on confidential-token.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "unpause",
+      "doc": "Invokes `unpause` on confidential-token.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    }
+  ]
+}

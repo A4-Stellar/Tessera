@@ -1,0 +1,726 @@
+{
+  "contract": "compliance",
+  "moduleDoc": "Compliance contract — good-faith reconstruction of the deployed testnet\r\ncontract at `CBUERYDM7DXTZLLKDBRJKUBPFJ7M4OSUN4T7XKUARU345RLXNAIQD2IU`,\r\nbuilt from `docs/app/docs/contracts/compliance/page.mdx` and\r\ncross-checked against the `RawKyc` shape `api/src/indexer/mod.rs`\r\nalready decodes from that live contract. See the repository root\r\n`contracts/` entry in the pull request description for the full\r\nreconstruction caveat.",
+  "generated_at": "2026-11-23T12:28:42.988Z",
+  "methods": [
+    {
+      "name": "initialize",
+      "doc": "Invokes `initialize` on compliance.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "add_to_allowlist",
+      "doc": "Invokes `add_to_allowlist` on compliance.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "address",
+          "type": "Address"
+        },
+        {
+          "name": "jurisdiction",
+          "type": "String"
+        },
+        {
+          "name": "expires_at",
+          "type": "u32"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "suspend",
+      "doc": "Invokes `suspend` on compliance.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "address",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "remove",
+      "doc": "Invokes `remove` on compliance.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "address",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "is_allowed",
+      "doc": "Invokes `is_allowed` on compliance.",
+      "inputs": [
+        {
+          "name": "address",
+          "type": "Address"
+        }
+      ],
+      "output": "bool"
+    },
+    {
+      "name": "set_velocity_window",
+      "doc": "Invokes `set_velocity_window` on compliance.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "window_ledgers",
+          "type": "u32"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "set_velocity_cap",
+      "doc": "Invokes `set_velocity_cap` on compliance.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "jurisdiction",
+          "type": "String"
+        },
+        {
+          "name": "cap",
+          "type": "i128"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "set_default_velocity_cap",
+      "doc": "Invokes `set_default_velocity_cap` on compliance.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "cap",
+          "type": "i128"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "get_velocity_config",
+      "doc": "Invokes `get_velocity_config` on compliance.",
+      "inputs": [],
+      "output": "(u32, i128)"
+    },
+    {
+      "name": "get_velocity_state",
+      "doc": "Invokes `get_velocity_state` on compliance.",
+      "inputs": [
+        {
+          "name": "account",
+          "type": "Address"
+        },
+        {
+          "name": "jurisdiction",
+          "type": "String"
+        }
+      ],
+      "output": "Option<velocity::VelocityAccumulator>"
+    },
+    {
+      "name": "check_velocity",
+      "doc": "Invokes `check_velocity` on compliance.",
+      "inputs": [
+        {
+          "name": "account",
+          "type": "Address"
+        },
+        {
+          "name": "amount",
+          "type": "i128"
+        },
+        {
+          "name": "jurisdiction",
+          "type": "String"
+        }
+      ],
+      "output": "bool"
+    },
+    {
+      "name": "verify_verifiable_credential",
+      "doc": "Verify a W3C-style credential transiently; no credential or claim is stored.",
+      "inputs": [
+        {
+          "name": "credential",
+          "type": "VerifiableCredential"
+        }
+      ],
+      "output": "bool"
+    },
+    {
+      "name": "set_issuer",
+      "doc": "Invokes `set_issuer` on compliance.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "issuer",
+          "type": "Address"
+        },
+        {
+          "name": "public_key",
+          "type": "BytesN<32>"
+        },
+        {
+          "name": "revocation_root",
+          "type": "BytesN<32>"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "update_revocation_root",
+      "doc": "Invokes `update_revocation_root` on compliance.",
+      "inputs": [
+        {
+          "name": "issuer",
+          "type": "Address"
+        },
+        {
+          "name": "revocation_root",
+          "type": "BytesN<32>"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "get_issuer",
+      "doc": "Publicly query a provider's active verification key and revocation root so attestation submitters can construct proofs for the live root.",
+      "inputs": [
+        {
+          "name": "issuer",
+          "type": "Address"
+        }
+      ],
+      "output": "Option<(BytesN<32>, BytesN<32>)>"
+    },
+    {
+      "name": "submit_attestation",
+      "doc": "Validate a signed assertion and its proof before storing it. The persistent entry's TTL is extended on submission and during checks.",
+      "inputs": [
+        {
+          "name": "attestation",
+          "type": "IdentityAttestation"
+        },
+        {
+          "name": "proof",
+          "type": "RevocationProof"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "configure_oracles",
+      "doc": "Configure the bonded oracle set. The admin supplies the token used for oracle bonds and the destination for slashed stake.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "staking_token",
+          "type": "Address"
+        },
+        {
+          "name": "slash_recipient",
+          "type": "Address"
+        },
+        {
+          "name": "threshold",
+          "type": "u32"
+        },
+        {
+          "name": "minimum_stake",
+          "type": "i128"
+        },
+        {
+          "name": "slash_bps",
+          "type": "u32"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "register_oracle",
+      "doc": "Register an oracle after it authorizes depositing its bond.",
+      "inputs": [
+        {
+          "name": "oracle",
+          "type": "Address"
+        },
+        {
+          "name": "public_key",
+          "type": "BytesN<32>"
+        },
+        {
+          "name": "stake_amount",
+          "type": "i128"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "restake_oracle",
+      "doc": "Add more bond to an oracle whose stake has fallen below the minimum.",
+      "inputs": [
+        {
+          "name": "oracle",
+          "type": "Address"
+        },
+        {
+          "name": "stake_amount",
+          "type": "i128"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "remove_oracle",
+      "doc": "Remove an oracle and return its remaining bond. Admin-authenticated.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "oracle",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "set_oracle_threshold",
+      "doc": "Change the M in the configured M-of-N oracle quorum.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "threshold",
+          "type": "u32"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "submit_oracle_attestation",
+      "doc": "Submit individually signed KYC/AML votes. Returns true only when the M-of-N quorum is reached and the new record is committed.",
+      "inputs": [
+        {
+          "name": "attestation",
+          "type": "OracleAttestation"
+        },
+        {
+          "name": "signatures",
+          "type": "Vec<OracleSignature>"
+        }
+      ],
+      "output": "bool"
+    },
+    {
+      "name": "get_oracle_record",
+      "doc": "Get the latest KYC/AML result accepted by the configured oracle quorum.",
+      "inputs": [
+        {
+          "name": "investor",
+          "type": "Address"
+        }
+      ],
+      "output": "Option<KycRecord>"
+    },
+    {
+      "name": "get_oracle_config",
+      "doc": "Public oracle configuration and registered provider count.",
+      "inputs": [],
+      "output": "Option<OracleConfig>"
+    },
+    {
+      "name": "get_record",
+      "doc": "Invokes `get_record` on compliance.",
+      "inputs": [
+        {
+          "name": "address",
+          "type": "Address"
+        }
+      ],
+      "output": "Option<KycRecord>"
+    },
+    {
+      "name": "get_allowlist",
+      "doc": "Invokes `get_allowlist` on compliance.",
+      "inputs": [],
+      "output": "Vec<Address>"
+    },
+    {
+      "name": "register_hook",
+      "doc": "Register a rule-module hook contract. Admin-authenticated.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "hook_contract",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "unregister_hook",
+      "doc": "Unregister a previously-registered hook contract. Admin-authenticated.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "hook_contract",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "get_hooks",
+      "doc": "Currently registered transfer-gate hook contracts.",
+      "inputs": [],
+      "output": "Vec<Address>"
+    },
+    {
+      "name": "is_allowed_with_hooks",
+      "doc": "`is_allowed` plus every registered hook's `check(address)`. Returns `true` only if the built-in checks pass AND every hook returns `true`. Hooks are evaluated in registration order and evaluation short-circuits on the first failing hook (or the first failing built-in check), so a rejected address never pays for the cross-contract calls that follow it.",
+      "inputs": [
+        {
+          "name": "address",
+          "type": "Address"
+        }
+      ],
+      "output": "bool"
+    },
+    {
+      "name": "block_jurisdiction",
+      "doc": "Invokes `block_jurisdiction` on compliance.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "jurisdiction",
+          "type": "String"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "unblock_jurisdiction",
+      "doc": "Invokes `unblock_jurisdiction` on compliance.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "jurisdiction",
+          "type": "String"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "is_jurisdiction_blocked",
+      "doc": "Invokes `is_jurisdiction_blocked` on compliance.",
+      "inputs": [
+        {
+          "name": "jurisdiction",
+          "type": "String"
+        }
+      ],
+      "output": "bool"
+    },
+    {
+      "name": "set_tax_residency",
+      "doc": "Invokes `set_tax_residency` on compliance.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "investor",
+          "type": "Address"
+        },
+        {
+          "name": "residency_hash",
+          "type": "BytesN<32>"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "get_tax_residency",
+      "doc": "Invokes `get_tax_residency` on compliance.",
+      "inputs": [
+        {
+          "name": "investor",
+          "type": "Address"
+        }
+      ],
+      "output": "Option<BytesN<32>>"
+    },
+    {
+      "name": "set_aggregation_vk",
+      "doc": "Install the aggregation circuit's Groth16 verification key.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "vk",
+          "type": "AggregationVerifyingKey"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "set_zk_issuer_root",
+      "doc": "Authorize `issuer` for aggregated proofs with its credential-tree root (a BLS12-381 scalar, big-endian), or replace that root.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "issuer",
+          "type": "Address"
+        },
+        {
+          "name": "root",
+          "type": "BytesN<32>"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "update_zk_issuer_root",
+      "doc": "An authorized issuer rotates its own root, e.g. after revoking credentials; proofs against the old root stop verifying.",
+      "inputs": [
+        {
+          "name": "issuer",
+          "type": "Address"
+        },
+        {
+          "name": "root",
+          "type": "BytesN<32>"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "revoke_zk_issuer",
+      "doc": "Invokes `revoke_zk_issuer` on compliance.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "issuer",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "get_zk_issuer_root",
+      "doc": "Invokes `get_zk_issuer_root` on compliance.",
+      "inputs": [
+        {
+          "name": "issuer",
+          "type": "Address"
+        }
+      ],
+      "output": "Option<BytesN<32>>"
+    },
+    {
+      "name": "verify_aggregated_kyc",
+      "doc": "Check an aggregated proof without recording anything.",
+      "inputs": [
+        {
+          "name": "issuer",
+          "type": "Address"
+        },
+        {
+          "name": "subjects",
+          "type": "Vec<Address>"
+        },
+        {
+          "name": "valid_until",
+          "type": "u32"
+        },
+        {
+          "name": "proof",
+          "type": "AggregatedProof"
+        }
+      ],
+      "output": "bool"
+    },
+    {
+      "name": "submit_aggregated_kyc",
+      "doc": "Verify an aggregated proof and record a `ZkAccreditation` for every subject. Anyone may submit: the proof is the authority. Returns the number of subjects accredited.",
+      "inputs": [
+        {
+          "name": "issuer",
+          "type": "Address"
+        },
+        {
+          "name": "subjects",
+          "type": "Vec<Address>"
+        },
+        {
+          "name": "valid_until",
+          "type": "u32"
+        },
+        {
+          "name": "proof",
+          "type": "AggregatedProof"
+        }
+      ],
+      "output": "u32"
+    },
+    {
+      "name": "zk_accreditation",
+      "doc": "Accreditation recorded for `subject` by an aggregated proof, if it is still unexpired.",
+      "inputs": [
+        {
+          "name": "subject",
+          "type": "Address"
+        }
+      ],
+      "output": "Option<ZkAccreditation>"
+    },
+    {
+      "name": "version",
+      "doc": "Invokes `version` on compliance.",
+      "inputs": [
+        {
+          "name": "_env",
+          "type": "Env"
+        }
+      ],
+      "output": "u64"
+    },
+    {
+      "name": "pause",
+      "doc": "Invokes `pause` on compliance.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "unpause",
+      "doc": "Invokes `unpause` on compliance.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "upgrade",
+      "doc": "Invokes `upgrade` on compliance.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "new_wasm_hash",
+          "type": "BytesN<32>"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "verify_holder_balance_range",
+      "doc": "Verifies that `holder` owns a balance exceeding `threshold` without revealing the actual balance.",
+      "inputs": [
+        {
+          "name": "holder",
+          "type": "Address"
+        },
+        {
+          "name": "threshold",
+          "type": "u64"
+        },
+        {
+          "name": "commitment",
+          "type": "BytesN<32>"
+        },
+        {
+          "name": "proof",
+          "type": "zk_range_proof"
+        }
+      ],
+      "output": "bool"
+    },
+    {
+      "name": "is_balance_threshold_verified",
+      "doc": "Checks if `holder` has an active, unexpired balance verification at or above `min_threshold`.",
+      "inputs": [
+        {
+          "name": "holder",
+          "type": "Address"
+        },
+        {
+          "name": "min_threshold",
+          "type": "u64"
+        }
+      ],
+      "output": "bool"
+    }
+  ]
+}

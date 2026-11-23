@@ -1,0 +1,303 @@
+{
+  "contract": "index-token",
+  "moduleDoc": "Synthetic RWA index token (issue #93).\r\n\nAn index token (e.g. `RWA-Top10`) is backed 1:1 by a basket of tokenized\r\nreal-world assets held by this contract.\r\n\n* **Mint / redeem.** Index tokens are minted only by depositing the exact\r\n  basket ratio of every component, and redeemed by burning index tokens for\r\n  the pro-rata share of every component reserve. Before the first mint the\r\n  ratio is the configured `units` per whole index token; afterwards it is\r\n  the live reserve ratio, so the basket stays fully backed.\r\n* **Composite price.** [`IndexToken::index_price`] values one whole index\r\n  token as `Σ units_per_index_i × price_i / 10^decimals_i` using a SEP-40\r\n  style price oracle, rejecting stale feeds.\r\n* **Streaming management fee.** An annual fee in basis points accrues\r\n  continuously, per second, by moving the fee share of every component\r\n  reserve into an owed bucket the index maintainer can claim at any time.\r\n  Holders are diluted in underlying terms, never in index-token supply.",
+  "generated_at": "2026-11-23T12:28:43.005Z",
+  "methods": [
+    {
+      "name": "initialize",
+      "doc": "Configures the index. `fee_bps` is the annual management fee and `max_price_age` the oldest oracle price (seconds) accepted for NAV.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "maintainer",
+          "type": "Address"
+        },
+        {
+          "name": "oracle",
+          "type": "Address"
+        },
+        {
+          "name": "components",
+          "type": "Vec<Component>"
+        },
+        {
+          "name": "fee_bps",
+          "type": "u32"
+        },
+        {
+          "name": "max_price_age",
+          "type": "u64"
+        },
+        {
+          "name": "name",
+          "type": "String"
+        },
+        {
+          "name": "symbol",
+          "type": "String"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "quote_mint",
+      "doc": "Underlying amounts (basket order) that must be deposited to mint `amount` index base units right now. Rounded up in the index's favour.",
+      "inputs": [
+        {
+          "name": "amount",
+          "type": "i128"
+        }
+      ],
+      "output": "Vec<i128>"
+    },
+    {
+      "name": "quote_redeem",
+      "doc": "Underlying amounts (basket order) returned for burning `amount` index base units right now. Rounded down in the index's favour.",
+      "inputs": [
+        {
+          "name": "amount",
+          "type": "i128"
+        }
+      ],
+      "output": "Vec<i128>"
+    },
+    {
+      "name": "mint",
+      "doc": "Mints `amount` index base units to `to` against a deposit of the exact basket ratio of every component. Returns the deposits made.",
+      "inputs": [
+        {
+          "name": "to",
+          "type": "Address"
+        },
+        {
+          "name": "amount",
+          "type": "i128"
+        }
+      ],
+      "output": "Vec<i128>"
+    },
+    {
+      "name": "redeem",
+      "doc": "Burns `amount` index base units from `from` and returns the pro-rata share of every component reserve. Returns the withdrawals made.",
+      "inputs": [
+        {
+          "name": "from",
+          "type": "Address"
+        },
+        {
+          "name": "amount",
+          "type": "i128"
+        }
+      ],
+      "output": "Vec<i128>"
+    },
+    {
+      "name": "index_price",
+      "doc": "Composite price of one whole index token, in oracle quote units with the oracle's decimals. Uses the live (post-fee) basket composition.",
+      "inputs": [],
+      "output": "i128"
+    },
+    {
+      "name": "nav",
+      "doc": "Net asset value of the whole index (all outstanding tokens), in oracle quote units.",
+      "inputs": [],
+      "output": "i128"
+    },
+    {
+      "name": "price_decimals",
+      "doc": "Invokes `price_decimals` on index-token.",
+      "inputs": [],
+      "output": "u32"
+    },
+    {
+      "name": "accrued_fees",
+      "doc": "Fees owed to the maintainer, per component, including the portion streamed since the last accrual.",
+      "inputs": [],
+      "output": "Vec<i128>"
+    },
+    {
+      "name": "claim_fees",
+      "doc": "Accrues fees and transfers everything owed to the maintainer.",
+      "inputs": [],
+      "output": "Vec<i128>"
+    },
+    {
+      "name": "set_fee_bps",
+      "doc": "Changes the annual fee. Fees streamed so far settle at the old rate.",
+      "inputs": [
+        {
+          "name": "fee_bps",
+          "type": "u32"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "set_maintainer",
+      "doc": "Invokes `set_maintainer` on index-token.",
+      "inputs": [
+        {
+          "name": "maintainer",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "set_oracle",
+      "doc": "Invokes `set_oracle` on index-token.",
+      "inputs": [
+        {
+          "name": "oracle",
+          "type": "Address"
+        },
+        {
+          "name": "max_price_age",
+          "type": "u64"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "config",
+      "doc": "Invokes `config` on index-token.",
+      "inputs": [],
+      "output": "IndexConfig"
+    },
+    {
+      "name": "basket",
+      "doc": "Invokes `basket` on index-token.",
+      "inputs": [],
+      "output": "Vec<Component>"
+    },
+    {
+      "name": "reserves",
+      "doc": "Component reserves backing the index, net of streamed fees.",
+      "inputs": [],
+      "output": "Vec<i128>"
+    },
+    {
+      "name": "name",
+      "doc": "Invokes `name` on index-token.",
+      "inputs": [],
+      "output": "String"
+    },
+    {
+      "name": "symbol",
+      "doc": "Invokes `symbol` on index-token.",
+      "inputs": [],
+      "output": "String"
+    },
+    {
+      "name": "decimals",
+      "doc": "Invokes `decimals` on index-token.",
+      "inputs": [
+        {
+          "name": "_env",
+          "type": "Env"
+        }
+      ],
+      "output": "u32"
+    },
+    {
+      "name": "total_supply",
+      "doc": "Invokes `total_supply` on index-token.",
+      "inputs": [],
+      "output": "i128"
+    },
+    {
+      "name": "balance",
+      "doc": "Invokes `balance` on index-token.",
+      "inputs": [
+        {
+          "name": "id",
+          "type": "Address"
+        }
+      ],
+      "output": "i128"
+    },
+    {
+      "name": "allowance",
+      "doc": "Invokes `allowance` on index-token.",
+      "inputs": [
+        {
+          "name": "from",
+          "type": "Address"
+        },
+        {
+          "name": "spender",
+          "type": "Address"
+        }
+      ],
+      "output": "i128"
+    },
+    {
+      "name": "approve",
+      "doc": "Invokes `approve` on index-token.",
+      "inputs": [
+        {
+          "name": "from",
+          "type": "Address"
+        },
+        {
+          "name": "spender",
+          "type": "Address"
+        },
+        {
+          "name": "amount",
+          "type": "i128"
+        },
+        {
+          "name": "expiration_ledger",
+          "type": "u32"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "transfer",
+      "doc": "Invokes `transfer` on index-token.",
+      "inputs": [
+        {
+          "name": "from",
+          "type": "Address"
+        },
+        {
+          "name": "to",
+          "type": "Address"
+        },
+        {
+          "name": "amount",
+          "type": "i128"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "transfer_from",
+      "doc": "Invokes `transfer_from` on index-token.",
+      "inputs": [
+        {
+          "name": "spender",
+          "type": "Address"
+        },
+        {
+          "name": "from",
+          "type": "Address"
+        },
+        {
+          "name": "to",
+          "type": "Address"
+        },
+        {
+          "name": "amount",
+          "type": "i128"
+        }
+      ],
+      "output": "()"
+    }
+  ]
+}

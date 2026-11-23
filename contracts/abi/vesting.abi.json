@@ -1,0 +1,136 @@
+{
+  "contract": "vesting",
+  "moduleDoc": "Token vesting schedules with configurable cliffs and linear vesting.",
+  "generated_at": "2026-11-23T12:28:43.022Z",
+  "methods": [
+    {
+      "name": "initialize",
+      "doc": "Initialize the vesting contract with its funding token and refund treasury.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "token",
+          "type": "Address"
+        },
+        {
+          "name": "treasury",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "create_vesting_schedule",
+      "doc": "Create and fund a schedule. `start_time` and durations are ledger timestamp seconds. At the cliff, the beneficiary may claim the linear amount accrued since `start_time`.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "beneficiary",
+          "type": "Address"
+        },
+        {
+          "name": "start_time",
+          "type": "u64"
+        },
+        {
+          "name": "cliff_duration",
+          "type": "u64"
+        },
+        {
+          "name": "total_duration",
+          "type": "u64"
+        },
+        {
+          "name": "amount",
+          "type": "i128"
+        },
+        {
+          "name": "revocable",
+          "type": "bool"
+        }
+      ],
+      "output": "u64"
+    },
+    {
+      "name": "claim_vested_tokens",
+      "doc": "Claim all currently vested but previously unclaimed tokens for one schedule. #388: guarded against reentrancy via a TemporaryStorage mutex flag.",
+      "inputs": [
+        {
+          "name": "beneficiary",
+          "type": "Address"
+        },
+        {
+          "name": "schedule_id",
+          "type": "u64"
+        }
+      ],
+      "output": "i128"
+    },
+    {
+      "name": "slash",
+      "doc": "#388: Slash unvested tokens by `bps` basis points (100 = 1%). Slashed tokens are transferred to the governance treasury, not destroyed. `reason_hash` is a governance proposal ID for auditability.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "schedule_id",
+          "type": "u64"
+        },
+        {
+          "name": "reason_hash",
+          "type": "soroban_sdk"
+        },
+        {
+          "name": "bps",
+          "type": "u32"
+        }
+      ],
+      "output": "i128"
+    },
+    {
+      "name": "revoke_vesting_schedule",
+      "doc": "Revoke an active schedule and return its unvested balance to the treasury. Any vested amount remains claimable by the beneficiary.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "schedule_id",
+          "type": "u64"
+        }
+      ],
+      "output": "i128"
+    },
+    {
+      "name": "get_vesting_schedule",
+      "doc": "Invokes `get_vesting_schedule` on vesting.",
+      "inputs": [
+        {
+          "name": "schedule_id",
+          "type": "u64"
+        }
+      ],
+      "output": "VestingSchedule"
+    },
+    {
+      "name": "version",
+      "doc": "Invokes `version` on vesting.",
+      "inputs": [
+        {
+          "name": "_env",
+          "type": "Env"
+        }
+      ],
+      "output": "u64"
+    }
+  ]
+}

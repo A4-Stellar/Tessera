@@ -1,0 +1,253 @@
+{
+  "contract": "cap-table",
+  "moduleDoc": "Cap-table snapshot & Merkle proof verification contract (issue #13).\r\n\nThis is new functionality, not a reconstruction of an already-deployed\r\ncontract — there is no `cap-table` entry among the four documented,\r\ndeployed contracts. It exists so distributing dividends (or otherwise\r\nproving a holder's balance) to thousands of holders doesn't require\r\nputting every holder's balance on-chain: an admin periodically publishes\r\na Merkle root committing to the full holder set for an asset token, and\r\nany holder can then prove their balance against that root with an\r\n`O(log n)`-sized proof instead of an on-chain enumeration.",
+  "generated_at": "2026-11-23T12:28:42.982Z",
+  "methods": [
+    {
+      "name": "initialize",
+      "doc": "Invokes `initialize` on cap-table.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "submit_snapshot",
+      "doc": "Record a new cap-table snapshot for `asset_token`: `merkle_root` commits (via [`Self::verify_holder`]) to every holder's balance at the current ledger.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "asset_token",
+          "type": "Address"
+        },
+        {
+          "name": "merkle_root",
+          "type": "BytesN<32>"
+        },
+        {
+          "name": "total_holders",
+          "type": "u32"
+        }
+      ],
+      "output": "u64"
+    },
+    {
+      "name": "get_snapshot",
+      "doc": "Invokes `get_snapshot` on cap-table.",
+      "inputs": [
+        {
+          "name": "id",
+          "type": "u64"
+        }
+      ],
+      "output": "Snapshot"
+    },
+    {
+      "name": "set_drip_registrar",
+      "doc": "Set the dividend contract allowed to record completed DRIP purchases.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "registrar",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "record_drip_acquisition",
+      "doc": "Record asset tokens delivered to a holder by a DRIP swap. This is a cumulative audit ledger; token balances remain authoritative. The configured dividend contract is the only permitted caller.",
+      "inputs": [
+        {
+          "name": "asset_token",
+          "type": "Address"
+        },
+        {
+          "name": "holder",
+          "type": "Address"
+        },
+        {
+          "name": "amount",
+          "type": "i128"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "drip_acquisitions",
+      "doc": "Invokes `drip_acquisitions` on cap-table.",
+      "inputs": [
+        {
+          "name": "asset_token",
+          "type": "Address"
+        },
+        {
+          "name": "holder",
+          "type": "Address"
+        }
+      ],
+      "output": "i128"
+    },
+    {
+      "name": "verify_holder",
+      "doc": "Verify that `holder` held `balance` at `snapshot_id`'s recorded Merkle root.  The leaf is `sha256(holder XDR bytes ++ balance big-endian bytes)`. The proof is then folded bottom-up to the root using SORTED-PAIR hashing at each level (`sha256(min(a, b) ++ max(a, b))`) rather than naive left/right concatenation, so a verifier does not need to also carry left/right-branch metadata, and the tree is not vulnerable to the classic ambiguous-ordering second-preimage trick. Returns `false` (never panics) for an unknown snapshot or a proof that doesn't fold to the stored root.",
+      "inputs": [
+        {
+          "name": "snapshot_id",
+          "type": "u64"
+        },
+        {
+          "name": "holder",
+          "type": "Address"
+        },
+        {
+          "name": "balance",
+          "type": "i128"
+        },
+        {
+          "name": "proof",
+          "type": "Vec<BytesN<32>>"
+        }
+      ],
+      "output": "bool"
+    },
+    {
+      "name": "record_acquisition",
+      "doc": "Record an acquisition lot for `holder` (admin only).",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "asset_token",
+          "type": "Address"
+        },
+        {
+          "name": "holder",
+          "type": "Address"
+        },
+        {
+          "name": "amount",
+          "type": "i128"
+        },
+        {
+          "name": "restriction",
+          "type": "RestrictionType"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "set_affiliate",
+      "doc": "Set affiliate status for `holder` (admin only). Affiliate status is read on every call to [`Self::is_freely_tradeable`], so a change takes effect immediately; there is no cached result to invalidate.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "asset_token",
+          "type": "Address"
+        },
+        {
+          "name": "holder",
+          "type": "Address"
+        },
+        {
+          "name": "is_affiliate",
+          "type": "bool"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "record_volume",
+      "doc": "Add `amount` traded volume to the current day's bucket (admin only).",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "asset_token",
+          "type": "Address"
+        },
+        {
+          "name": "amount",
+          "type": "i128"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "adtv",
+      "doc": "Average daily trading volume over the last [`ADTV_WINDOW_DAYS`] days.",
+      "inputs": [
+        {
+          "name": "asset_token",
+          "type": "Address"
+        }
+      ],
+      "output": "i128"
+    },
+    {
+      "name": "is_freely_tradeable",
+      "doc": "Whether `holder` may sell `amount` units of `asset_token` now.  Requires: the holder is not an affiliate; lots held at least [`RULE144_HOLDING_LEDGERS`] cover `amount`; and `amount` does not exceed ADTV.",
+      "inputs": [
+        {
+          "name": "asset_token",
+          "type": "Address"
+        },
+        {
+          "name": "holder",
+          "type": "Address"
+        },
+        {
+          "name": "amount",
+          "type": "i128"
+        }
+      ],
+      "output": "bool"
+    },
+    {
+      "name": "generate_144_attestation",
+      "doc": "Produce a Rule 144 attestation for `holder` (admin only). The returned struct is the payload brokers submit to the transfer agent; it is also published as an event so the attestation is verifiable from ledger history.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "asset_token",
+          "type": "Address"
+        },
+        {
+          "name": "holder",
+          "type": "Address"
+        }
+      ],
+      "output": "Rule144Attestation"
+    },
+    {
+      "name": "version",
+      "doc": "Current contract ABI version, polled by the off-chain indexer.",
+      "inputs": [
+        {
+          "name": "_env",
+          "type": "Env"
+        }
+      ],
+      "output": "u64"
+    }
+  ]
+}

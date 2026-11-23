@@ -1,0 +1,185 @@
+{
+  "contract": "nft-deed",
+  "moduleDoc": "NFT Property Deed & Legal Title Binding Contract.\r\n\nBinds fractional ERC-20 style asset tokens to a single master NFT\r\nrepresenting the legal deed title stored in municipal land registries.\r\n\n# Architecture\r\n\n- The master NFT (token_id `0`) represents the legal deed title.\r\n- While fractional tokens are actively trading, the master NFT is\r\n  locked in a vault contract.\r\n- To unlock and transfer the master NFT, 100% of the fractional tokens\r\n  must be redeemed (burned) back to the asset-token contract.\r\n- Once all tokens are redeemed, the NFT can be transferred to the\r\n  redeemer, completing the legal title transfer.\r\n\n# State machine\r\n\n```text\r\nLocked ──100% redemption──► Unlocked ──transfer_nft──► Transferred\r\n```",
+  "generated_at": "2026-11-23T12:28:43.012Z",
+  "methods": [
+    {
+      "name": "initialize",
+      "doc": "Initialize the NFT deed contract.  - `admin`              — contract administrator. - `fractional_token`   — the fractional asset-token contract address. - `vault`              — the vault contract where the NFT is locked. - `deed_uri`           — URI of the legal deed document (e.g. IPFS). - `registry_id`        — municipal land registry identifier. - `beneficiary`        — the address that can claim the NFT upon full                          redemption of all fractional tokens.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "fractional_token",
+          "type": "Address"
+        },
+        {
+          "name": "vault",
+          "type": "Address"
+        },
+        {
+          "name": "deed_uri",
+          "type": "String"
+        },
+        {
+          "name": "registry_id",
+          "type": "String"
+        },
+        {
+          "name": "beneficiary",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "owner_of",
+      "doc": "Returns the owner of the given token ID.  While the NFT is locked, the owner is the vault contract. After unlocking, the owner is the beneficiary who redeemed all tokens.",
+      "inputs": [
+        {
+          "name": "token_id",
+          "type": "u64"
+        }
+      ],
+      "output": "Address"
+    },
+    {
+      "name": "transfer_nft",
+      "doc": "Transfer the master NFT to a new owner.  Can only be called when the NFT is unlocked (all fractional tokens have been redeemed). The caller must be the current owner.",
+      "inputs": [
+        {
+          "name": "from",
+          "type": "Address"
+        },
+        {
+          "name": "to",
+          "type": "Address"
+        },
+        {
+          "name": "token_id",
+          "type": "u64"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "token_uri",
+      "doc": "Returns the metadata URI for the given token ID.  This URI points to the legal deed document stored in the municipal land registry (or an IPFS mirror of it).",
+      "inputs": [
+        {
+          "name": "token_id",
+          "type": "u64"
+        }
+      ],
+      "output": "String"
+    },
+    {
+      "name": "redeem_and_unlock",
+      "doc": "Redeem fractional tokens to unlock the master NFT.  The caller specifies how many fractional tokens they are redeeming. Once the cumulative redeemed amount reaches 100% of the original total supply, the NFT is unlocked and can be transferred to the beneficiary.  This function: 1. Burns the specified amount of fractional tokens from the caller. 2. Tracks cumulative redemptions. 3. If 100% redeemed, unlocks the NFT and assigns ownership to the    beneficiary.",
+      "inputs": [
+        {
+          "name": "holder",
+          "type": "Address"
+        },
+        {
+          "name": "amount",
+          "type": "i128"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "is_unlocked",
+      "doc": "Check if the master NFT is unlocked (all fractional tokens redeemed).",
+      "inputs": [],
+      "output": "bool"
+    },
+    {
+      "name": "fractional_token",
+      "doc": "Returns the bound fractional asset-token contract address.",
+      "inputs": [],
+      "output": "Address"
+    },
+    {
+      "name": "vault",
+      "doc": "Returns the vault contract address.",
+      "inputs": [],
+      "output": "Address"
+    },
+    {
+      "name": "beneficiary",
+      "doc": "Returns the beneficiary address.",
+      "inputs": [],
+      "output": "Address"
+    },
+    {
+      "name": "registry_id",
+      "doc": "Returns the municipal land registry identifier.",
+      "inputs": [],
+      "output": "String"
+    },
+    {
+      "name": "fractional_total_supply",
+      "doc": "Returns the original total supply of fractional tokens at binding time.",
+      "inputs": [],
+      "output": "i128"
+    },
+    {
+      "name": "current_fractional_supply",
+      "doc": "Returns the current total supply of fractional tokens.",
+      "inputs": [],
+      "output": "i128"
+    },
+    {
+      "name": "admin",
+      "doc": "Returns the contract admin.",
+      "inputs": [],
+      "output": "Address"
+    },
+    {
+      "name": "version",
+      "doc": "Current contract ABI version, polled by the off-chain indexer.",
+      "inputs": [
+        {
+          "name": "_env",
+          "type": "Env"
+        }
+      ],
+      "output": "u64"
+    },
+    {
+      "name": "initialize",
+      "doc": "Invokes `initialize` on nft-deed.",
+      "inputs": [
+        {
+          "name": "total_supply",
+          "type": "i128"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "total_supply",
+      "doc": "Invokes `total_supply` on nft-deed.",
+      "inputs": [],
+      "output": "i128"
+    },
+    {
+      "name": "burn",
+      "doc": "Invokes `burn` on nft-deed.",
+      "inputs": [
+        {
+          "name": "from",
+          "type": "Address"
+        },
+        {
+          "name": "amount",
+          "type": "i128"
+        }
+      ],
+      "output": "()"
+    }
+  ]
+}

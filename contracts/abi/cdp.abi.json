@@ -1,0 +1,165 @@
+{
+  "contract": "cdp",
+  "moduleDoc": "Multi-Asset Collateralized Debt Position (CDP) Vault (issue #41).\r\n\nEnables holders of compliance-gated RWA tokens to lock those tokens as\r\ncollateral and borrow liquid stablecoins against them.  The vault enforces a\r\n**150 % minimum collateralization ratio**: if the current value of a\r\nposition's collateral falls below 1.5× the outstanding debt (as determined\r\nby oracle-reported prices), third-party liquidators may purchase the\r\nunder-collateralized collateral at a **10 % discount** to bring the system\r\nback to safety.\r\n\n# Architecture\r\n\n```text\r\n Borrower ──► open_position(collateral_token, collateral_amount)\r\n           ── borrow(position_id, stablecoin_amount)\r\n           ── repay(position_id, stablecoin_amount)\r\n           ── withdraw_collateral(position_id, amount)\r\n\n Oracle  ──► update_price(token, price_in_usd_cents)        [admin]\r\n\n Liquidator ──► liquidate(position_id)                      [any caller]\r\n```\r\n\n# Storage layout\r\n\n| Key                        | Type              | Description                          |\r\n|----------------------------|-------------------|--------------------------------------|\r\n| `Admin`                    | `Address`         | Contract administrator               |\r\n| `StablecoinContract`       | `Address`         | Mintable stablecoin used for loans   |\r\n| `Price(token)`             | `i128`            | USD-cent price per token base unit   |\r\n| `Position(id)`             | `CdpPosition`     | Full position state                  |\r\n| `NextPositionId`           | `u64`             | Auto-increment position counter      |\r\n\n# Constants\r\n\n- `MIN_COLLATERAL_RATIO_BPS`: 15000 (150 %, in basis points × 100)\r\n- `LIQUIDATION_DISCOUNT_BPS`:  1000 (10 % discount, in basis points)",
+  "generated_at": "2026-11-23T12:28:42.985Z",
+  "methods": [
+    {
+      "name": "initialize",
+      "doc": "Initialize the CDP vault.  - `admin`               — vault administrator (can update oracle prices). - `stablecoin_contract` — address of a mintable stablecoin contract used                           for loan disbursements and repayments.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "stablecoin_contract",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "update_price",
+      "doc": "Admin-only: update the USD-cent price for a collateral token.  In production this would be called by a decentralized oracle bridge (e.g. Band Protocol / Reflector) rather than manually.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "token",
+          "type": "Address"
+        },
+        {
+          "name": "price_usd_cents",
+          "type": "i128"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "get_price",
+      "doc": "Return the current oracle price (USD cents per base unit) for `token`.",
+      "inputs": [
+        {
+          "name": "token",
+          "type": "Address"
+        }
+      ],
+      "output": "i128"
+    },
+    {
+      "name": "open_position",
+      "doc": "Lock `collateral_amount` of `collateral_token` and open a new CDP position with zero initial debt.  Returns the new position ID.",
+      "inputs": [
+        {
+          "name": "owner",
+          "type": "Address"
+        },
+        {
+          "name": "collateral_token",
+          "type": "Address"
+        },
+        {
+          "name": "collateral_amount",
+          "type": "i128"
+        }
+      ],
+      "output": "u64"
+    },
+    {
+      "name": "borrow",
+      "doc": "Borrow `stablecoin_amount` against an existing position.  Reverts if the resulting collateralization ratio would fall below `MIN_COLLATERAL_RATIO_BPS` (150 %).",
+      "inputs": [
+        {
+          "name": "owner",
+          "type": "Address"
+        },
+        {
+          "name": "position_id",
+          "type": "u64"
+        },
+        {
+          "name": "stablecoin_amount",
+          "type": "i128"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "repay",
+      "doc": "Repay `stablecoin_amount` of debt on a position.",
+      "inputs": [
+        {
+          "name": "owner",
+          "type": "Address"
+        },
+        {
+          "name": "position_id",
+          "type": "u64"
+        },
+        {
+          "name": "stablecoin_amount",
+          "type": "i128"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "withdraw_collateral",
+      "doc": "Withdraw `amount` of collateral from a zero-debt (or sufficiently over-collateralized) position.",
+      "inputs": [
+        {
+          "name": "owner",
+          "type": "Address"
+        },
+        {
+          "name": "position_id",
+          "type": "u64"
+        },
+        {
+          "name": "amount",
+          "type": "i128"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "liquidate",
+      "doc": "Liquidate an under-collateralized position.  Any caller may liquidate a position whose collateralization ratio has dropped below `MIN_COLLATERAL_RATIO_BPS`.  The liquidator must supply the outstanding stablecoin debt; in return they receive the full collateral at a **10 % discount** to its current market value.  The position is marked `closed` after liquidation.",
+      "inputs": [
+        {
+          "name": "liquidator",
+          "type": "Address"
+        },
+        {
+          "name": "position_id",
+          "type": "u64"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "get_position",
+      "doc": "Return the full state of a position.",
+      "inputs": [
+        {
+          "name": "position_id",
+          "type": "u64"
+        }
+      ],
+      "output": "CdpPosition"
+    },
+    {
+      "name": "collateral_ratio_bps",
+      "doc": "Current collateralization ratio for a position, in basis points ×100. Returns `0` for positions with zero debt (infinite ratio).",
+      "inputs": [
+        {
+          "name": "position_id",
+          "type": "u64"
+        }
+      ],
+      "output": "i128"
+    }
+  ]
+}

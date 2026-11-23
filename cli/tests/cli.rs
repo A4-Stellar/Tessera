@@ -318,3 +318,44 @@ fn invalid_selection_reports_the_allowed_values() {
     );
     assert_failure(&output, "Real Estate, Invoice, Commodity, or Debt");
 }
+
+#[test]
+fn dev_command_fails_on_nonexistent_contracts_dir() {
+    let directory = TestDirectory::new();
+    let output = run(
+        &directory,
+        &[
+            "dev",
+            "--contracts-dir",
+            "nonexistent-contracts-dir-xyz",
+            "--no-docker",
+            "--skip-docs",
+            "--once",
+        ],
+    );
+    assert_failure(&output, "contracts directory not found");
+}
+
+#[test]
+fn dev_command_runs_once_successfully() {
+    let directory = TestDirectory::new();
+    // Create minimal mock contracts directory
+    let contracts_dir = directory.path().join("contracts");
+    let contract_dir = contracts_dir.join("test-token");
+    let src_dir = contract_dir.join("src");
+    fs::create_dir_all(&src_dir).expect("create src dir");
+    fs::write(src_dir.join("lib.rs"), "// minimal mock contract\n").expect("write lib.rs");
+
+    let output = run(
+        &directory,
+        &[
+            "dev",
+            "--contracts-dir",
+            contracts_dir.to_str().unwrap(),
+            "--no-docker",
+            "--skip-docs",
+            "--once",
+        ],
+    );
+    assert_success(&output);
+}

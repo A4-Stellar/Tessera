@@ -1,3 +1,4 @@
+pub mod dev;
 mod error;
 mod generator;
 mod options;
@@ -10,7 +11,8 @@ use clap::{Parser, Subcommand};
 pub use error::CliError;
 pub use generator::{generate_project, validate_project_name, ProjectConfig};
 pub use options::{
-    resolve_choices, AssetType, ComplianceModel, DividendStrategy, InitArgs, ProjectChoices,
+    resolve_choices, AssetType, ComplianceModel, DevArgs, DividendStrategy, InitArgs,
+    ProjectChoices,
 };
 
 #[derive(Debug, Parser)]
@@ -28,6 +30,7 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     Init(InitArgs),
+    Dev(DevArgs),
 }
 
 pub fn run() -> Result<(), CliError> {
@@ -46,6 +49,7 @@ pub fn run_cli<C: BufRead, W: Write>(
 ) -> Result<(), CliError> {
     match cli.command {
         Command::Init(args) => run_init(args, input, output),
+        Command::Dev(args) => dev::run_dev(args),
     }
 }
 
@@ -92,5 +96,30 @@ mod tests {
         assert_eq!(args.compliance_model.as_deref(), Some("kyc"));
         assert_eq!(args.dividend_strategy.as_deref(), Some("proportional"));
         assert!(args.non_interactive);
+    }
+
+    #[test]
+    fn parses_dev_command_with_custom_flags() {
+        let cli = Cli::try_parse_from([
+            "tessera-cli",
+            "dev",
+            "--api-port",
+            "8081",
+            "--rpc-url",
+            "http://localhost:8000",
+            "--docs-port",
+            "3001",
+            "--no-docker",
+            "--skip-docs",
+            "--once",
+        ])
+        .expect("dev command should parse");
+        let Command::Dev(args) = cli.command;
+        assert_eq!(args.api_port, 8081);
+        assert_eq!(args.rpc_url, "http://localhost:8000");
+        assert_eq!(args.docs_port, 3001);
+        assert!(args.no_docker);
+        assert!(args.skip_docs);
+        assert!(args.once);
     }
 }

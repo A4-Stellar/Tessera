@@ -1,0 +1,202 @@
+{
+  "contract": "registry",
+  "moduleDoc": "Registry contract — good-faith reconstruction of the deployed testnet\r\ncontract at `CBX5SMLTXX6JP4HA5GQIO2V6QM7WCUGL2GZ6D4U773HMRI6RXISKPUR3`,\r\nbuilt from `docs/app/docs/contracts/registry/page.mdx` and cross-checked\r\nagainst the `RawAssetEntry` shape `api/src/indexer/mod.rs` already\r\ndecodes from that live contract. See the repository root `contracts/`\r\nentry in the pull request description for the full reconstruction\r\ncaveat: this is not the original deployed bytecode, which was never\r\npresent in this repository.",
+  "generated_at": "2026-11-23T12:28:43.016Z",
+  "methods": [
+    {
+      "name": "initialize",
+      "doc": "Invokes `initialize` on registry.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "register_asset",
+      "doc": "Invokes `register_asset` on registry.",
+      "inputs": [
+        {
+          "name": "issuer",
+          "type": "Address"
+        },
+        {
+          "name": "token_contract",
+          "type": "Address"
+        },
+        {
+          "name": "name",
+          "type": "String"
+        },
+        {
+          "name": "asset_type",
+          "type": "String"
+        },
+        {
+          "name": "valuation",
+          "type": "i128"
+        }
+      ],
+      "output": "u64"
+    },
+    {
+      "name": "get_asset",
+      "doc": "Invokes `get_asset` on registry.",
+      "inputs": [
+        {
+          "name": "asset_id",
+          "type": "u64"
+        }
+      ],
+      "output": "AssetEntry"
+    },
+    {
+      "name": "get_proof",
+      "doc": "Invokes `get_proof` on registry.",
+      "inputs": [
+        {
+          "name": "asset_id",
+          "type": "u64"
+        }
+      ],
+      "output": "mpt::MptProof"
+    },
+    {
+      "name": "verify_mpt_proof",
+      "doc": "Invokes `verify_mpt_proof` on registry.",
+      "inputs": [
+        {
+          "name": "proof",
+          "type": "mpt"
+        }
+      ],
+      "output": "bool"
+    },
+    {
+      "name": "get_mpt_root",
+      "doc": "Invokes `get_mpt_root` on registry.",
+      "inputs": [],
+      "output": "BytesN<32>"
+    },
+    {
+      "name": "get_assets_page",
+      "doc": "Invokes `get_assets_page` on registry.",
+      "inputs": [
+        {
+          "name": "start",
+          "type": "u64"
+        },
+        {
+          "name": "limit",
+          "type": "u64"
+        }
+      ],
+      "output": "Vec<AssetEntry>"
+    },
+    {
+      "name": "get_assets_by_issuer",
+      "doc": "Invokes `get_assets_by_issuer` on registry.",
+      "inputs": [
+        {
+          "name": "issuer",
+          "type": "Address"
+        }
+      ],
+      "output": "Vec<AssetEntry>"
+    },
+    {
+      "name": "get_assets_by_type",
+      "doc": "Invokes `get_assets_by_type` on registry.",
+      "inputs": [
+        {
+          "name": "asset_type",
+          "type": "String"
+        }
+      ],
+      "output": "Vec<AssetEntry>"
+    },
+    {
+      "name": "get_all_assets",
+      "doc": "Invokes `get_all_assets` on registry.",
+      "inputs": [],
+      "output": "Vec<AssetEntry>"
+    },
+    {
+      "name": "deactivate_asset",
+      "doc": "Invokes `deactivate_asset` on registry.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "asset_id",
+          "type": "u64"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "total_value_locked",
+      "doc": "Invokes `total_value_locked` on registry.",
+      "inputs": [],
+      "output": "i128"
+    },
+    {
+      "name": "asset_count",
+      "doc": "Invokes `asset_count` on registry.",
+      "inputs": [],
+      "output": "u64"
+    },
+    {
+      "name": "version",
+      "doc": "Current contract ABI version, polled by the off-chain indexer (`api/src/indexer/mod.rs::check_abi`) before it trusts this contract's other return shapes.",
+      "inputs": [
+        {
+          "name": "_env",
+          "type": "Env"
+        }
+      ],
+      "output": "u64"
+    },
+    {
+      "name": "pause",
+      "doc": "Invokes `pause` on registry.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "unpause",
+      "doc": "Invokes `unpause` on registry.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "upgrade",
+      "doc": "Migrate this contract to a new WASM build without losing storage.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "new_wasm_hash",
+          "type": "BytesN<32>"
+        }
+      ],
+      "output": "()"
+    }
+  ]
+}
