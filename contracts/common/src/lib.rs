@@ -10,6 +10,8 @@
 //! key for the pause flag, and the host call for a code upgrade.
 #![no_std]
 
+#[rustfmt::skip]
+pub mod abi;
 pub mod circuit_breaker;
 // `post_quantum` measures cost via `Env::budget()`, which only exists when
 // soroban-sdk's `testutils` feature is on. No contract uses it yet, so it is

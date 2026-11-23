@@ -1,0 +1,2290 @@
+{
+  "schemaVersion": "1.0.0",
+  "generator": "soroban-contract-abi-pipeline",
+  "contracts": [
+    {
+      "contractId": "registry",
+      "contractName": "RegistryContract",
+      "pascalPrefix": "Registry",
+      "doc": "Registry contract — good-faith reconstruction of the deployed testnet contract at `CBX5SMLTXX6JP4HA5GQIO2V6QM7WCUGL2GZ6D4U773HMRI6RXISKPUR3`, built from `docs/app/docs/contracts/registry/page.mdx` and cross-checked against the `RawAssetEntry` shape `api/src/indexer/mod.rs` already decodes from that live contract. See the repository root `contracts/` entry in the pull request description for the full reconstruction caveat: this is not the original deployed bytecode, which was never present in this repository.",
+      "summaryDoc": "Registry contract — good-faith reconstruction of the deployed testnet contract at `CBX5SMLTXX6JP4HA5GQIO2V6QM7WCUGL2GZ6D4U773HMRI6RXISKPUR3`, built from `docs/app/docs/contracts/registry/page.mdx` and cross-checked against the `RawAssetEntry` shape `api/src/indexer/mod.rs` already decodes from that live contract. See the repository root `contracts/` entry in the pull request description for the full reconstruction caveat: this is not the original deployed bytecode, which was never present in this repository.",
+      "structs": [
+        {
+          "name": "AssetEntry",
+          "doc": "A registered tokenized real-world asset.",
+          "fields": [
+            {
+              "name": "id",
+              "type": "u64",
+              "doc": ""
+            },
+            {
+              "name": "token_contract",
+              "type": "Address",
+              "doc": ""
+            },
+            {
+              "name": "issuer",
+              "type": "Address",
+              "doc": ""
+            },
+            {
+              "name": "name",
+              "type": "String",
+              "doc": ""
+            },
+            {
+              "name": "asset_type",
+              "type": "String",
+              "doc": ""
+            },
+            {
+              "name": "valuation",
+              "type": "i128",
+              "doc": ""
+            },
+            {
+              "name": "created_at",
+              "type": "u32",
+              "doc": ""
+            },
+            {
+              "name": "active",
+              "type": "bool",
+              "doc": ""
+            }
+          ]
+        }
+      ],
+      "enums": [],
+      "errors": [
+        {
+          "name": "AlreadyInitialized",
+          "code": 1,
+          "doc": "AlreadyInitialized contract error (code 1)."
+        },
+        {
+          "name": "NotInitialized",
+          "code": 2,
+          "doc": "NotInitialized contract error (code 2)."
+        },
+        {
+          "name": "Unauthorized",
+          "code": 3,
+          "doc": "Unauthorized contract error (code 3)."
+        },
+        {
+          "name": "AssetNotFound",
+          "code": 4,
+          "doc": "AssetNotFound contract error (code 4)."
+        },
+        {
+          "name": "InvalidValuation",
+          "code": 5,
+          "doc": "InvalidValuation contract error (code 5)."
+        },
+        {
+          "name": "Paused",
+          "code": 6,
+          "doc": "Appended for issue #11 (upgradeable contract pattern + emergency pause): mutating calls are rejected while the contract is paused. Placed after the highest pre-existing error code (5) rather than renumbering anything."
+        },
+        {
+          "name": "InvalidMptProof",
+          "code": 7,
+          "doc": "InvalidMptProof contract error (code 7)."
+        }
+      ],
+      "methods": [
+        {
+          "name": "initialize",
+          "doc": "Invokes `registry::initialize` (admin).",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "register_asset",
+          "doc": "Invokes `registry::register_asset` (issuer, token_contract, name, asset_type, valuation). Returns `u64`.",
+          "inputs": [
+            {
+              "name": "issuer",
+              "type": "Address"
+            },
+            {
+              "name": "token_contract",
+              "type": "Address"
+            },
+            {
+              "name": "name",
+              "type": "String"
+            },
+            {
+              "name": "asset_type",
+              "type": "String"
+            },
+            {
+              "name": "valuation",
+              "type": "i128"
+            }
+          ],
+          "output": "u64"
+        },
+        {
+          "name": "get_asset",
+          "doc": "Invokes `registry::get_asset` (asset_id). Returns `AssetEntry`.",
+          "inputs": [
+            {
+              "name": "asset_id",
+              "type": "u64"
+            }
+          ],
+          "output": "AssetEntry"
+        },
+        {
+          "name": "get_proof",
+          "doc": "Invokes `registry::get_proof` (asset_id). Returns `mpt::MptProof`.",
+          "inputs": [
+            {
+              "name": "asset_id",
+              "type": "u64"
+            }
+          ],
+          "output": "mpt::MptProof"
+        },
+        {
+          "name": "verify_mpt_proof",
+          "doc": "Invokes `registry::verify_mpt_proof` (proof). Returns `bool`.",
+          "inputs": [
+            {
+              "name": "proof",
+              "type": "mpt::MptProof"
+            }
+          ],
+          "output": "bool"
+        },
+        {
+          "name": "get_mpt_root",
+          "doc": "Invokes `registry::get_mpt_root` (no parameters). Returns `BytesN<32>`.",
+          "inputs": [],
+          "output": "BytesN<32>"
+        },
+        {
+          "name": "get_assets_page",
+          "doc": "Invokes `registry::get_assets_page` (start, limit). Returns `Vec<AssetEntry>`.",
+          "inputs": [
+            {
+              "name": "start",
+              "type": "u64"
+            },
+            {
+              "name": "limit",
+              "type": "u64"
+            }
+          ],
+          "output": "Vec<AssetEntry>"
+        },
+        {
+          "name": "get_assets_by_issuer",
+          "doc": "Invokes `registry::get_assets_by_issuer` (issuer). Returns `Vec<AssetEntry>`.",
+          "inputs": [
+            {
+              "name": "issuer",
+              "type": "Address"
+            }
+          ],
+          "output": "Vec<AssetEntry>"
+        },
+        {
+          "name": "get_assets_by_type",
+          "doc": "Invokes `registry::get_assets_by_type` (asset_type). Returns `Vec<AssetEntry>`.",
+          "inputs": [
+            {
+              "name": "asset_type",
+              "type": "String"
+            }
+          ],
+          "output": "Vec<AssetEntry>"
+        },
+        {
+          "name": "get_all_assets",
+          "doc": "Invokes `registry::get_all_assets` (no parameters). Returns `Vec<AssetEntry>`.",
+          "inputs": [],
+          "output": "Vec<AssetEntry>"
+        },
+        {
+          "name": "deactivate_asset",
+          "doc": "Invokes `registry::deactivate_asset` (admin, asset_id).",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "asset_id",
+              "type": "u64"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "total_value_locked",
+          "doc": "Invokes `registry::total_value_locked` (no parameters). Returns `i128`.",
+          "inputs": [],
+          "output": "i128"
+        },
+        {
+          "name": "asset_count",
+          "doc": "Invokes `registry::asset_count` (no parameters). Returns `u64`.",
+          "inputs": [],
+          "output": "u64"
+        },
+        {
+          "name": "version",
+          "doc": "Current contract ABI version, polled by the off-chain indexer (`api/src/indexer/mod.rs::check_abi`) before it trusts this contract's other return shapes.",
+          "inputs": [],
+          "output": "u64"
+        },
+        {
+          "name": "pause",
+          "doc": "Invokes `registry::pause` (admin).",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "unpause",
+          "doc": "Invokes `registry::unpause` (admin).",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "upgrade",
+          "doc": "Migrate this contract to a new WASM build without losing storage.",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "new_wasm_hash",
+              "type": "BytesN<32>"
+            }
+          ],
+          "output": "void"
+        }
+      ]
+    },
+    {
+      "contractId": "compliance",
+      "contractName": "ComplianceContract",
+      "pascalPrefix": "Compliance",
+      "doc": "Compliance contract — good-faith reconstruction of the deployed testnet contract at `CBUERYDM7DXTZLLKDBRJKUBPFJ7M4OSUN4T7XKUARU345RLXNAIQD2IU`, built from `docs/app/docs/contracts/compliance/page.mdx` and cross-checked against the `RawKyc` shape `api/src/indexer/mod.rs` already decodes from that live contract. See the repository root `contracts/` entry in the pull request description for the full reconstruction caveat.",
+      "summaryDoc": "Compliance contract — good-faith reconstruction of the deployed testnet contract at `CBUERYDM7DXTZLLKDBRJKUBPFJ7M4OSUN4T7XKUARU345RLXNAIQD2IU`, built from `docs/app/docs/contracts/compliance/page.mdx` and cross-checked against the `RawKyc` shape `api/src/indexer/mod.rs` already decodes from that live contract. See the repository root `contracts/` entry in the pull request description for the full reconstruction caveat.",
+      "structs": [
+        {
+          "name": "KycRecord",
+          "doc": "KycRecord contract data structure.",
+          "fields": [
+            {
+              "name": "address",
+              "type": "Address",
+              "doc": ""
+            },
+            {
+              "name": "status",
+              "type": "ComplianceStatus",
+              "doc": ""
+            },
+            {
+              "name": "jurisdiction",
+              "type": "String",
+              "doc": ""
+            },
+            {
+              "name": "verified_at",
+              "type": "u32",
+              "doc": ""
+            },
+            {
+              "name": "expires_at",
+              "type": "u32",
+              "doc": ""
+            }
+          ]
+        }
+      ],
+      "enums": [
+        {
+          "name": "ComplianceStatus",
+          "doc": "ComplianceStatus contract enumeration.",
+          "variants": [
+            {
+              "name": "Approved",
+              "tupleTypes": [],
+              "doc": ""
+            },
+            {
+              "name": "Pending",
+              "tupleTypes": [],
+              "doc": ""
+            },
+            {
+              "name": "Rejected",
+              "tupleTypes": [],
+              "doc": ""
+            },
+            {
+              "name": "Suspended",
+              "tupleTypes": [],
+              "doc": ""
+            }
+          ]
+        }
+      ],
+      "errors": [
+        {
+          "name": "AlreadyInitialized",
+          "code": 1,
+          "doc": "AlreadyInitialized contract error (code 1)."
+        },
+        {
+          "name": "RecordNotFound",
+          "code": 3,
+          "doc": "RecordNotFound contract error (code 3)."
+        },
+        {
+          "name": "InvalidExpiry",
+          "code": 4,
+          "doc": "InvalidExpiry contract error (code 4)."
+        },
+        {
+          "name": "Unauthorized",
+          "code": 5,
+          "doc": "Unauthorized contract error (code 5)."
+        },
+        {
+          "name": "Paused",
+          "code": 6,
+          "doc": "Appended for issue #11. Placed after the highest pre-existing error code (5) rather than renumbering anything; note this contract's documented numbering already skips `2`."
+        },
+        {
+          "name": "HookAlreadyRegistered",
+          "code": 7,
+          "doc": "Appended for issue #9 (modular transfer gate hooks). Placed after the highest pre-existing error code (6) rather than renumbering anything."
+        },
+        {
+          "name": "HookNotRegistered",
+          "code": 8,
+          "doc": "HookNotRegistered contract error (code 8)."
+        },
+        {
+          "name": "InvalidAttestation",
+          "code": 9,
+          "doc": "InvalidAttestation contract error (code 9)."
+        },
+        {
+          "name": "IssuerNotRegistered",
+          "code": 10,
+          "doc": "IssuerNotRegistered contract error (code 10)."
+        },
+        {
+          "name": "OracleAlreadyConfigured",
+          "code": 11,
+          "doc": "OracleAlreadyConfigured contract error (code 11)."
+        },
+        {
+          "name": "InvalidOracleConfig",
+          "code": 12,
+          "doc": "InvalidOracleConfig contract error (code 12)."
+        },
+        {
+          "name": "OracleAlreadyRegistered",
+          "code": 13,
+          "doc": "OracleAlreadyRegistered contract error (code 13)."
+        },
+        {
+          "name": "OracleNotRegistered",
+          "code": 14,
+          "doc": "OracleNotRegistered contract error (code 14)."
+        },
+        {
+          "name": "InvalidOracleStake",
+          "code": 15,
+          "doc": "InvalidOracleStake contract error (code 15)."
+        },
+        {
+          "name": "InvalidOracleThreshold",
+          "code": 16,
+          "doc": "InvalidOracleThreshold contract error (code 16)."
+        },
+        {
+          "name": "NotInitialized",
+          "code": 17,
+          "doc": "Referenced by `require_admin` before `initialize` has run; appended after the highest existing code rather than reusing the documented gap at `2`."
+        },
+        {
+          "name": "ZkVerifyingKeyNotSet",
+          "code": 18,
+          "doc": "Issue #317 (aggregated ZK KYC proofs), appended after 17."
+        },
+        {
+          "name": "ZkInvalidVerifyingKey",
+          "code": 19,
+          "doc": "ZkInvalidVerifyingKey contract error (code 19)."
+        },
+        {
+          "name": "ZkIssuerNotAuthorized",
+          "code": 20,
+          "doc": "ZkIssuerNotAuthorized contract error (code 20)."
+        },
+        {
+          "name": "ZkInvalidBatch",
+          "code": 21,
+          "doc": "ZkInvalidBatch contract error (code 21)."
+        },
+        {
+          "name": "ZkProofExpired",
+          "code": 22,
+          "doc": "ZkProofExpired contract error (code 22)."
+        },
+        {
+          "name": "ZkProofRejected",
+          "code": 23,
+          "doc": "ZkProofRejected contract error (code 23)."
+        },
+        {
+          "name": "VelocityWindowInvalid",
+          "code": 24,
+          "doc": "VelocityWindowInvalid contract error (code 24)."
+        },
+        {
+          "name": "VelocityCapInvalid",
+          "code": 25,
+          "doc": "VelocityCapInvalid contract error (code 25)."
+        },
+        {
+          "name": "VelocityReentrant",
+          "code": 26,
+          "doc": "VelocityReentrant contract error (code 26)."
+        }
+      ],
+      "methods": [
+        {
+          "name": "initialize",
+          "doc": "Invokes `compliance::initialize` (admin).",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "add_to_allowlist",
+          "doc": "Invokes `compliance::add_to_allowlist` (admin, address, jurisdiction, expires_at).",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "address",
+              "type": "Address"
+            },
+            {
+              "name": "jurisdiction",
+              "type": "String"
+            },
+            {
+              "name": "expires_at",
+              "type": "u32"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "suspend",
+          "doc": "Invokes `compliance::suspend` (admin, address).",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "address",
+              "type": "Address"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "remove",
+          "doc": "Invokes `compliance::remove` (admin, address).",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "address",
+              "type": "Address"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "is_allowed",
+          "doc": "Invokes `compliance::is_allowed` (address). Returns `bool`.",
+          "inputs": [
+            {
+              "name": "address",
+              "type": "Address"
+            }
+          ],
+          "output": "bool"
+        },
+        {
+          "name": "set_velocity_window",
+          "doc": "Invokes `compliance::set_velocity_window` (admin, window_ledgers).",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "window_ledgers",
+              "type": "u32"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "set_velocity_cap",
+          "doc": "Invokes `compliance::set_velocity_cap` (admin, jurisdiction, cap).",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "jurisdiction",
+              "type": "String"
+            },
+            {
+              "name": "cap",
+              "type": "i128"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "set_default_velocity_cap",
+          "doc": "Invokes `compliance::set_default_velocity_cap` (admin, cap).",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "cap",
+              "type": "i128"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "get_velocity_config",
+          "doc": "Invokes `compliance::get_velocity_config` (no parameters). Returns `(u32, i128)`.",
+          "inputs": [],
+          "output": "(u32, i128)"
+        },
+        {
+          "name": "get_velocity_state",
+          "doc": "Invokes `compliance::get_velocity_state` (account, jurisdiction). Returns `Option<velocity::VelocityAccumulator>`.",
+          "inputs": [
+            {
+              "name": "account",
+              "type": "Address"
+            },
+            {
+              "name": "jurisdiction",
+              "type": "String"
+            }
+          ],
+          "output": "Option<velocity::VelocityAccumulator>"
+        },
+        {
+          "name": "check_velocity",
+          "doc": "Invokes `compliance::check_velocity` (account, amount, jurisdiction). Returns `bool`.",
+          "inputs": [
+            {
+              "name": "account",
+              "type": "Address"
+            },
+            {
+              "name": "amount",
+              "type": "i128"
+            },
+            {
+              "name": "jurisdiction",
+              "type": "String"
+            }
+          ],
+          "output": "bool"
+        },
+        {
+          "name": "verify_verifiable_credential",
+          "doc": "Verify a W3C-style credential transiently; no credential or claim is stored.",
+          "inputs": [
+            {
+              "name": "credential",
+              "type": "VerifiableCredential"
+            }
+          ],
+          "output": "bool"
+        },
+        {
+          "name": "set_issuer",
+          "doc": "Invokes `compliance::set_issuer` (admin, issuer, public_key, revocation_root).",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "issuer",
+              "type": "Address"
+            },
+            {
+              "name": "public_key",
+              "type": "BytesN<32>"
+            },
+            {
+              "name": "revocation_root",
+              "type": "BytesN<32>"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "update_revocation_root",
+          "doc": "Invokes `compliance::update_revocation_root` (issuer, revocation_root).",
+          "inputs": [
+            {
+              "name": "issuer",
+              "type": "Address"
+            },
+            {
+              "name": "revocation_root",
+              "type": "BytesN<32>"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "get_issuer",
+          "doc": "Publicly query a provider's active verification key and revocation root so attestation submitters can construct proofs for the live root.",
+          "inputs": [
+            {
+              "name": "issuer",
+              "type": "Address"
+            }
+          ],
+          "output": "Option<(BytesN<32>, BytesN<32>)>"
+        },
+        {
+          "name": "submit_attestation",
+          "doc": "Validate a signed assertion and its proof before storing it. The persistent entry's TTL is extended on submission and during checks.",
+          "inputs": [
+            {
+              "name": "attestation",
+              "type": "IdentityAttestation"
+            },
+            {
+              "name": "proof",
+              "type": "RevocationProof"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "configure_oracles",
+          "doc": "Configure the bonded oracle set. The admin supplies the token used for oracle bonds and the destination for slashed stake.",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "staking_token",
+              "type": "Address"
+            },
+            {
+              "name": "slash_recipient",
+              "type": "Address"
+            },
+            {
+              "name": "threshold",
+              "type": "u32"
+            },
+            {
+              "name": "minimum_stake",
+              "type": "i128"
+            },
+            {
+              "name": "slash_bps",
+              "type": "u32"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "register_oracle",
+          "doc": "Register an oracle after it authorizes depositing its bond.",
+          "inputs": [
+            {
+              "name": "oracle",
+              "type": "Address"
+            },
+            {
+              "name": "public_key",
+              "type": "BytesN<32>"
+            },
+            {
+              "name": "stake_amount",
+              "type": "i128"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "restake_oracle",
+          "doc": "Add more bond to an oracle whose stake has fallen below the minimum.",
+          "inputs": [
+            {
+              "name": "oracle",
+              "type": "Address"
+            },
+            {
+              "name": "stake_amount",
+              "type": "i128"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "remove_oracle",
+          "doc": "Remove an oracle and return its remaining bond. Admin-authenticated.",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "oracle",
+              "type": "Address"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "set_oracle_threshold",
+          "doc": "Change the M in the configured M-of-N oracle quorum.",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "threshold",
+              "type": "u32"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "submit_oracle_attestation",
+          "doc": "Submit individually signed KYC/AML votes. Returns true only when the M-of-N quorum is reached and the new record is committed.",
+          "inputs": [
+            {
+              "name": "attestation",
+              "type": "OracleAttestation"
+            },
+            {
+              "name": "signatures",
+              "type": "Vec<OracleSignature>"
+            }
+          ],
+          "output": "bool"
+        },
+        {
+          "name": "get_oracle_record",
+          "doc": "Get the latest KYC/AML result accepted by the configured oracle quorum.",
+          "inputs": [
+            {
+              "name": "investor",
+              "type": "Address"
+            }
+          ],
+          "output": "Option<KycRecord>"
+        },
+        {
+          "name": "get_oracle_config",
+          "doc": "Public oracle configuration and registered provider count.",
+          "inputs": [],
+          "output": "Option<OracleConfig>"
+        },
+        {
+          "name": "get_record",
+          "doc": "Invokes `compliance::get_record` (address). Returns `Option<KycRecord>`.",
+          "inputs": [
+            {
+              "name": "address",
+              "type": "Address"
+            }
+          ],
+          "output": "Option<KycRecord>"
+        },
+        {
+          "name": "get_allowlist",
+          "doc": "Invokes `compliance::get_allowlist` (no parameters). Returns `Vec<Address>`.",
+          "inputs": [],
+          "output": "Vec<Address>"
+        },
+        {
+          "name": "register_hook",
+          "doc": "Register a rule-module hook contract. Admin-authenticated.",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "hook_contract",
+              "type": "Address"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "unregister_hook",
+          "doc": "Unregister a previously-registered hook contract. Admin-authenticated.",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "hook_contract",
+              "type": "Address"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "get_hooks",
+          "doc": "Currently registered transfer-gate hook contracts.",
+          "inputs": [],
+          "output": "Vec<Address>"
+        },
+        {
+          "name": "is_allowed_with_hooks",
+          "doc": "`is_allowed` plus every registered hook's `check(address)`. Returns `true` only if the built-in checks pass AND every hook returns `true`. Hooks are evaluated in registration order and evaluation short-circuits on the first failing hook (or the first failing built-in check), so a rejected address never pays for the cross-contract calls that follow it.",
+          "inputs": [
+            {
+              "name": "address",
+              "type": "Address"
+            }
+          ],
+          "output": "bool"
+        },
+        {
+          "name": "block_jurisdiction",
+          "doc": "Invokes `compliance::block_jurisdiction` (admin, jurisdiction).",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "jurisdiction",
+              "type": "String"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "unblock_jurisdiction",
+          "doc": "Invokes `compliance::unblock_jurisdiction` (admin, jurisdiction).",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "jurisdiction",
+              "type": "String"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "is_jurisdiction_blocked",
+          "doc": "Invokes `compliance::is_jurisdiction_blocked` (jurisdiction). Returns `bool`.",
+          "inputs": [
+            {
+              "name": "jurisdiction",
+              "type": "String"
+            }
+          ],
+          "output": "bool"
+        },
+        {
+          "name": "set_tax_residency",
+          "doc": "Invokes `compliance::set_tax_residency` (admin, investor, residency_hash).",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "investor",
+              "type": "Address"
+            },
+            {
+              "name": "residency_hash",
+              "type": "BytesN<32>"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "get_tax_residency",
+          "doc": "Invokes `compliance::get_tax_residency` (investor). Returns `Option<BytesN<32>>`.",
+          "inputs": [
+            {
+              "name": "investor",
+              "type": "Address"
+            }
+          ],
+          "output": "Option<BytesN<32>>"
+        },
+        {
+          "name": "set_aggregation_vk",
+          "doc": "Install the aggregation circuit's Groth16 verification key.",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "vk",
+              "type": "AggregationVerifyingKey"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "set_zk_issuer_root",
+          "doc": "Authorize `issuer` for aggregated proofs with its credential-tree root (a BLS12-381 scalar, big-endian), or replace that root.",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "issuer",
+              "type": "Address"
+            },
+            {
+              "name": "root",
+              "type": "BytesN<32>"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "update_zk_issuer_root",
+          "doc": "An authorized issuer rotates its own root, e.g. after revoking credentials; proofs against the old root stop verifying.",
+          "inputs": [
+            {
+              "name": "issuer",
+              "type": "Address"
+            },
+            {
+              "name": "root",
+              "type": "BytesN<32>"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "revoke_zk_issuer",
+          "doc": "Invokes `compliance::revoke_zk_issuer` (admin, issuer).",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "issuer",
+              "type": "Address"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "get_zk_issuer_root",
+          "doc": "Invokes `compliance::get_zk_issuer_root` (issuer). Returns `Option<BytesN<32>>`.",
+          "inputs": [
+            {
+              "name": "issuer",
+              "type": "Address"
+            }
+          ],
+          "output": "Option<BytesN<32>>"
+        },
+        {
+          "name": "verify_aggregated_kyc",
+          "doc": "Check an aggregated proof without recording anything.",
+          "inputs": [
+            {
+              "name": "issuer",
+              "type": "Address"
+            },
+            {
+              "name": "subjects",
+              "type": "Vec<Address>"
+            },
+            {
+              "name": "valid_until",
+              "type": "u32"
+            },
+            {
+              "name": "proof",
+              "type": "AggregatedProof"
+            }
+          ],
+          "output": "bool"
+        },
+        {
+          "name": "submit_aggregated_kyc",
+          "doc": "Verify an aggregated proof and record a `ZkAccreditation` for every subject. Anyone may submit: the proof is the authority. Returns the number of subjects accredited.",
+          "inputs": [
+            {
+              "name": "issuer",
+              "type": "Address"
+            },
+            {
+              "name": "subjects",
+              "type": "Vec<Address>"
+            },
+            {
+              "name": "valid_until",
+              "type": "u32"
+            },
+            {
+              "name": "proof",
+              "type": "AggregatedProof"
+            }
+          ],
+          "output": "u32"
+        },
+        {
+          "name": "zk_accreditation",
+          "doc": "Accreditation recorded for `subject` by an aggregated proof, if it is still unexpired.",
+          "inputs": [
+            {
+              "name": "subject",
+              "type": "Address"
+            }
+          ],
+          "output": "Option<ZkAccreditation>"
+        },
+        {
+          "name": "version",
+          "doc": "Invokes `compliance::version` (no parameters). Returns `u64`.",
+          "inputs": [],
+          "output": "u64"
+        },
+        {
+          "name": "pause",
+          "doc": "Invokes `compliance::pause` (admin).",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "unpause",
+          "doc": "Invokes `compliance::unpause` (admin).",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "upgrade",
+          "doc": "Invokes `compliance::upgrade` (admin, new_wasm_hash).",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "new_wasm_hash",
+              "type": "BytesN<32>"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "verify_holder_balance_range",
+          "doc": "Verifies that `holder` owns a balance exceeding `threshold` without revealing the actual balance.",
+          "inputs": [
+            {
+              "name": "holder",
+              "type": "Address"
+            },
+            {
+              "name": "threshold",
+              "type": "u64"
+            },
+            {
+              "name": "commitment",
+              "type": "BytesN<32>"
+            },
+            {
+              "name": "proof",
+              "type": "zk_range_proof::ZkRangeProof"
+            }
+          ],
+          "output": "bool"
+        },
+        {
+          "name": "is_balance_threshold_verified",
+          "doc": "Checks if `holder` has an active, unexpired balance verification at or above `min_threshold`.",
+          "inputs": [
+            {
+              "name": "holder",
+              "type": "Address"
+            },
+            {
+              "name": "min_threshold",
+              "type": "u64"
+            }
+          ],
+          "output": "bool"
+        }
+      ]
+    },
+    {
+      "contractId": "dividend",
+      "contractName": "DividendContract",
+      "pascalPrefix": "Dividend",
+      "doc": "Dividend contract — good-faith reconstruction of the deployed testnet contract at `CAR4XY3CEBQWFOL27JEWFW34KXSIZA7RFKDQMEIV7ZU723RWY37I2SYX`, built from `docs/app/docs/contracts/dividend/page.mdx` and cross-checked against the `RawDistribution` shape `api/src/indexer/mod.rs` already decodes from that live contract. See the repository root `contracts/` entry in the pull request description for the full reconstruction caveat.\n\nCross-contract calls to the asset-token and payment-token contracts use `Env::invoke_contract` directly (rather than a generated client from `contractimport!`) since this repository never shipped compiled `.wasm` for the real, already-deployed contracts to import against.",
+      "summaryDoc": "Dividend contract — good-faith reconstruction of the deployed testnet contract at `CAR4XY3CEBQWFOL27JEWFW34KXSIZA7RFKDQMEIV7ZU723RWY37I2SYX`, built from `docs/app/docs/contracts/dividend/page.mdx` and cross-checked against the `RawDistribution` shape `api/src/indexer/mod.rs` already decodes from that live contract. See the repository root `contracts/` entry in the pull request description for the full reconstruction caveat.",
+      "structs": [
+        {
+          "name": "Distribution",
+          "doc": "Distribution contract data structure.",
+          "fields": [
+            {
+              "name": "id",
+              "type": "u64",
+              "doc": ""
+            },
+            {
+              "name": "asset_token",
+              "type": "Address",
+              "doc": ""
+            },
+            {
+              "name": "payment_token",
+              "type": "Address",
+              "doc": ""
+            },
+            {
+              "name": "total_amount",
+              "type": "i128",
+              "doc": ""
+            },
+            {
+              "name": "distributed",
+              "type": "i128",
+              "doc": ""
+            },
+            {
+              "name": "created_at",
+              "type": "u32",
+              "doc": ""
+            },
+            {
+              "name": "completed",
+              "type": "bool",
+              "doc": ""
+            }
+          ]
+        }
+      ],
+      "enums": [],
+      "errors": [
+        {
+          "name": "AlreadyInitialized",
+          "code": 1,
+          "doc": "AlreadyInitialized contract error (code 1)."
+        },
+        {
+          "name": "NotInitialized",
+          "code": 2,
+          "doc": "NotInitialized contract error (code 2)."
+        },
+        {
+          "name": "Unauthorized",
+          "code": 3,
+          "doc": "Unauthorized contract error (code 3)."
+        },
+        {
+          "name": "DistributionNotFound",
+          "code": 4,
+          "doc": "DistributionNotFound contract error (code 4)."
+        },
+        {
+          "name": "InvalidAmount",
+          "code": 5,
+          "doc": "InvalidAmount contract error (code 5)."
+        },
+        {
+          "name": "NothingToClaim",
+          "code": 6,
+          "doc": "NothingToClaim contract error (code 6)."
+        },
+        {
+          "name": "AlreadyClaimed",
+          "code": 7,
+          "doc": "AlreadyClaimed contract error (code 7)."
+        },
+        {
+          "name": "Paused",
+          "code": 8,
+          "doc": "Appended for issue #11. Placed after the highest pre-existing error code (7) rather than renumbering anything."
+        },
+        {
+          "name": "DripNotConfigured",
+          "code": 9,
+          "doc": "DripNotConfigured contract error (code 9)."
+        },
+        {
+          "name": "InvalidSwapOutput",
+          "code": 10,
+          "doc": "InvalidSwapOutput contract error (code 10)."
+        },
+        {
+          "name": "InvalidMerkleRoot",
+          "code": 11,
+          "doc": "InvalidMerkleRoot contract error (code 11)."
+        },
+        {
+          "name": "InvalidMerkleProof",
+          "code": 12,
+          "doc": "InvalidMerkleProof contract error (code 12)."
+        },
+        {
+          "name": "InvalidClaimHolder",
+          "code": 13,
+          "doc": "InvalidClaimHolder contract error (code 13)."
+        }
+      ],
+      "methods": [
+        {
+          "name": "initialize",
+          "doc": "Invokes `dividend::initialize` (admin).",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "create_distribution",
+          "doc": "Invokes `dividend::create_distribution` (admin, asset_token, payment_token, total_amount). Returns `u64`.",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "asset_token",
+              "type": "Address"
+            },
+            {
+              "name": "payment_token",
+              "type": "Address"
+            },
+            {
+              "name": "total_amount",
+              "type": "i128"
+            }
+          ],
+          "output": "u64"
+        },
+        {
+          "name": "claimable",
+          "doc": "Invokes `dividend::claimable` (distribution_id, holder). Returns `i128`.",
+          "inputs": [
+            {
+              "name": "distribution_id",
+              "type": "u64"
+            },
+            {
+              "name": "holder",
+              "type": "Address"
+            }
+          ],
+          "output": "i128"
+        },
+        {
+          "name": "claim_legacy",
+          "doc": "Legacy live-balance claim, retained so existing holders and fuzz targets keep working alongside the new Merkle path.",
+          "inputs": [
+            {
+              "name": "distribution_id",
+              "type": "u64"
+            },
+            {
+              "name": "holder",
+              "type": "Address"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "claim",
+          "doc": "Pull-based Merkle claim. The proof authorizes the committed payee, so no `holder.require_auth()` is needed. `leaf_index` selects both the claim bitmap slot and the left/right sibling ordering.",
+          "inputs": [
+            {
+              "name": "proof",
+              "type": "ClaimProof"
+            },
+            {
+              "name": "leaf_index",
+              "type": "u32"
+            }
+          ],
+          "output": "i128"
+        },
+        {
+          "name": "set_root",
+          "doc": "Commit (or rotate) the Merkle root for a distribution. The prior root remains claimable until `valid_until`, so pending proofs are not invalidated by a rotation.",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "distribution_id",
+              "type": "u64"
+            },
+            {
+              "name": "root",
+              "type": "BytesN<32>"
+            },
+            {
+              "name": "leaf_count",
+              "type": "u32"
+            },
+            {
+              "name": "valid_until",
+              "type": "u32"
+            },
+            {
+              "name": "total_entitlement",
+              "type": "i128"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "rotate_root",
+          "doc": "Invokes `dividend::rotate_root` (admin, distribution_id, root, leaf_count, valid_until, total_entitlement).",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "distribution_id",
+              "type": "u64"
+            },
+            {
+              "name": "root",
+              "type": "BytesN<32>"
+            },
+            {
+              "name": "leaf_count",
+              "type": "u32"
+            },
+            {
+              "name": "valid_until",
+              "type": "u32"
+            },
+            {
+              "name": "total_entitlement",
+              "type": "i128"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "get_root",
+          "doc": "Invokes `dividend::get_root` (no parameters). Returns `BytesN<32>`.",
+          "inputs": [],
+          "output": "BytesN<32>"
+        },
+        {
+          "name": "get_root_meta",
+          "doc": "Invokes `dividend::get_root_meta` (slot). Returns `Option<RootMeta>`.",
+          "inputs": [
+            {
+              "name": "slot",
+              "type": "RootSlot"
+            }
+          ],
+          "output": "Option<RootMeta>"
+        },
+        {
+          "name": "sync_root_cache",
+          "doc": "Invokes `dividend::sync_root_cache` (no parameters).",
+          "inputs": [],
+          "output": "void"
+        },
+        {
+          "name": "get_root_cache",
+          "doc": "Invokes `dividend::get_root_cache` (no parameters). Returns `BytesN<32>`.",
+          "inputs": [],
+          "output": "BytesN<32>"
+        },
+        {
+          "name": "merkle_claimed",
+          "doc": "Invokes `dividend::merkle_claimed` (distribution_id, holder). Returns `bool`.",
+          "inputs": [
+            {
+              "name": "distribution_id",
+              "type": "u64"
+            },
+            {
+              "name": "holder",
+              "type": "Address"
+            }
+          ],
+          "output": "bool"
+        },
+        {
+          "name": "merkle_paid",
+          "doc": "Invokes `dividend::merkle_paid` (distribution_id, holder). Returns `i128`.",
+          "inputs": [
+            {
+              "name": "distribution_id",
+              "type": "u64"
+            },
+            {
+              "name": "holder",
+              "type": "Address"
+            }
+          ],
+          "output": "i128"
+        },
+        {
+          "name": "set_drip_preference",
+          "doc": "Opt in or out of receiving dividend claims as an AMM purchase of the distribution's asset token. The preference is shared by all claims.",
+          "inputs": [
+            {
+              "name": "holder",
+              "type": "Address"
+            },
+            {
+              "name": "enabled",
+              "type": "bool"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "get_drip_preference",
+          "doc": "Invokes `dividend::get_drip_preference` (holder). Returns `bool`.",
+          "inputs": [
+            {
+              "name": "holder",
+              "type": "Address"
+            }
+          ],
+          "output": "bool"
+        },
+        {
+          "name": "configure_drip",
+          "doc": "Configure the router and cap-table ledger used by opted-in legacy claims. The cap-table must separately authorize this contract as a registrar.",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "amm",
+              "type": "Address"
+            },
+            {
+              "name": "cap_table",
+              "type": "Address"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "get_distribution",
+          "doc": "Invokes `dividend::get_distribution` (id). Returns `Distribution`.",
+          "inputs": [
+            {
+              "name": "id",
+              "type": "u64"
+            }
+          ],
+          "output": "Distribution"
+        },
+        {
+          "name": "get_distributions_for_asset",
+          "doc": "Invokes `dividend::get_distributions_for_asset` (asset_token). Returns `Vec<Distribution>`.",
+          "inputs": [
+            {
+              "name": "asset_token",
+              "type": "Address"
+            }
+          ],
+          "output": "Vec<Distribution>"
+        },
+        {
+          "name": "has_claimed",
+          "doc": "Invokes `dividend::has_claimed` (id, holder). Returns `bool`.",
+          "inputs": [
+            {
+              "name": "id",
+              "type": "u64"
+            },
+            {
+              "name": "holder",
+              "type": "Address"
+            }
+          ],
+          "output": "bool"
+        },
+        {
+          "name": "version",
+          "doc": "Current contract ABI version, polled by the off-chain indexer.",
+          "inputs": [],
+          "output": "u64"
+        },
+        {
+          "name": "pause",
+          "doc": "Invokes `dividend::pause` (admin).",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "unpause",
+          "doc": "Invokes `dividend::unpause` (admin).",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "upgrade",
+          "doc": "Invokes `dividend::upgrade` (admin, new_wasm_hash).",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "new_wasm_hash",
+              "type": "BytesN<32>"
+            }
+          ],
+          "output": "void"
+        }
+      ]
+    },
+    {
+      "contractId": "asset-token",
+      "contractName": "AssetTokenContract",
+      "pascalPrefix": "AssetToken",
+      "doc": "Asset-token contract — good-faith reconstruction of the deployed testnet Includes issue #40: Automated Share Buyback & Capital Reduction module (`buyback.rs`). contract at `CBMCWLSQSWUTLUJFCNBHNBSXMUM3XU7NAQ5TSNERW4HA4ZZBYHLG4ECZ`, built from `docs/app/docs/contracts/asset-token/page.mdx` and cross-checked against the `RawMetadata` shape `api/src/indexer/mod.rs` already decodes from that live contract. See the repository root `contracts/` entry in the pull request description for the full reconstruction caveat.",
+      "summaryDoc": "Asset-token contract — good-faith reconstruction of the deployed testnet Includes issue #40: Automated Share Buyback & Capital Reduction module (`buyback.rs`). contract at `CBMCWLSQSWUTLUJFCNBHNBSXMUM3XU7NAQ5TSNERW4HA4ZZBYHLG4ECZ`, built from `docs/app/docs/contracts/asset-token/page.mdx` and cross-checked against the `RawMetadata` shape `api/src/indexer/mod.rs` already decodes from that live contract. See the repository root `contracts/` entry in the pull request description for the full reconstruction caveat.",
+      "structs": [
+        {
+          "name": "AssetMetadata",
+          "doc": "AssetMetadata contract data structure.",
+          "fields": [
+            {
+              "name": "name",
+              "type": "String",
+              "doc": ""
+            },
+            {
+              "name": "symbol",
+              "type": "String",
+              "doc": ""
+            },
+            {
+              "name": "asset_type",
+              "type": "String",
+              "doc": ""
+            },
+            {
+              "name": "total_supply",
+              "type": "i128",
+              "doc": ""
+            },
+            {
+              "name": "decimals",
+              "type": "u32",
+              "doc": ""
+            },
+            {
+              "name": "admin",
+              "type": "Address",
+              "doc": ""
+            },
+            {
+              "name": "compliance_contract",
+              "type": "Address",
+              "doc": ""
+            },
+            {
+              "name": "asset_description",
+              "type": "String",
+              "doc": ""
+            },
+            {
+              "name": "valuation",
+              "type": "i128",
+              "doc": ""
+            },
+            {
+              "name": "paused",
+              "type": "bool",
+              "doc": ""
+            }
+          ]
+        }
+      ],
+      "enums": [
+        {
+          "name": "AssetStatus",
+          "doc": "AssetStatus contract enumeration.",
+          "variants": [
+            {
+              "name": "Active",
+              "tupleTypes": [],
+              "doc": ""
+            },
+            {
+              "name": "Liquidated",
+              "tupleTypes": [],
+              "doc": ""
+            }
+          ]
+        }
+      ],
+      "errors": [
+        {
+          "name": "AlreadyInitialized",
+          "code": 1,
+          "doc": "AlreadyInitialized contract error (code 1)."
+        },
+        {
+          "name": "Unauthorized",
+          "code": 3,
+          "doc": "Unauthorized contract error (code 3)."
+        },
+        {
+          "name": "InsufficientBalance",
+          "code": 4,
+          "doc": "InsufficientBalance contract error (code 4)."
+        },
+        {
+          "name": "InvalidAmount",
+          "code": 5,
+          "doc": "InvalidAmount contract error (code 5)."
+        },
+        {
+          "name": "Paused",
+          "code": 6,
+          "doc": "Paused contract error (code 6)."
+        },
+        {
+          "name": "SenderNotCompliant",
+          "code": 7,
+          "doc": "SenderNotCompliant contract error (code 7)."
+        },
+        {
+          "name": "RecipientNotCompliant",
+          "code": 8,
+          "doc": "RecipientNotCompliant contract error (code 8)."
+        },
+        {
+          "name": "Overflow",
+          "code": 9,
+          "doc": "Overflow contract error (code 9)."
+        },
+        {
+          "name": "Locked",
+          "code": 10,
+          "doc": "Appended for issue #10 (holding-period lockups). Placed after the highest pre-existing error code (9) rather than renumbering anything. Issue #10 — holding-period lockups."
+        },
+        {
+          "name": "InvalidSplitRatio",
+          "code": 11,
+          "doc": "Issue #90: split ratio is zero, or the cumulative multiplier overflows."
+        },
+        {
+          "name": "NotLiquidated",
+          "code": 12,
+          "doc": "NotLiquidated contract error (code 12)."
+        },
+        {
+          "name": "AlreadyLiquidated",
+          "code": 13,
+          "doc": "AlreadyLiquidated contract error (code 13)."
+        },
+        {
+          "name": "StablecoinNotConfigured",
+          "code": 14,
+          "doc": "StablecoinNotConfigured contract error (code 14)."
+        },
+        {
+          "name": "RedemptionExceedsAllocation",
+          "code": 15,
+          "doc": "RedemptionExceedsAllocation contract error (code 15)."
+        },
+        {
+          "name": "VaultConfigured",
+          "code": 16,
+          "doc": "VaultConfigured contract error (code 16)."
+        },
+        {
+          "name": "InvalidVault",
+          "code": 17,
+          "doc": "InvalidVault contract error (code 17)."
+        },
+        {
+          "name": "MultiClassDisabled",
+          "code": 40,
+          "doc": "MultiClassDisabled contract error (code 40)."
+        },
+        {
+          "name": "MultiClassEnabled",
+          "code": 41,
+          "doc": "MultiClassEnabled contract error (code 41)."
+        },
+        {
+          "name": "InvalidShareClass",
+          "code": 42,
+          "doc": "InvalidShareClass contract error (code 42)."
+        },
+        {
+          "name": "ClassTransferDisabled",
+          "code": 43,
+          "doc": "ClassTransferDisabled contract error (code 43)."
+        },
+        {
+          "name": "InvalidConversion",
+          "code": 44,
+          "doc": "InvalidConversion contract error (code 44)."
+        },
+        {
+          "name": "NonZeroSupply",
+          "code": 45,
+          "doc": "NonZeroSupply contract error (code 45)."
+        },
+        {
+          "name": "AccountingMigrationRequired",
+          "code": 46,
+          "doc": "AccountingMigrationRequired contract error (code 46)."
+        },
+        {
+          "name": "VelocityExceeded",
+          "code": 47,
+          "doc": "VelocityExceeded contract error (code 47)."
+        },
+        {
+          "name": "PermitInvalidNonce",
+          "code": 48,
+          "doc": "PermitInvalidNonce contract error (code 48)."
+        },
+        {
+          "name": "PermitExpired",
+          "code": 49,
+          "doc": "PermitExpired contract error (code 49)."
+        },
+        {
+          "name": "PermitInvalidOwnerKey",
+          "code": 50,
+          "doc": "PermitInvalidOwnerKey contract error (code 50)."
+        },
+        {
+          "name": "InsufficientAllowance",
+          "code": 51,
+          "doc": "InsufficientAllowance contract error (code 51)."
+        },
+        {
+          "name": "AllowanceExpired",
+          "code": 52,
+          "doc": "AllowanceExpired contract error (code 52)."
+        }
+      ],
+      "methods": [
+        {
+          "name": "initialize",
+          "doc": "Invokes `asset-token::initialize` (admin, name, symbol, asset_type, total_supply, decimals, compliance_contract, asset_description, valuation).",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "name",
+              "type": "String"
+            },
+            {
+              "name": "symbol",
+              "type": "String"
+            },
+            {
+              "name": "asset_type",
+              "type": "String"
+            },
+            {
+              "name": "total_supply",
+              "type": "i128"
+            },
+            {
+              "name": "decimals",
+              "type": "u32"
+            },
+            {
+              "name": "compliance_contract",
+              "type": "Address"
+            },
+            {
+              "name": "asset_description",
+              "type": "String"
+            },
+            {
+              "name": "valuation",
+              "type": "i128"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "transfer",
+          "doc": "Invokes `asset-token::transfer` (from, to, amount).",
+          "inputs": [
+            {
+              "name": "from",
+              "type": "Address"
+            },
+            {
+              "name": "to",
+              "type": "Address"
+            },
+            {
+              "name": "amount",
+              "type": "i128"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "permit",
+          "doc": "Invokes `asset-token::permit` (owner, spender, amount, deadline_ledger, signature).",
+          "inputs": [
+            {
+              "name": "owner",
+              "type": "Address"
+            },
+            {
+              "name": "spender",
+              "type": "Address"
+            },
+            {
+              "name": "amount",
+              "type": "i128"
+            },
+            {
+              "name": "deadline_ledger",
+              "type": "u32"
+            },
+            {
+              "name": "signature",
+              "type": "BytesN<64>"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "allowance",
+          "doc": "Invokes `asset-token::allowance` (owner, spender). Returns `i128`.",
+          "inputs": [
+            {
+              "name": "owner",
+              "type": "Address"
+            },
+            {
+              "name": "spender",
+              "type": "Address"
+            }
+          ],
+          "output": "i128"
+        },
+        {
+          "name": "approve",
+          "doc": "Invokes `asset-token::approve` (owner, spender, amount, expiration_ledger).",
+          "inputs": [
+            {
+              "name": "owner",
+              "type": "Address"
+            },
+            {
+              "name": "spender",
+              "type": "Address"
+            },
+            {
+              "name": "amount",
+              "type": "i128"
+            },
+            {
+              "name": "expiration_ledger",
+              "type": "u32"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "transfer_from",
+          "doc": "Invokes `asset-token::transfer_from` (spender, from, to, amount).",
+          "inputs": [
+            {
+              "name": "spender",
+              "type": "Address"
+            },
+            {
+              "name": "from",
+              "type": "Address"
+            },
+            {
+              "name": "to",
+              "type": "Address"
+            },
+            {
+              "name": "amount",
+              "type": "i128"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "mint",
+          "doc": "Invokes `asset-token::mint` (admin, to, amount).",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "to",
+              "type": "Address"
+            },
+            {
+              "name": "amount",
+              "type": "i128"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "burn",
+          "doc": "Invokes `asset-token::burn` (from, amount).",
+          "inputs": [
+            {
+              "name": "from",
+              "type": "Address"
+            },
+            {
+              "name": "amount",
+              "type": "i128"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "balance",
+          "doc": "Invokes `asset-token::balance` (id). Returns `i128`.",
+          "inputs": [
+            {
+              "name": "id",
+              "type": "Address"
+            }
+          ],
+          "output": "i128"
+        },
+        {
+          "name": "execute_share_split",
+          "doc": "Issue #90 - execute a forward (`num > den`) or reverse (`num < den`) split. Balances settle lazily; supply is the sum of individually rounded balances, scanning holders and pending history. Admin-authenticated.",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "ratio_numerator",
+              "type": "u32"
+            },
+            {
+              "name": "ratio_denominator",
+              "type": "u32"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "set_liquidation_stablecoin",
+          "doc": "Configure the stablecoin used for liquidation proceeds.",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "stablecoin",
+              "type": "Address"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "deposit_liquidation_proceeds",
+          "doc": "Deposit the cash proceeds from an asset sale and permanently close the secondary market. The stablecoin must already have been transferred to this contract by the administrator.",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "stablecoin_amount",
+              "type": "i128"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "redeem_liquidation_proceeds",
+          "doc": "Burn asset tokens and pay the holder's pro-rata share of the deposited proceeds. Transfers and minting are disabled after liquidation.",
+          "inputs": [
+            {
+              "name": "holder",
+              "type": "Address"
+            },
+            {
+              "name": "token_amount",
+              "type": "i128"
+            }
+          ],
+          "output": "i128"
+        },
+        {
+          "name": "status",
+          "doc": "Invokes `asset-token::status` (no parameters). Returns `AssetStatus`.",
+          "inputs": [],
+          "output": "AssetStatus"
+        },
+        {
+          "name": "split_multiplier",
+          "doc": "Issue #90 - cumulative split multiplier as `(numerator, denominator)`.",
+          "inputs": [],
+          "output": "(u128, u128)"
+        },
+        {
+          "name": "split_count",
+          "doc": "Issue #90 - number of splits executed so far.",
+          "inputs": [],
+          "output": "u32"
+        },
+        {
+          "name": "total_supply",
+          "doc": "Invokes `asset-token::total_supply` (no parameters). Returns `i128`.",
+          "inputs": [],
+          "output": "i128"
+        },
+        {
+          "name": "pause",
+          "doc": "Invokes `asset-token::pause` (admin).",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "unpause",
+          "doc": "Invokes `asset-token::unpause` (admin).",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "update_valuation",
+          "doc": "Invokes `asset-token::update_valuation` (admin, new_valuation).",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "new_valuation",
+              "type": "i128"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "set_compliance",
+          "doc": "Invokes `asset-token::set_compliance` (admin, compliance).",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "compliance",
+              "type": "Address"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "set_lockup",
+          "doc": "Issue #10 — set (or clear, with `unlock_ledger = 0`) the holding-period lockup for `holder`. Admin-authenticated. Used both to impose a regulatory-exemption holding period (e.g. a 12-month lockup) and, by setting `unlock_ledger` back to `0` or to an earlier ledger, to grant a partial/early release under a court order or approved exemption. Does not affect `mint` or `initialize`.",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "holder",
+              "type": "Address"
+            },
+            {
+              "name": "unlock_ledger",
+              "type": "u32"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "get_lockup",
+          "doc": "The ledger sequence at/after which `holder` may transfer or burn. `0` means no lockup is in effect.",
+          "inputs": [
+            {
+              "name": "holder",
+              "type": "Address"
+            }
+          ],
+          "output": "u32"
+        },
+        {
+          "name": "get_metadata",
+          "doc": "Invokes `asset-token::get_metadata` (no parameters). Returns `AssetMetadata`.",
+          "inputs": [],
+          "output": "AssetMetadata"
+        },
+        {
+          "name": "version",
+          "doc": "Current contract ABI version, polled by the off-chain indexer.",
+          "inputs": [],
+          "output": "u64"
+        },
+        {
+          "name": "clawback",
+          "doc": "Issue #12 — on-chain clawback engine. Deliberately implemented as a standalone path, NOT on top of `transfer`: a clawback is an admin-only, legally-authorized recovery mechanism (court order, lost-key recovery, regulatory enforcement) that must be able to succeed precisely when the holder cannot or will not cooperate — for example, their address has since been suspended in compliance, or they refuse to sign. Routing this through `transfer` would force it through `from.require_auth()` and the sender-compliance check, which are exactly the two things a clawback needs to bypass. It still validates the source balance (reusing `Error::InsufficientBalance`, since the failure mode is identical to a transfer's — see the PR description for why a new error code was not added here), and emits a dedicated `clawback` event so the recovery is fully auditable on-chain. Total supply is unchanged: recovered units are credited to the administrator so every unit of supply remains backed by an account balance.",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "from",
+              "type": "Address"
+            },
+            {
+              "name": "amount",
+              "type": "i128"
+            }
+          ],
+          "output": "void"
+        },
+        {
+          "name": "upgrade",
+          "doc": "Issue #11 — migrate this contract to a new WASM build without losing storage. Reuses `Error::Unauthorized` (3), already the admin-mismatch error for every other admin-gated call on this contract; no new error code is needed.",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "new_wasm_hash",
+              "type": "BytesN<32>"
+            }
+          ],
+          "output": "void"
+        }
+      ]
+    }
+  ]
+}

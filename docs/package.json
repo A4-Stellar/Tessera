@@ -13,6 +13,7 @@
     "check:mdx-types": "node scripts/typecheck-mdx-samples.mjs",
     "check:mdx-links": "node scripts/check-mdx-links.mjs",
     "generate:sdk-examples": "node scripts/generate-sdk-examples.mjs",
+    "check:sdk-examples": "node scripts/generate-sdk-examples.mjs --check",
     "docs:components": "node scripts/extract-component-docs.mjs",
     "check:component-docs": "node scripts/extract-component-docs.mjs --check",
     "translate:docs": "node scripts/translate-docs.mjs",
