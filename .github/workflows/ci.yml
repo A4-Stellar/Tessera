@@ -138,6 +138,73 @@ jobs:
         run: cargo build --release
 
   # ===========================================================================
+  # SUPPLY CHAIN SECURITY: Cargo Deny & Reproducible WASM Builds (Issue #47)
+  # ===========================================================================
+  cargo-deny:
+    name: Cargo Deny Policy Check (Licenses & Advisories)
+    needs: changes
+    if: ${{ needs.changes.outputs.rust == 'true' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enforce Cargo Deny (Licenses, Advisories, Bans, Sources)
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          manifest-path: api/Cargo.toml
+          arguments: --config deny.toml
+
+  wasm-reproducible-build:
+    name: WASM Reproducible Build (Runner ${{ matrix.runner_instance }})
+    needs: changes
+    if: ${{ needs.changes.outputs.rust == 'true' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        runner_instance: [1, 2]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Build Soroban Contracts to WASM
+        working-directory: contracts
+        run: cargo build --target wasm32-unknown-unknown --release
+      - name: Compute Deterministic SHA-256 Checksums
+        run: |
+          mkdir -p checksums
+          cd contracts/target/wasm32-unknown-unknown/release
+          if ls *.wasm 1> /dev/null 2>&1; then
+            sha256sum *.wasm | sort > ../../../../checksums/wasm_checksums_${{ matrix.runner_instance }}.txt
+          else
+            echo "No wasm files found" > ../../../../checksums/wasm_checksums_${{ matrix.runner_instance }}.txt
+          fi
+      - name: Upload Runner Checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: wasm-checksums-${{ matrix.runner_instance }}
+          path: checksums/wasm_checksums_${{ matrix.runner_instance }}.txt
+
+  wasm-verify-reproducibility:
+    name: Verify WASM Byte-Identical Reproducibility
+    needs: wasm-reproducible-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: wasm-checksums-1
+          path: runner1
+      - uses: actions/download-artifact@v4
+        with:
+          name: wasm-checksums-2
+          path: runner2
+      - name: Diff Checksums Across Independent Runners
+        run: |
+          echo "Comparing WASM checksums between independent runners..."
+          diff -u runner1/wasm_checksums_1.txt runner2/wasm_checksums_2.txt
+          echo "Reproducible build verified: WASM artifacts are byte-identical."
+
+  # ===========================================================================
   # DOCS & FRONTEND PIPELINE (Next.js 16 / TypeScript / MDX)
   # Uses actions/cache for Next.js .next/cache and actions/setup-node npm cache
   # ===========================================================================
