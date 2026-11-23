@@ -137,6 +137,80 @@ jobs:
       - name: Build Release Artifact
         run: cargo build --release
 
+  # ---------------------------------------------------------------------------
+  # Soroban WASM build with a content-addressed cache. Cache hits skip the full
+  # contract compile (~8 min); two independent builds are compared byte-for-byte
+  # when WASM_REPRODUCIBILITY_CHECK is enabled (issue #47).
+  # ---------------------------------------------------------------------------
+  wasm-build:
+    name: Soroban WASM Build (cached)
+    needs: changes
+    if: ${{ needs.changes.outputs.rust == 'true' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      # Dependency/registry cache (host builds) and the on-disk wasm cache.
+      - name: Restore Cargo registry & build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            contracts/target
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('contracts/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
+
+      - name: Restore shared WASM cache
+        # Coarse GitHub Actions cache key for the on-disk .wasm-cache directory.
+        # The bucket-backed custom cache uses the tighter content hash computed
+        # by the script (all sources + rustc version + exact CARGO_FLAGS) with a
+        # 30-day retention/expiry tag, so cross-run hits are content-exact.
+        uses: actions/cache@v4
+        with:
+          path: contracts/target/.wasm-cache
+          key: soroban-wasm-${{ hashFiles('contracts/**/*.rs','contracts/**/Cargo.toml','contracts/Cargo.lock','contracts/rust-toolchain.toml') }}-${{ hashFiles('contracts/rust-toolchain.toml') }}
+          restore-keys: |
+            soroban-wasm-
+
+      - name: Build Soroban contracts (content-addressed cache)
+        # S3/GCS credentials come from OIDC or secrets and are only exposed when
+        # a bucket is configured via repository vars — never hardcoded here.
+        env:
+          AWS_ACCESS_KEY_ID: ${{ vars.WASM_CACHE_BUCKET != '' && secrets.AWS_ACCESS_KEY_ID || '' }}
+          AWS_SECRET_ACCESS_KEY: ${{ vars.WASM_CACHE_BUCKET != '' && secrets.AWS_SECRET_ACCESS_KEY || '' }}
+          AWS_REGION: ${{ vars.WASM_CACHE_REGION || 'us-east-1' }}
+        run: |
+          chmod +x scripts/ci/check-wasm-cache.sh
+          CARGO_FLAGS="--release --target wasm32-unknown-unknown" CACHE_BUCKET="${{ vars.WASM_CACHE_BUCKET }}" WASM_REPRODUCIBILITY_CHECK="${{ vars.WASM_REPRODUCIBILITY_CHECK || '0' }}" GITHUB_STEP_SUMMARY="$GITHUB_STEP_SUMMARY" bash scripts/ci/check-wasm-cache.sh
+
+      - name: Upload WASM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: soroban-wasm
+          path: contracts/target/wasm32-unknown-unknown/release/*.wasm
+          if-no-files-found: warn
+
+      - name: Aggregate WASM cache metrics
+        # Final aggregation: fold the per-run metrics into the job summary.
+        if: always()
+        run: |
+          if [ -f .wasm-cache-metrics.json ]; then
+            HR="$(sed -n 's/.*"hit_rate":\([0-9]*\).*/\1/p' .wasm-cache-metrics.json)"
+            H="$(sed -n 's/.*"hits":\([0-9]*\).*/\1/p' .wasm-cache-metrics.json)"
+            T="$(sed -n 's/.*"total":\([0-9]*\).*/\1/p' .wasm-cache-metrics.json)"
+            {
+              echo "### 📊 WASM cache summary (aggregate)"
+              echo "📊 WASM cache hit rate: ${HR:-0}% (${H:-0} hits / ${T:-0} builds)"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "⚠️ No WASM cache metrics file was produced." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
   # ===========================================================================
   # SUPPLY CHAIN SECURITY: Cargo Deny & Reproducible WASM Builds (Issue #47)
   # ===========================================================================

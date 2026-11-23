@@ -28,6 +28,11 @@ tracing = "0.1"
 bytes = "1"
 futures = "0.3"
 rand = "0.9"
+deadpool = { version = "0.12", features = ["managed"] }
+moka = { version = "0.12", features = ["future"] }
+tower = { version = "0.5", features = ["util", "retry", "timeout", "limit"] }
+circuitbreaker-rs = { version = "0.1.1", features = ["async"] }
+http = "1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }

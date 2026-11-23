@@ -34,7 +34,16 @@ ignore = true
 multiple-versions = "warn"
 wildcards = "deny"
 highlight = "all"
-deny = []
+# ---------------------------------------------------------------------------
+# MACHINE-MANAGED SECTION (scripts/security/audit_crates.py --bot)
+# The security remediation bot adds inline-table entries here to DENY crate
+# versions with known HIGH/CRITICAL advisories until they are upgraded, e.g.:
+#   { name = "example-crate", version = "=1.2.3" }
+# Entries are marked with a `# machine-managed by audit_crates.py --bot` comment.
+# Do not remove that marker or hand-edit bot-added entries; the bot updates this
+# array idempotently and commits the change in the same PR as the version bump.
+# ---------------------------------------------------------------------------
+deny = []  # machine-managed by audit_crates.py --bot: add { name = "...", version = "=x.y.z" }
 skip = []
 skip-tree = []
 

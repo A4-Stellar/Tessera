@@ -1,0 +1,157 @@
+export const metadata = {
+  title: "SEP-24 · Hosted Deposit and Withdrawal",
+  description: "Interactive hosted deposits, transaction status, KYC collection and re-verification on Stellar.",
+  canonical: "/docs/sep24",
+};
+
+# SEP-24 — Hosted Deposit and Withdrawal
+
+Tessera exposes the interactive (hosted) flow of [SEP-24](https://github.com/stellar/stellar-protocol/blob/master/ecosystem/sep-0024.md)
+at the **API root**, not under `/v1`, so the paths can be advertised directly
+from the anchor's `stellar.toml`.
+
+<CalloutBox variant="warning">
+The bundled transaction store is in-memory and the default signer returns a
+placeholder string. For production, replace the volatile store with a durable
+database and inject a real signing service. See the caveats below.
+</CalloutBox>
+
+## Discovery — `stellar.toml`
+
+`GET /.well-known/stellar.toml` returns `text/plain` with at least:
+
+```text
+SIGNING_KEY=G...
+TRANSFER_SERVER_SEP0024=http://localhost:8080
+KYC_SERVER=http://localhost:8080
+NETWORK_PASSPHRASE=Test Network ; September 2015
+WEB_AUTH_ENDPOINT=http://localhost:8080/auth
+ORG_MAINTAINER=Tessera Maintainers
+```
+
+`NETWORK_PASSPHRASE` follows SEP-10: `Test Network ; September 2015` for
+testnet, `Public Global Stellar Network ; September 2015` for pubnet. An
+`ACCOUNTS` line is included when configured.
+
+## Configuration
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `SEP24_SIGNING_KEY` | demo `G...` key | Signing public key advertised in `stellar.toml` |
+| `SEP24_TRANSFER_SERVER_URL` | `http://localhost:8080` | `TRANSFER_SERVER_SEP0024` value |
+| `SEP24_KYC_SERVER_URL` | `http://localhost:8080` | `KYC_SERVER` value |
+| `SEP24_DOCS_URL` (alias `SEP24Docs_URL`) | `https://docs.example.com` | Base for interactive deposit URLs |
+| `SEP24_MAINTAINER` | `Tessera Maintainers` | `ORG_MAINTAINER` value |
+| `SEP24_NETWORK` | `testnet` | `testnet` or `pubnet` → network passphrase |
+| `SEP24_WEB_AUTH_ENDPOINT` | `<transfer>/auth` | SEP-10 web auth endpoint |
+| `SEP24_ACCOUNTS` | unset | Optional `ACCOUNTS` line |
+| `SEP24_SIGNING_SERVICE_URL` | unset | External signer; returns `{ "signed_transaction": "<base64 XDR>" }` |
+| `COMPLIANCE_SERVICE_URL` | unset | Hook for `add_to_allowlist` |
+| `SEP24_REVERIFY_INTERVAL_DAYS` | `365` | KYC re-verification age threshold |
+
+All values have safe defaults, so the endpoints work on a fresh checkout.
+
+## Flow
+
+### 1. Start an interactive deposit
+
+`POST /sep24/transactions/deposit/interactive`
+
+```json
+{ "account": "G...", "asset_code": "USDC", "amount": "100", "lang": "en", "email": "user@example.com" }
+```
+
+Response:
+
+```json
+{
+  "id": "sep24-1730000000000-00000001",
+  "url": "https://docs.example.com/en/sep24/deposit?transaction_id=sep24-1730000000000-00000001&token=…",
+  "token": "…",
+  "type": "interactive"
+}
+```
+
+Redirect the user to `url`. The `token` is a one-time secret used for polling.
+
+### 2. Collect KYC
+
+`POST /sep24/transactions/:id/kyc` accepts `first_name`, `last_name`, `dob`,
+`country`, `id_type`, `id_number` and `tax_id`. The transaction's `kyc_status`
+becomes `pending`, then `needs_review` when no `COMPLIANCE_SERVICE_URL` is
+configured (the allowlist intent is still recorded).
+
+### 3. Confirm the external transfer and finish
+
+`POST /sep24/transactions/:id/confirm_external` moves
+`pending_user_transfer_start → pending_external`. The compliance service then
+calls `POST /sep24/transactions/:id/complete`, which sets `completed` and
+attaches `signed_transaction` when signing succeeds.
+
+A signing failure does **not** block completion: the status still advances and
+operations can retry signing. The default signer returns the clearly-labelled
+placeholder `BASE64_XDR_PLACEHOLDER` — it is not valid XDR and must never be
+submitted to Stellar.
+
+### 4. Read back status
+
+`GET /sep24/transaction?id=…&token=…` returns the SEP-24 envelope:
+
+```json
+{
+  "transaction": {
+    "id": "sep24-…",
+    "status": "completed",
+    "amount_in": "100",
+    "amount_out": "100",
+    "deposit_memo": null,
+    "deposit_memo_type": null,
+    "external_extra": null,
+    "kyc_status": "needs_review",
+    "signed_transaction": "BASE64_XDR_PLACEHOLDER"
+  }
+}
+```
+
+A missing or wrong token returns `401 Unauthorized`. `GET
+/sep24/transactions?account=G...&token?=` lists an account's deposits.
+
+<CalloutBox variant="note">
+The API's global anonymizer pseudonymises KYC field names (`email`,
+`first_name`, `last_name`, `dob`, `tax_id`, …) for non-admin callers. SEP-24
+status, amounts and the signed XDR are unaffected. Pass the configured admin
+bearer token when raw KYC values are required.
+</CalloutBox>
+
+## KYC re-verification (issue #77)
+
+Approved KYC records older than `SEP24_REVERIFY_INTERVAL_DAYS` are due for
+re-verification. The same hook used by the initial KYC step —
+`register_allowlist_entry(address)` — is invoked again.
+
+- `GET /sep24/admin/reverify/due` — list overdue approvals without mutating.
+- `POST /sep24/admin/reverify` — mark them `reverification_required` and call
+  the compliance hook. Returns `{ "checked", "marked", "ids" }`.
+
+Invoke `POST /sep24/admin/reverify` from an external weekly cron. The hook
+signature is:
+
+```text
+register_allowlist_entry(address: &str) -> AllowlistOutcome
+```
+
+where `AllowlistOutcome` is `registered` or `needs_review`. In production wire
+it to the compliance contract's `add_to_allowlist` operation rather than the
+demo HTTP endpoint.
+
+## Interactive UI
+
+The deposit UI lives at `/[lang]/sep24/deposit`. It collects KYC with zod
+validation, submits the three API calls above, polls status every five
+seconds and displays the signed XDR with a deliberately **disabled** "Submit to
+Stellar" button — users must sign and submit the envelope themselves.
+
+## Testing
+
+See `tests/sep24/README.md` for the config and a `node:test` smoke suite that
+can be pointed at a local API with `SEP24_BASE_URL`.
