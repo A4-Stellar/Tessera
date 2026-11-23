@@ -14,6 +14,8 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process;
 
+pub mod semantic_scanner;
+
 use proc_macro2::TokenStream;
 use quote::ToTokens;
 use syn::{
@@ -164,13 +166,16 @@ fn scan_file(path: &Path, scanner: &mut Scanner) -> Result<(), Box<dyn std::erro
 // ---------------------------------------------------------------------------
 
 fn usage() -> ! {
-    eprintln!("Usage: ast-scanner [--dir <path>]");
+    eprintln!("Usage: ast-scanner [--dir <path>] [--sarif] [--call-graph] [--output <file>]");
     process::exit(2);
 }
 
 fn main() {
     let mut args = std::env::args().skip(1);
     let mut dir = PathBuf::from(".");
+    let mut sarif_mode = false;
+    let mut call_graph_mode = false;
+    let mut output_file: Option<PathBuf> = None;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -180,12 +185,38 @@ fn main() {
                     process::exit(2);
                 }));
             }
+            "--output" | "-o" => {
+                output_file = Some(PathBuf::from(args.next().unwrap_or_else(|| {
+                    eprintln!("--output requires a path argument");
+                    process::exit(2);
+                })));
+            }
+            "--sarif" => sarif_mode = true,
+            "--call-graph" => call_graph_mode = true,
             "--help" | "-h" => usage(),
             other => {
                 eprintln!("Unknown argument: {other}");
                 usage();
             }
         }
+    }
+
+    if sarif_mode || call_graph_mode {
+        let report = semantic_scanner::scan_directory_semantics(&dir);
+        let payload = if call_graph_mode {
+            serde_json::to_string_pretty(&report.call_graph).unwrap()
+        } else {
+            serde_json::to_string_pretty(&semantic_scanner::generate_sarif(&report)).unwrap()
+        };
+        if let Some(out) = output_file {
+            std::fs::write(&out, &payload).unwrap_or_else(|e| {
+                eprintln!("Failed to write {}: {e}", out.display());
+                process::exit(2);
+            });
+        } else {
+            println!("{payload}");
+        }
+        process::exit(0);
     }
 
     let mut scanner = Scanner::default();

@@ -15,6 +15,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
 
+pub mod semantic_scanner;
+
 use quote::ToTokens;
 use syn::spanned::Spanned;
 use syn::visit::Visit;
@@ -307,6 +309,9 @@ fn main() {
     let mut target_dir = PathBuf::from("contracts");
     let mut strict_mode = false;
     let mut json_format = false;
+    let mut sarif_format = false;
+    let mut print_call_graph = false;
+    let mut output_path: Option<PathBuf> = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -315,11 +320,17 @@ fn main() {
                 target_dir = PathBuf::from(&args[i + 1]);
                 i += 1;
             }
+            "--output" | "-o" if i + 1 < args.len() => {
+                output_path = Some(PathBuf::from(&args[i + 1]));
+                i += 1;
+            }
             "--strict" => strict_mode = true,
             "--json" => json_format = true,
+            "--sarif" => sarif_format = true,
+            "--call-graph" => print_call_graph = true,
             "--help" | "-h" => {
-                println!("Soroban AST Smart Contract Reentrancy Analyzer");
-                println!("Usage: analyze-soroban-ast [--dir <path>] [--strict] [--json]");
+                println!("Soroban AST & Semantic Smart Contract Security Scanner (Issues #246, #430)");
+                println!("Usage: analyze-soroban-ast [--dir <path>] [--strict] [--json] [--sarif] [--call-graph] [--output <file>]");
                 process::exit(0);
             }
             _ => {}
@@ -327,19 +338,45 @@ fn main() {
         i += 1;
     }
 
-    eprintln!("[INFO] Analyzing Soroban contracts in `{}` for CEI/reentrancy patterns...", target_dir.display());
+    eprintln!(
+        "[INFO] Analyzing Soroban contracts in `{}` for CEI/reentrancy, taint, and storage collisions...",
+        target_dir.display()
+    );
 
     let (findings, errors) = scan_directory(&target_dir);
+    let semantic_report = semantic_scanner::scan_directory_semantics(&target_dir);
 
     for err in &errors {
         eprintln!("[ERROR] {err}");
     }
+    for err in &semantic_report.errors {
+        eprintln!("[ERROR] {err}");
+    }
 
-    if json_format {
-        // Emit JSON report
+    if sarif_format || output_path.as_ref().is_some_and(|p| p.extension().is_some_and(|e| e == "sarif")) {
+        let sarif_doc = semantic_scanner::generate_sarif(&semantic_report);
+        let serialized = serde_json::to_string_pretty(&sarif_doc).unwrap();
+        if let Some(out_file) = &output_path {
+            fs::write(out_file, &serialized).expect("Failed to write SARIF output file");
+            eprintln!("[INFO] Wrote SARIF v2.1.0 report to `{}`.", out_file.display());
+        } else {
+            println!("{serialized}");
+        }
+    } else if print_call_graph {
+        let serialized = serde_json::to_string_pretty(&semantic_report.call_graph).unwrap();
+        if let Some(out_file) = &output_path {
+            fs::write(out_file, &serialized).expect("Failed to write call graph output file");
+        } else {
+            println!("{serialized}");
+        }
+    } else if json_format {
+        // Emit JSON report including both CEI and semantic analysis
         let report = serde_json::json!({
             "scanned_directory": target_dir.to_string_lossy(),
             "findings_count": findings.len(),
+            "semantic_findings_count": semantic_report.findings.len(),
+            "call_graph": semantic_report.call_graph,
+            "semantic_findings": semantic_report.findings,
             "findings": findings.iter().map(|f| {
                 serde_json::json!({
                     "file": f.file_path.to_string_lossy(),
@@ -351,21 +388,42 @@ fn main() {
                 })
             }).collect::<Vec<_>>()
         });
-        println!("{}", serde_json::to_string_pretty(&report).unwrap());
+        let serialized = serde_json::to_string_pretty(&report).unwrap();
+        if let Some(out_file) = &output_path {
+            fs::write(out_file, &serialized).expect("Failed to write JSON output file");
+        } else {
+            println!("{serialized}");
+        }
     } else {
         // Emit Clippy-style compiler warnings
         for finding in &findings {
             finding.emit_clippy_diagnostic();
         }
+        for sem in &semantic_report.findings {
+            eprintln!(
+                "warning: [{}] {}\n  --> {}:{}:{}\n   |     {}\n",
+                sem.rule_id.as_str(),
+                sem.message,
+                sem.file.display(),
+                sem.line,
+                sem.col,
+                sem.snippet
+            );
+        }
     }
 
-    if findings.is_empty() {
-        eprintln!("[PASSED] No CEI reentrancy vulnerabilities detected in `{}`.", target_dir.display());
+    let total_issues = findings.len() + semantic_report.findings.len();
+    if total_issues == 0 {
+        eprintln!(
+            "[PASSED] No CEI reentrancy or semantic vulnerabilities detected in `{}`.",
+            target_dir.display()
+        );
         process::exit(0);
     } else {
         eprintln!(
-            "[WARNING] Found {} potential reentrancy pattern(s) in `{}`.",
+            "[WARNING] Found {} CEI and {} semantic finding(s) in `{}`.",
             findings.len(),
+            semantic_report.findings.len(),
             target_dir.display()
         );
         if strict_mode {

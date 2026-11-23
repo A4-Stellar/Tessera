@@ -156,3 +156,30 @@ jobs:
         with:
           sarif_file: attack-surface.sarif
           category: tessera-attack-surface-scan
+
+  # Job 5: Soroban Semantic AST Security Scanner (issue #430) — Cross-contract
+  # call graph, taint analysis, same-key reentrancy, storage key collisions & SARIF v2.1.0.
+  soroban-semantic-scanner:
+    name: Soroban Semantic Security Scanner (SARIF)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run Semantic Scanner Unit Tests
+        working-directory: scripts/security
+        run: cargo test
+
+      - name: Scan All Soroban Contracts & Generate SARIF v2.1.0
+        working-directory: scripts/security
+        run: cargo run --bin analyze-soroban-ast -- --dir ../../contracts --sarif --output ../../soroban-semantic.sarif
+
+      - name: Upload Soroban Semantic SARIF Report to GitHub Security Tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: soroban-semantic.sarif
+          category: tessera-soroban-semantic-scanner
