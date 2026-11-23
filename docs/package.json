@@ -30,7 +30,7 @@
     "@stellar/freighter-api": "^6.0.1",
     "@stellar/stellar-sdk": "^17.1.0",
     "@types/three": "^0.186.0",
-    "d3": "^7.9.0",
+    "d3": "^7.9.2",
     "flexsearch": "^0.7.43",
     "gray-matter": "^4.0.3",
     "lightweight-charts": "^5.2.1",
