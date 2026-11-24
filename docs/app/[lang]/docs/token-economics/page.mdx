@@ -1,0 +1,40 @@
+export const metadata = {
+  title: "Token Economics Simulator",
+  description: "Model institutional, retail and arbitrage behaviour with an agent-based simulation backed by Rust WebAssembly.",
+  canonical: "/docs/token-economics",
+};
+
+# Token Economics Simulator
+
+Use this interactive model to explore how different holder populations shape an
+asset's price, holder concentration, dividend yield and AMM liquidity. The
+simulation runs in a Web Worker so the page stays responsive; the Rust module
+compiled to WebAssembly is the canonical engine, with an equivalent reference
+engine used when the binary is not present.
+
+## The agents
+
+- **Institutional holders** buy when the AMM price dips below the oracle price
+  by more than the dip threshold and trim positions on rallies.
+- **Retail holders** follow momentum over a configurable lookback window.
+- **Arbitrageurs** trade whenever the AMM/oracle discrepancy exceeds their
+  tolerance, pulling the two prices together.
+
+Dividend arrivals follow a Poisson process, so the yield trajectory reflects
+both the payout rate and the price at which it lands.
+
+## Reading the outputs
+
+The price chart overlays the AMM price (solid) on the oracle price (dashed).
+The holder-distribution and liquidity-depth views are heatmaps: time runs
+vertically and buckets horizontally. Gini and maximum drawdown summarise the
+final distribution and worst peak-to-trough price move.
+
+## Reproducibility
+
+Every parameter is encoded in the scenario, including the PRNG seed. Use
+**Export JSON** to save a scenario and **Import JSON** to replay it — two runs
+with the same scenario produce byte-identical series. Scenarios are validated
+on import, so out-of-range values are clamped rather than causing NaNs.
+
+<TokenEconomicsSimulator />

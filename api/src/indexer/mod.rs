@@ -969,7 +969,10 @@ impl Indexer {
             .collect();
         self.state.anomalies.observe_events(&fresh);
         self.state.velocity.observe(&fresh, chrono::Utc::now());
-        self.state.stream_processor.ingest_events(&events, &assets).await;
+        self.state
+            .stream_processor
+            .ingest_events(&events, &assets)
+            .await;
 
         self.checkpoint(latest_ledger, &holders_map).await;
 
@@ -1020,13 +1023,59 @@ impl Indexer {
             .write()
             .expect("mmr lock")
             .record(ledger, ledger_hash, state);
-        match result {
-            Ok(_) => {
+        let checkpoint = match result {
+            Ok(checkpoint) => {
                 metrics::counter!("rwa_mmr_checkpoint_total", "outcome" => "success").increment(1);
+                checkpoint
             }
             Err(e) => {
                 metrics::counter!("rwa_mmr_checkpoint_total", "outcome" => "failure").increment(1);
                 tracing::warn!(ledger, error = %e, "MMR checkpoint rejected");
+                return;
+            }
+        };
+        let Some(checkpoint) = checkpoint else {
+            return;
+        };
+
+        // Issue #469: every MMR root is DA-committed. Failures here are
+        // observable but never block indexing — the checkpoint itself is still
+        // valid, it is simply not anchored until a later cycle succeeds.
+        let (Some(disperser), Some(store)) =
+            (self.state.da_disperser.clone(), self.state.da_store.clone())
+        else {
+            return;
+        };
+        let root = self.state.mmr.read().expect("mmr lock").root();
+        // The full state snapshot is the same data the state tree commits to.
+        let snapshot = serde_json::json!({
+            "ledger": ledger,
+            "ledger_hash": hex::encode(ledger_hash),
+            "state_root": hex::encode(checkpoint.state_root),
+            "holders": holders,
+        });
+        match eigenda::commit_snapshot(
+            disperser.as_ref(),
+            store.as_ref(),
+            0,
+            ledger as u64,
+            &hex::encode(root),
+            &snapshot,
+            eigenda::PollConfig::default(),
+        )
+        .await
+        {
+            Ok(proof) => {
+                self.state.mmr.write().expect("mmr lock").attach_da(
+                    checkpoint.leaf_index,
+                    &proof.batch_header_hash,
+                    proof.blob_index,
+                );
+                metrics::counter!("rwa_eigenda_commit_total", "outcome" => "success").increment(1);
+            }
+            Err(error) => {
+                metrics::counter!("rwa_eigenda_commit_total", "outcome" => "failure").increment(1);
+                tracing::warn!(ledger, error = %error, "EigenDA commit failed; checkpoint remains unanchored");
             }
         }
     }

@@ -3,6 +3,7 @@
 pub mod assets;
 pub mod audit;
 pub mod compliance;
+pub mod da;
 pub mod dividends;
 pub mod dlq;
 pub mod events;
@@ -12,6 +13,8 @@ pub mod meta;
 pub mod portfolio;
 pub mod privacy;
 pub mod proofs;
+/// Regulatory sandbox lifecycle (issue #468).
+pub mod sandbox;
 #[expect(
     dead_code,
     reason = "The search placeholder is not part of the active API router."
@@ -114,6 +117,7 @@ pub fn router(state: AppState) -> Router {
         .allow_headers([
             header::CONTENT_TYPE,
             axum::http::HeaderName::from_static("x-tenant-id"),
+            axum::http::HeaderName::from_static("x-sandbox-tenant-id"),
             axum::http::HeaderName::from_static("x-api-key"),
         ]);
 
@@ -129,16 +133,20 @@ pub fn router(state: AppState) -> Router {
         } else {
             Arc::new(MemoryBucketStore::default())
         };
-    let token_bucket_state = Arc::new(TokenBucketState::new(
-        store,
-        Tier {
-            capacity: burst,
-            refill_per_second: per_second as f64,
-        },
-        TokenBucketState::parse_api_key_tiers(
-            &std::env::var("RWA_API_KEY_TIERS").unwrap_or_default(),
-        ),
-    ));
+    let sandbox_mode = env_value("RWA_SANDBOX_MODE", false);
+    let token_bucket_state = Arc::new(
+        TokenBucketState::new(
+            store,
+            Tier {
+                capacity: burst,
+                refill_per_second: per_second as f64,
+            },
+            TokenBucketState::parse_api_key_tiers(
+                &std::env::var("RWA_API_KEY_TIERS").unwrap_or_default(),
+            ),
+        )
+        .with_sandbox_mode(sandbox_mode),
+    );
 
     // Snapshot-backed endpoints: cacheable and safe to answer with 304 when
     // the client's ETag still matches the last indexed ledger.
@@ -151,6 +159,7 @@ pub fn router(state: AppState) -> Router {
         .route("/rsocket", get(crate::rsocket::handler))
         .route("/assets", get(assets::list))
         .route("/assets/:id", get(assets::detail))
+        .route("/assets/:id/da-proof", get(da::da_proof))
         .route("/assets/:id/events", get(assets::events))
         .route("/assets/:id/metrics/analytics", get(assets::analytics))
         .route(
@@ -167,10 +176,7 @@ pub fn router(state: AppState) -> Router {
             "/holders/:address/compliance",
             get(holders::by_address_compliance),
         )
-        .route(
-            "/holders/:address/portfolio",
-            get(portfolio::get_portfolio),
-        )
+        .route("/holders/:address/portfolio", get(portfolio::get_portfolio))
         .route("/compliance/:address", get(compliance::for_address))
         .route("/security/anomalies", get(security::list))
         .route("/audit/verify", get(audit::verify))
@@ -435,6 +441,7 @@ async fn index() -> Json<serde_json::Value> {
             "GET /v1/assets",
             "GET /v1/assets/:id",
             "POST /v1/assets/:id/proofs/verify",
+            "GET /v1/assets/:id/da-proof",
             "GET /v1/assets/:id/events",
             "GET /v1/assets/:id/metrics/analytics",
             "GET /v1/assets/:id/analytics",
@@ -454,6 +461,8 @@ async fn index() -> Json<serde_json::Value> {
             "GET /v1/proofs/mmr",
             "GET /v1/proofs/mmr/:ledger_seq?account=:address",
             "GET /v1/admin/privacy/budget",
+            "POST /sandbox/reset",
+            "GET /sandbox/status",
             "GET /.well-known/stellar.toml",
             "POST /sep24/transactions/deposit/interactive",
             "GET /sep24/transaction",

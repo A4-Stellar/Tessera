@@ -6,12 +6,12 @@
 //! indistinguishable from a genuine bug, or silently corrupted the ledger.
 #![no_std]
 pub mod interest_rate;
-
-use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Symbol};
+#[cfg(test)]
+mod test;
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, Address,
-    Env,
+    Env, Symbol,
 };
 
 /// Ordered by payment priority: a repayment is applied to `Senior` until it is
@@ -55,6 +55,31 @@ pub enum Error {
 #[contract]
 pub struct DebtTokenAmortization;
 
+// These guards were referenced by the public entry points but missing from the
+// source, which made the crate fail to compile and left `accrue_interest` and
+// `trigger_default` callable by anyone (they are admin-gated per the module
+// contract above). This is the bug the WASM-level fuzz harness surfaced.
+impl DebtTokenAmortization {
+    fn require_initialized(env: &Env) {
+        if !env.storage().instance().has(&DataKey::Admin) {
+            panic_with_error!(env, Error::NotInitialized);
+        }
+    }
+
+    fn require_admin(env: &Env, admin: &Address) {
+        Self::require_initialized(env);
+        let stored: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| panic_with_error!(env, Error::NotInitialized));
+        if stored != *admin {
+            panic_with_error!(env, Error::Unauthorized);
+        }
+        admin.require_auth();
+    }
+}
+
 #[contractimpl]
 impl DebtTokenAmortization {
     /// Install the admin. Required before any ledger mutation, because
@@ -67,7 +92,9 @@ impl DebtTokenAmortization {
         admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::SeniorOwed, &0i128);
-        env.storage().instance().set(&DataKey::MezzanineOwed, &0i128);
+        env.storage()
+            .instance()
+            .set(&DataKey::MezzanineOwed, &0i128);
         env.storage().instance().set(&DataKey::EquityOwed, &0i128);
     }
 
@@ -145,7 +172,9 @@ impl DebtTokenAmortization {
             .instance()
             .get(&DataKey::EquityOwed)
             .unwrap_or(0);
-        let equity_payment = remaining;
+        // Cap the final leg too. Without this, an overpayment underflowed
+        // `equity_owed - equity_payment` and trapped in production.
+        let equity_payment = remaining.min(equity_owed);
         env.storage()
             .instance()
             .set(&DataKey::EquityOwed, &(equity_owed - equity_payment));
@@ -157,39 +186,21 @@ impl DebtTokenAmortization {
         }
     }
 
-    pub fn accrue_interest(env: Env, tranche: Tranche, amount: i128) {
-        match tranche {
-            Tranche::Senior => {
-                let owed: i128 = env
-                    .storage()
-                    .instance()
-                    .get(&DataKey::SeniorOwed)
-                    .unwrap_or(0);
-                env.storage()
-                    .instance()
-                    .set(&DataKey::SeniorOwed, &(owed + amount));
-            }
-            Tranche::Mezzanine => {
-                let owed: i128 = env
-                    .storage()
-                    .instance()
-                    .get(&DataKey::MezzanineOwed)
-                    .unwrap_or(0);
-                env.storage()
-                    .instance()
-                    .set(&DataKey::MezzanineOwed, &(owed + amount));
-            }
-            Tranche::Equity => {
-                let owed: i128 = env
-                    .storage()
-                    .instance()
-                    .get(&DataKey::EquityOwed)
-                    .unwrap_or(0);
-                env.storage()
-                    .instance()
-                    .set(&DataKey::EquityOwed, &(owed + amount));
-            }
+    pub fn accrue_interest(env: Env, admin: Address, tranche: Tranche, amount: i128) {
+        Self::require_admin(&env, &admin);
+        if amount <= 0 {
+            panic_with_error!(env, Error::InvalidAmount);
         }
+        let key = match tranche {
+            Tranche::Senior => DataKey::SeniorOwed,
+            Tranche::Mezzanine => DataKey::MezzanineOwed,
+            Tranche::Equity => DataKey::EquityOwed,
+        };
+        let owed: i128 = env.storage().instance().get(&key).unwrap_or(0);
+        let next = owed
+            .checked_add(amount)
+            .unwrap_or_else(|| panic_with_error!(env, Error::Overflow));
+        env.storage().instance().set(&key, &next);
         env.events()
             .publish((Symbol::new(&env, "interest_accrued"), tranche), amount);
     }
@@ -219,8 +230,37 @@ impl DebtTokenAmortization {
         interest_rate::do_accrue_index(&env, borrowed, available)
     }
 
-    pub fn trigger_default(env: Env) {
+    pub fn trigger_default(env: Env, admin: Address) {
+        Self::require_admin(&env, &admin);
         env.events()
             .publish((Symbol::new(&env, "default_triggered"),), ());
+    }
+
+    // ---- Views used by integrators and the fuzz/proptest oracles ---------
+    pub fn senior_owed(env: Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&DataKey::SeniorOwed)
+            .unwrap_or(0)
+    }
+
+    pub fn mezzanine_owed(env: Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&DataKey::MezzanineOwed)
+            .unwrap_or(0)
+    }
+
+    pub fn equity_owed(env: Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&DataKey::EquityOwed)
+            .unwrap_or(0)
+    }
+
+    pub fn total_owed(env: Env) -> i128 {
+        Self::senior_owed(env.clone())
+            .saturating_add(Self::mezzanine_owed(env.clone()))
+            .saturating_add(Self::equity_owed(env))
     }
 }

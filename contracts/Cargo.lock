@@ -248,6 +248,7 @@ dependencies = [
 name = "bridge"
 version = "0.1.0"
 dependencies = [
+ "ed25519-dalek",
  "soroban-sdk",
 ]
 
@@ -2018,6 +2019,13 @@ dependencies = [
 
 [[package]]
 name = "tessera-confidential-token"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
+name = "tessera-da-verifier"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",

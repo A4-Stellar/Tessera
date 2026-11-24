@@ -72,6 +72,34 @@ cargo test
 
 The templates are embedded in the binary, so generation does not access the network or read files from the Tessera repository.
 
+## Regulatory sandbox (issue #468)
+
+One command starts an isolated stack: Stellar quickstart, all contracts,
+Postgres seeded with 10,000 synthetic assets and 100,000 synthetic holders
+(Pareto balances, log-normal prices, Poisson dividend gaps), and the API with
+a relaxed 1,000 req/s bucket:
+
+```sh
+cargo run --manifest-path cli/Cargo.toml --bin tessera -- sandbox start --tenant acme-1
+# or, once installed:
+tessera sandbox start --tenant acme-1
+```
+
+Useful flags: `--assets`, `--holders`, `--seed`, `--compose-file`, `--print-only`
+(no Docker needed), `--no-wait`. Tear down with `tessera sandbox stop --volumes`.
+
+Every request selects its tenant with `X-Sandbox-Tenant-ID`; Postgres RLS
+(`api/src/db/migrations/0005_sandbox_tenant_rls.sql`) makes cross-tenant data
+leakage impossible. Lifecycle endpoints:
+
+```sh
+curl -H 'X-Sandbox-Tenant-ID: acme-1' http://localhost:8081/sandbox/status
+curl -X POST -H 'X-Sandbox-Tenant-ID: acme-1' http://localhost:8081/sandbox/reset
+```
+
+The API surface under `/v1` is identical to production. Examples for all seven
+SDKs live in [`sdk/examples/sandbox/`](../sdk/examples/sandbox/).
+
 ## Verification
 
 ```bash

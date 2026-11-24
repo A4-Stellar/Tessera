@@ -24,6 +24,7 @@ members = [
     "emergency-liquidation",
     "insurance",
     "fx-hedge",
+    "da-verifier",
 ]
 # `fuzz/` is a self-contained sub-tree of three independent packages:
 #
@@ -66,6 +67,7 @@ bridge = { path = "bridge" }
 vaults = { path = "vaults" }
 debt-token = { path = "debt-token" }
 tessera-orderbook = { path = "orderbook" }
+tessera-da-verifier = { path = "da-verifier" }
 
 # Standard Soroban contract release profile: small, deterministic wasm.
 [profile.release]

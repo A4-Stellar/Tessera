@@ -27,8 +27,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use stellar_strkey::ed25519;
 use stellar_xdr::curr::{
-    AccountId, BytesM, DecoratedSignature, Hash, Limits, Operation, OperationBody,
-    PublicKey, ReadXdr, SequenceNumber, SetOptionsOp, SignerKey, Uint256,
+    AccountId, BytesM, DecoratedSignature, Hash, Limits, Limited, Operation, OperationBody,
+    Preconditions, PublicKey, ReadXdr, SequenceNumber, SetOptionsOp, SignerKey, Uint256,
     Transaction, TransactionEnvelope, TransactionSignaturePayload,
     TransactionSignaturePayloadTaggedTransaction, TransactionV1Envelope, WriteXdr,
 };

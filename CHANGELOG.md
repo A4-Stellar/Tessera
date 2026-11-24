@@ -3,6 +3,26 @@
 All notable changes to this repository are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+- **Sandbox (infrastructure/dx):** isolated `tessera sandbox start` stack with
+  Stellar quickstart, all contracts, a Postgres database seeded by a Rust
+  datagen binary (Pareto balances, log-normal prices, Poisson dividend gaps),
+  `X-Sandbox-Tenant-ID` row-level security, a sub-5-second `POST /sandbox/reset`,
+  a relaxed 1,000 req/s bucket and examples for all seven SDKs.
+- **Token economics (api/docs):** Rust WebAssembly agent-based simulator with
+  institutional, retail and arbitrageur agents, a Web Worker with progress
+  events, D3 charts, JSON scenario export/import, an MDX page and numerical
+  stability tests.
+- **EigenDA (api/contracts):** zstd-compressed state snapshots dispersed with an
+  80% quorum, confirmation polling, Postgres proof storage,
+  `GET /v1/assets/:id/da-proof`, an MMR↔DA anchor and a Soroban BLS verifier
+  with stake-weighted quorum checks.
+- **WASM fuzzing (contracts/fuzz):** mock host/storage oracle, structure-aware
+  ABI mutation, contract-WASM execution, 300 s CI runs with coverage artifacts.
+- **Fixed:** compile errors and missing admin guards in `debt-token` and
+  `bridge`, uncovered by the new WASM harness.
+
 ## [0.1.0] — 2026-07-09
 
 Initial release: the indexing REST API and the documentation site.
