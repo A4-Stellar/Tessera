@@ -35,3 +35,10 @@ post-incident review.
 and then `flush_redis_cache` (`cache:v1:*`, restored from a snapshot if the
 flush fails), and posts the results in the alert's Slack thread. Rolling back a
 deploy stays a human decision.
+
+## Related Integrity Alerts
+
+Integrity alerts tracked alongside SLOs in `slo_rules.yml`:
+- **`ShadowDivergence`** (P1 page): Shadow verifier detected state discrepancy with primary indexer. See [indexer-lag.md](indexer-lag.md) and [shadow-divergence.md](shadow-divergence.md).
+- **`ShadowLagHigh`** (P3 ticket): Shadow indexer is lagging behind primary on-chain ledger state. See [indexer-lag.md](indexer-lag.md).
+
