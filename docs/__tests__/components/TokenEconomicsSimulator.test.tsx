@@ -1,6 +1,10 @@
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import TokenEconomicsSimulator from "@/components/TokenEconomicsSimulator";
 
+// The reference engine runs synchronously in jsdom (no Worker) and the D3
+// SVG output is non-trivial; give slow CI runners room to finish.
+jest.setTimeout(20_000);
+
 describe("TokenEconomicsSimulator", () => {
   it("renders sliders, runs in-process without a Worker and draws the outputs", async () => {
     const { container } = render(
