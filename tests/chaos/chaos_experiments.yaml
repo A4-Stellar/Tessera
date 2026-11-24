@@ -322,3 +322,33 @@ spec:
   duration: '5m'
   scheduler:
     cron: '@every 2m'
+
+---
+# Issue #42: HashiCorp Vault Mid-Flight Block / Partition
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: vault-network-partition-blocked-mid-flight
+  namespace: tessera-chaos
+  labels:
+    app.kubernetes.io/part-of: tessera
+    chaos.tessera.finance/experiment: vault-network-partition
+spec:
+  action: partition
+  mode: all
+  selector:
+    namespaces:
+      - tessera-system
+    labelSelectors:
+      app.kubernetes.io/name: tessera-api
+  direction: to
+  target:
+    mode: all
+    selector:
+      namespaces:
+        - vault
+      labelSelectors:
+        app.kubernetes.io/name: vault
+  duration: '3m'
+  scheduler:
+    cron: '@every 2h'

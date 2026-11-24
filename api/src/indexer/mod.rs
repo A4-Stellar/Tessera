@@ -17,6 +17,7 @@
     reason = "archive planning is staged until the object-storage worker is wired"
 )]
 pub mod archive;
+pub mod cloudflare_invalidator;
 pub mod diagnostics;
 pub mod dlq;
 pub mod event_decoder;
@@ -978,6 +979,35 @@ impl Indexer {
             .await;
 
         self.checkpoint(latest_ledger, &holders_map).await;
+
+        // Issue #41: Push invalidated contract IDs to Cloudflare KV edge cache
+        if let Some(cf_cfg) = cloudflare_invalidator::CloudflareKvConfig::from_env() {
+            let mut invalidated: Vec<String> = Vec::new();
+            for asset in &assets {
+                if let Some(prev_asset) = prev.asset(asset.id) {
+                    if prev_asset.valuation_cents != asset.valuation_cents
+                        || prev_asset.total_supply != asset.total_supply
+                        || prev_asset.active != asset.active
+                        || prev_asset.paused != asset.paused
+                    {
+                        invalidated.push(asset.token_contract.clone());
+                        invalidated.push(asset.id.to_string());
+                    }
+                } else {
+                    invalidated.push(asset.token_contract.clone());
+                    invalidated.push(asset.id.to_string());
+                }
+            }
+            for ev in &fresh {
+                if !invalidated.contains(&ev.contract_id) {
+                    invalidated.push(ev.contract_id.clone());
+                }
+            }
+            if !invalidated.is_empty() {
+                let invalidator = cloudflare_invalidator::CloudflareKvInvalidator::new(cf_cfg);
+                let _ = invalidator.push_invalidations(&invalidated).await;
+            }
+        }
 
         let count = assets.len();
         self.state.replace(Snapshot {

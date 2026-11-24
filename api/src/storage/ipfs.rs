@@ -295,6 +295,39 @@ impl IpfsClient {
         })
     }
 
+    /// Uploads a raw document (e.g. PDF prospectus) directly to IPFS and returns the CID.
+    pub async fn upload_raw_document(
+        &self,
+        data: &[u8],
+        filename: &str,
+    ) -> Result<String, IpfsError> {
+        let mut hasher = Sha256::new();
+        hasher.update(data);
+        let digest_hex = hex::encode(hasher.finalize());
+
+        let cid = if let Some(ref jwt) = self.config.pinata_jwt {
+            let json = serde_json::json!({
+                "filename": filename,
+                "data_base64": base64_encode(data),
+                "sha256": digest_hex
+            }).to_string();
+            self.pin_to_pinata_jwt(&json, filename, jwt).await?
+        } else if let (Some(ref key), Some(ref secret)) =
+            (&self.config.pinata_api_key, &self.config.pinata_secret_key)
+        {
+            let json = serde_json::json!({
+                "filename": filename,
+                "data_base64": base64_encode(data),
+                "sha256": digest_hex
+            }).to_string();
+            self.pin_to_pinata_keys(&json, filename, key, secret).await?
+        } else {
+            format!("bafybeic{}", &digest_hex[..32])
+        };
+
+        Ok(cid)
+    }
+
     async fn pin_to_pinata_jwt(
         &self,
         json_data: &str,
@@ -410,9 +443,122 @@ fn base64_decode(s: &str) -> Result<Vec<u8>, String> {
     Ok(output)
 }
 
+// ── FIPS 202 SHA-3-256 Implementation (Issue #87) ──────────────────────────
+
+const ROUND_CONSTANTS: [u64; 24] = [
+    0x0000000000000001, 0x0000000000008082, 0x800000000000808a, 0x8000000080008000,
+    0x000000000000808b, 0x0000000080000001, 0x8000000080008081, 0x8000000000008009,
+    0x000000000000008a, 0x0000000000000088, 0x0000000080008009, 0x000000008000000a,
+    0x000000008000808b, 0x800000000000008b, 0x8000000000008089, 0x8000000000008003,
+    0x8000000000008002, 0x8000000000000080, 0x000000000000800a, 0x800000008000000a,
+    0x8000000080008081, 0x8000000080008080, 0x0000000080000001, 0x8000000080008008,
+];
+
+const ROTATION_OFFSETS: [[u32; 5]; 5] = [
+    [0, 36, 3, 41, 18],
+    [1, 44, 10, 45, 2],
+    [62, 6, 43, 15, 61],
+    [28, 55, 25, 21, 56],
+    [27, 20, 39, 8, 14],
+];
+
+fn keccak_f1600(state: &mut [[u64; 5]; 5]) {
+    for &rc in &ROUND_CONSTANTS {
+        // Theta step
+        let mut c = [0u64; 5];
+        for x in 0..5 {
+            c[x] = state[x][0] ^ state[x][1] ^ state[x][2] ^ state[x][3] ^ state[x][4];
+        }
+        let mut d = [0u64; 5];
+        for x in 0..5 {
+            d[x] = c[(x + 4) % 5] ^ c[(x + 1) % 5].rotate_left(1);
+        }
+        for x in 0..5 {
+            for y in 0..5 {
+                state[x][y] ^= d[x];
+            }
+        }
+
+        // Rho and Pi steps
+        let mut b = [[0u64; 5]; 5];
+        for x in 0..5 {
+            for y in 0..5 {
+                b[y][(2 * x + 3 * y) % 5] = state[x][y].rotate_left(ROTATION_OFFSETS[x][y]);
+            }
+        }
+
+        // Chi step
+        for x in 0..5 {
+            for y in 0..5 {
+                state[x][y] = b[x][y] ^ ((!b[(x + 1) % 5][y]) & b[(x + 2) % 5][y]);
+            }
+        }
+
+        // Iota step
+        state[0][0] ^= rc;
+    }
+}
+
+/// Compute standard NIST FIPS 202 SHA-3-256 hash.
+pub fn sha3_256(data: &[u8]) -> [u8; 32] {
+    let mut state = [[0u64; 5]; 5];
+    let rate = 136; // 1088 bits / 8
+    let mut offset = 0;
+
+    while offset + rate <= data.len() {
+        for i in 0..rate / 8 {
+            let x = i % 5;
+            let y = i / 5;
+            let chunk = &data[offset + i * 8..offset + (i + 1) * 8];
+            state[x][y] ^= u64::from_le_bytes(chunk.try_into().unwrap());
+        }
+        keccak_f1600(&mut state);
+        offset += rate;
+    }
+
+    let remaining = &data[offset..];
+    let mut block = [0u8; 136];
+    block[..remaining.len()].copy_from_slice(remaining);
+    block[remaining.len()] ^= 0x06; // SHA-3 domain suffix (FIPS 202)
+    block[rate - 1] ^= 0x80;
+
+    for i in 0..rate / 8 {
+        let x = i % 5;
+        let y = i / 5;
+        let chunk = &block[i * 8..(i + 1) * 8];
+        state[x][y] ^= u64::from_le_bytes(chunk.try_into().unwrap());
+    }
+    keccak_f1600(&mut state);
+
+    let mut out = [0u8; 32];
+    for i in 0..4 {
+        let x = i % 5;
+        let y = i / 5;
+        out[i * 8..(i + 1) * 8].copy_from_slice(&state[x][y].to_le_bytes());
+    }
+    out
+}
+
+pub fn sha3_256_hex(data: &[u8]) -> String {
+    hex::encode(sha3_256(data))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_sha3_256_nist_vectors() {
+        // NIST FIPS 202 test vectors for SHA-3-256
+        assert_eq!(
+            sha3_256_hex(b""),
+            "a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a"
+        );
+        assert_eq!(
+            sha3_256_hex(b"abc"),
+            "3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532"
+        );
+    }
 
     #[test]
     fn test_aes_gcm_encryption_and_decryption_roundtrip() {

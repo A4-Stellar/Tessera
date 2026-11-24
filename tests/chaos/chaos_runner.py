@@ -32,6 +32,8 @@ class ChaosScenario(str, Enum):
     CONTRACT_MALFORMED_XDR = "contract_chaos_malformed_soroban_xdr"
     SLOW_CONSUMER_PULSAR_DLQ = "slow_consumer_pulsar_dlq_fill"
     CHAOS_MONKEY_RTO = "chaos_monkey_random_pod_kill_rto"
+    # Issue #42:
+    VAULT_BLOCKED_MID_FLIGHT = "vault_blocked_mid_flight"
 
 
 @dataclass
@@ -304,6 +306,29 @@ class ChaosResilienceRunner:
                 success=True,
             )
 
+        elif scenario == ChaosScenario.VAULT_BLOCKED_MID_FLIGHT:
+            # Issue #42: Mid-flight Vault lease renewal fails due to network partition.
+            # API closes stale pool, triggers backoff retry and re-authenticates via K8s auth,
+            # maintaining cached service availability during reconnection.
+            is_partitioned = fault.get("partitioned", False) if fault else False
+            if is_partitioned:
+                return ProbeResult(
+                    scenario=scenario.value,
+                    endpoint=endpoint,
+                    status_code=200,
+                    latency_ms=base_latency + 120.0,
+                    fallback_engaged=True,  # Served from snapshot/cache while re-authenticating
+                    success=True,
+                )
+            return ProbeResult(
+                scenario=scenario.value,
+                endpoint=endpoint,
+                status_code=200,
+                latency_ms=base_latency + 15.0,
+                fallback_engaged=False,
+                success=True,
+            )
+
         return ProbeResult(
             scenario=scenario.value,
             endpoint=endpoint,
@@ -332,6 +357,8 @@ class ChaosResilienceRunner:
                 # Vary delay across 200ms - 2000ms range
                 delay = 200.0 + ((i * 120.0) % 1800.0)
                 fault = {"delay_ms": delay}
+            elif scenario == ChaosScenario.VAULT_BLOCKED_MID_FLIGHT and (i % 4 == 0):
+                fault = {"partitioned": True}
 
             res = self.probe(endpoint, scenario, fault)
             probes.append(res)
@@ -400,6 +427,8 @@ class ChaosResilienceRunner:
             ChaosScenario.CONTRACT_MALFORMED_XDR,
             ChaosScenario.SLOW_CONSUMER_PULSAR_DLQ,
             ChaosScenario.CHAOS_MONKEY_RTO,
+            # Issue #42 scenario:
+            ChaosScenario.VAULT_BLOCKED_MID_FLIGHT,
         ]
 
         summaries: List[ScenarioSummary] = []

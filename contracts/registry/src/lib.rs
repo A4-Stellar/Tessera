@@ -31,6 +31,16 @@ pub struct AssetEntry {
     pub active: bool,
 }
 
+/// Attached legal prospectus and cryptographic hash attestation (Issue #87).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProspectusRecord {
+    pub asset_id: u64,
+    pub prospectus_cid: String,
+    pub prospectus_hash: BytesN<32>,
+    pub ledger: u32,
+}
+
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
@@ -58,6 +68,8 @@ enum DataKey {
     MptRoot,
     MptRootCache,
     MptNode(BytesN<32>),
+    Prospectus(u64),
+    ProspectusHistory(u64),
 }
 
 #[contract]
@@ -206,6 +218,60 @@ impl RegistryContract {
         all_ids.len() as u64
     }
 
+    // ---- issue #87: prospectus tokenisation & on-chain hash attestation ----
+
+    pub fn attach_prospectus(
+        env: Env,
+        admin: Address,
+        asset_id: u64,
+        prospectus_cid: String,
+        prospectus_hash: BytesN<32>,
+    ) -> ProspectusRecord {
+        Self::require_not_paused(&env);
+        Self::require_admin(&env, &admin);
+        let _ = Self::asset_or_panic(&env, asset_id);
+
+        let record = ProspectusRecord {
+            asset_id,
+            prospectus_cid,
+            prospectus_hash,
+            ledger: env.ledger().sequence(),
+        };
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Prospectus(asset_id), &record);
+
+        let mut history: Vec<ProspectusRecord> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ProspectusHistory(asset_id))
+            .unwrap_or(Vec::new(&env));
+        history.push_back(record.clone());
+        env.storage()
+            .persistent()
+            .set(&DataKey::ProspectusHistory(asset_id), &history);
+
+        env.events()
+            .publish((symbol_short!("prospect"), asset_id), record.ledger);
+
+        record
+    }
+
+    pub fn get_prospectus(env: Env, asset_id: u64) -> ProspectusRecord {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Prospectus(asset_id))
+            .unwrap_or_else(|| panic_with_error!(env, Error::AssetNotFound))
+    }
+
+    pub fn get_prospectus_history(env: Env, asset_id: u64) -> Vec<ProspectusRecord> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::ProspectusHistory(asset_id))
+            .unwrap_or(Vec::new(&env))
+    }
+
     /// Current contract ABI version, polled by the off-chain indexer
     /// (`api/src/indexer/mod.rs::check_abi`) before it trusts this
     /// contract's other return shapes.
@@ -280,5 +346,57 @@ impl RegistryContract {
             }
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod test_prospectus {
+    use super::*;
+    use soroban_sdk::{testutils::Address as _, Env};
+
+    #[test]
+    fn test_prospectus_attestation_and_history() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(RegistryContract, ());
+        let client = RegistryContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let issuer = Address::generate(&env);
+        let token = Address::generate(&env);
+
+        client.initialize(&admin);
+        let asset_id = client.register_asset(
+            &issuer,
+            &token,
+            &String::from_str(&env, "Real Estate Asset"),
+            &String::from_str(&env, "real-estate"),
+            &10_000_000,
+        );
+
+        let cid = String::from_str(&env, "bafybeicid1234567890");
+        let hash = BytesN::from_array(&env, &[7u8; 32]);
+
+        let record = client.attach_prospectus(&admin, &asset_id, &cid, &hash);
+        assert_eq!(record.asset_id, asset_id);
+        assert_eq!(record.prospectus_cid, cid);
+        assert_eq!(record.prospectus_hash, hash);
+
+        let fetched = client.get_prospectus(&asset_id);
+        assert_eq!(fetched, record);
+
+        // Append an amendment
+        let cid2 = String::from_str(&env, "bafybeiamendment2");
+        let hash2 = BytesN::from_array(&env, &[9u8; 32]);
+        let record2 = client.attach_prospectus(&admin, &asset_id, &cid2, &hash2);
+        assert_eq!(record2.prospectus_cid, cid2);
+
+        let latest = client.get_prospectus(&asset_id);
+        assert_eq!(latest.prospectus_cid, cid2);
+
+        let history = client.get_prospectus_history(&asset_id);
+        assert_eq!(history.len(), 2);
+        assert_eq!(history.get(0).unwrap().prospectus_cid, cid);
+        assert_eq!(history.get(1).unwrap().prospectus_cid, cid2);
     }
 }

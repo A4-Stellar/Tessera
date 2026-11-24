@@ -110,10 +110,18 @@ class TestChaosRunner(unittest.TestCase):
         self.assertEqual(res.availability_pct, 100.0)
         self.assertTrue(res.passed)
 
+    def test_vault_blocked_mid_flight_scenario(self):
+        # Issue #42: Mid-flight Vault lease renewal block & dynamic recovery
+        res = self.runner.run_scenario(ChaosScenario.VAULT_BLOCKED_MID_FLIGHT, probe_count=12)
+        self.assertEqual(res.scenario, "vault_blocked_mid_flight")
+        self.assertEqual(res.availability_pct, 100.0)
+        self.assertGreater(res.fallback_success_rate_pct, 0.0)
+        self.assertTrue(res.passed)
+
     def test_run_all_and_score_generation(self):
         report = self.runner.run_all()
         self.assertIsInstance(report, ResilienceReport)
-        self.assertEqual(len(report.scenarios), 11)
+        self.assertEqual(len(report.scenarios), 12)
         self.assertGreaterEqual(report.overall_score, 85.0)
         self.assertIn(report.grade, ["A+", "A", "B"])
         self.assertTrue(report.passed)

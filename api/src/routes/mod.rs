@@ -10,6 +10,7 @@ pub mod dividends;
 pub mod dlq;
 pub mod events;
 pub mod export;
+pub mod forensics;
 pub mod holders;
 pub mod meta;
 pub mod portfolio;
@@ -183,6 +184,8 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/assets/:id/dividends", get(dividends::list))
         .route("/assets/:id/distributions/:did", get(dividends::get_one))
+        .route("/assets/:id/prospectus", get(prospectus::get_prospectus))
+        .route("/assets/:id/prospectus/history", get(prospectus::get_prospectus_history))
         .route("/assets/:id/export", get(export::export))
         .route("/holders/:address", get(holders::by_address))
         .route(

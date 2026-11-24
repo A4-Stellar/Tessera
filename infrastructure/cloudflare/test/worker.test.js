@@ -3,15 +3,19 @@ import assert from 'node:assert/strict';
 
 import {
   DEFAULT_CACHE_PATHS,
+  KNOWN_QUERY_PARAMS,
   JwtError,
   buildOriginHeaders,
   checkRateLimit,
   detectInjection,
+  emitLogpush,
   getBearerToken,
   handleRequest,
+  isAssetInvalidated,
   isBlockedUserAgent,
   isCacheableRequest,
   isPathRequired,
+  normalizeCacheKeyUrl,
   resolveClientIp,
   resolveConfig,
   slidingWindowEstimate,
@@ -700,6 +704,180 @@ describe('edge cache with stale-while-revalidate', () => {
     await handleRequest(new Request('https://edge.tessera.xyz/v1/stats'), env, {}, deps);
     await handleRequest(new Request('https://edge.tessera.xyz/v1/stats'), env, {}, deps);
     assert.equal(hits, 2, 'a no-store response must never be served from the edge cache');
+  });
+
+  test('caches GET /assets, GET /assets/:id, and GET /stats with s-maxage=10 and Cf-Cache-Status', async () => {
+    const cache = new FakeCache();
+    let originCalls = 0;
+    const deps = {
+      now,
+      cache,
+      fetch: async (req) => {
+        originCalls += 1;
+        return new Response(JSON.stringify({ path: new URL(req.url).pathname }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      },
+    };
+    const env = edgeEnv();
+
+    const endpoints = [
+      'https://edge.tessera.xyz/stats',
+      'https://edge.tessera.xyz/assets',
+      'https://edge.tessera.xyz/assets/CBX5SMLTXX6JP4HA5GQIO2V6QM7WCUGL2GZ6D4U773HMRI6RXISKPUR3',
+      'https://edge.tessera.xyz/v1/assets/100',
+    ];
+
+    for (const url of endpoints) {
+      const callsBefore = originCalls;
+      const miss = await handleRequest(new Request(url), env, {}, deps);
+      assert.equal(miss.status, 200);
+      assert.equal(miss.headers.get('cf-cache-status'), 'MISS');
+      assert.equal(originCalls, callsBefore + 1);
+
+      const hit = await handleRequest(new Request(url), env, {}, deps);
+      assert.equal(hit.status, 200);
+      assert.equal(hit.headers.get('cf-cache-status'), 'HIT');
+      assert.equal(originCalls, callsBefore + 1, 'origin was not called again on hit');
+    }
+  });
+
+  test('normalises cache key: strips unknown query params and sorts known ones', async () => {
+    const cache = new FakeCache();
+    let originCalls = 0;
+    const deps = {
+      now,
+      cache,
+      fetch: async (req) => {
+        originCalls += 1;
+        return new Response(JSON.stringify({ ok: true, url: req.url }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      },
+    };
+    const env = edgeEnv();
+
+    // Two requests with identical known params in different order, plus random unknown tracking params
+    const req1 = new Request('https://edge.tessera.xyz/v1/assets?tracking_id=xyz123&page=2&unknown_param=true&limit=25');
+    const req2 = new Request('https://edge.tessera.xyz/v1/assets?limit=25&page=2&campaign_id=foo');
+
+    const res1 = await handleRequest(req1, env, {}, deps);
+    assert.equal(res1.status, 200);
+    assert.equal(res1.headers.get('cf-cache-status'), 'MISS');
+    assert.equal(originCalls, 1);
+
+    const res2 = await handleRequest(req2, env, {}, deps);
+    assert.equal(res2.status, 200);
+    assert.equal(res2.headers.get('cf-cache-status'), 'HIT');
+    assert.equal(originCalls, 1, 'cache hit due to normalized cache key');
+  });
+
+  test('bypasses cache when contract or asset ID is invalidated in Workers KV', async () => {
+    const cache = new FakeCache();
+    const kv = new FakeKv();
+    let originCalls = 0;
+    const deps = {
+      now,
+      cache,
+      fetch: async (req) => {
+        originCalls += 1;
+        return new Response(JSON.stringify({ contract: 'CBX-ASSET', calls: originCalls }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      },
+    };
+    const env = edgeEnv({ CACHE_INVALIDATION: kv });
+    const targetUrl = 'https://edge.tessera.xyz/assets/CBX-ASSET';
+
+    // 1. First fetch -> MISS, cached
+    const res1 = await handleRequest(new Request(targetUrl), env, {}, deps);
+    assert.equal(res1.headers.get('cf-cache-status'), 'MISS');
+    assert.equal(originCalls, 1);
+
+    // 2. Second fetch -> HIT
+    const res2 = await handleRequest(new Request(targetUrl), env, {}, deps);
+    assert.equal(res2.headers.get('cf-cache-status'), 'HIT');
+    assert.equal(originCalls, 1);
+
+    // 3. Mark contract as invalidated in KV (simulating API Soroban event polling)
+    await kv.put('invalidated:CBX-ASSET', 'true');
+
+    // 4. Third fetch -> BYPASS from edge cache, fetches from origin
+    const res3 = await handleRequest(new Request(targetUrl), env, {}, deps);
+    assert.equal(res3.headers.get('cf-cache-status'), 'BYPASS');
+    assert.equal(res3.headers.get('x-edge-cache'), 'BYPASS');
+    assert.equal(originCalls, 2, 'bypassed edge cache to fetch fresh state');
+
+    // 5. Test JSON array invalidation list
+    await kv.put('invalidated_contracts', JSON.stringify(['ANOTHER-ASSET', 'TOKEN-999']));
+    const res4 = await handleRequest(new Request('https://edge.tessera.xyz/v1/assets/TOKEN-999'), env, {}, deps);
+    assert.equal(res4.headers.get('cf-cache-status'), 'BYPASS');
+  });
+
+  test('coalesces concurrent requests during cache miss so only 1 origin fetch occurs', async () => {
+    const cache = new FakeCache();
+    const inFlightFetches = new Map();
+    let originFetchCount = 0;
+
+    const deps = {
+      now,
+      cache,
+      inFlightFetches,
+      fetch: async () => {
+        originFetchCount += 1;
+        // Simulate origin network latency
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        return new Response(JSON.stringify({ stats: 'ok', fetchCount: originFetchCount }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      },
+    };
+    const env = edgeEnv();
+    const makeReq = () => new Request('https://edge.tessera.xyz/v1/stats');
+
+    // Fire 5 simultaneous requests for the same cache key
+    const [r1, r2, r3, r4, r5] = await Promise.all([
+      handleRequest(makeReq(), env, {}, deps),
+      handleRequest(makeReq(), env, {}, deps),
+      handleRequest(makeReq(), env, {}, deps),
+      handleRequest(makeReq(), env, {}, deps),
+      handleRequest(makeReq(), env, {}, deps),
+    ]);
+
+    assert.equal(r1.status, 200);
+    assert.equal(r2.status, 200);
+    assert.equal(r3.status, 200);
+    assert.equal(r4.status, 200);
+    assert.equal(r5.status, 200);
+
+    // Only 1 origin fetch occurred across all 5 requests
+    assert.equal(originFetchCount, 1, 'request coalescing collapsed 5 concurrent misses into 1 origin fetch');
+  });
+
+  test('emits Cf-Cache-Status events to Logpush for observability', async () => {
+    const cache = new FakeCache();
+    const logged = [];
+    const deps = {
+      now,
+      cache,
+      fetch: async () => new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } }),
+      logpush: {
+        log: (entry) => logged.push(entry),
+      },
+    };
+    const env = edgeEnv();
+
+    await handleRequest(new Request('https://edge.tessera.xyz/v1/stats'), env, {}, deps);
+    await handleRequest(new Request('https://edge.tessera.xyz/v1/stats'), env, {}, deps);
+
+    assert.equal(logged.length, 2);
+    assert.equal(logged[0].cf_cache_status, 'MISS');
+    assert.equal(logged[1].cf_cache_status, 'HIT');
+    assert.equal(logged[0].logpush, true);
   });
 });
 
