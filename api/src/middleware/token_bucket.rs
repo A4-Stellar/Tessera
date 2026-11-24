@@ -303,7 +303,8 @@ fn insert_rate_limit_headers(headers: &mut HeaderMap, decision: &Decision) {
     );
     headers.insert(
         "x-ratelimit-reset",
-        HeaderValue::from(decision.reset_seconds.to_string()),
+        HeaderValue::from_str(&decision.reset_seconds.to_string())
+            .unwrap_or_else(|_| HeaderValue::from_static("0")),
     );
 }
 
@@ -382,7 +383,8 @@ pub async fn token_bucket_middleware(
                     .headers_mut()
                     .insert(
                         header::RETRY_AFTER,
-                        HeaderValue::from(decision.retry_after.to_string()),
+                        HeaderValue::from_str(&decision.retry_after.to_string())
+                            .unwrap_or_else(|_| HeaderValue::from_static("0")),
                     );
                 response
             };

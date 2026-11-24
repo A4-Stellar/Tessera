@@ -23,7 +23,6 @@ use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use mpc_signer::{
     DistributedKeyGenerator, MpcCoordinator, MpcNetwork, MpcNode, SignRequest, ThresholdConfig,
 };
-use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use stellar_strkey::ed25519;
@@ -141,8 +140,10 @@ pub struct Sep30ServerState {
 
 impl Sep30ServerState {
     pub fn new(audit_verifier: Arc<RwLock<AuditTrailVerifier>>) -> Self {
-        let mut csprng = OsRng;
-        let signing_key = SigningKey::generate(&mut csprng);
+        // `ed25519-dalek` is built without the `rand_core` feature, so derive
+        // the server key from random bytes rather than `SigningKey::generate`.
+        let secret_bytes = rand::random::<[u8; 32]>();
+        let signing_key = SigningKey::from_bytes(&secret_bytes);
         let verifying_key = signing_key.verifying_key();
         let server_stellar_address = ed25519::PublicKey(verifying_key.to_bytes()).to_string();
 
@@ -159,8 +160,10 @@ impl Sep30ServerState {
 
     /// Construct with 2-of-3 MPC threshold signing cluster (Issue #50 requirement 3).
     pub async fn new_with_mpc(audit_verifier: Arc<RwLock<AuditTrailVerifier>>) -> Self {
-        let mut csprng = OsRng;
-        let signing_key = SigningKey::generate(&mut csprng);
+        // `ed25519-dalek` is built without the `rand_core` feature, so derive
+        // the server key from random bytes rather than `SigningKey::generate`.
+        let secret_bytes = rand::random::<[u8; 32]>();
+        let signing_key = SigningKey::from_bytes(&secret_bytes);
         let verifying_key = signing_key.verifying_key();
 
         let (master_public_key, shares) = DistributedKeyGenerator::generate_2_of_3();
@@ -612,10 +615,10 @@ pub fn build_recovery_transaction(
     };
 
     let tx = Transaction {
-        source_account: AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(source_raw.0))),
+        source_account: AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(source_raw.0))).into(),
         fee: 100,
         seq_num: SequenceNumber(1),
-        time_bounds: None,
+        cond: stellar_xdr::curr::Preconditions::None,
         memo: stellar_xdr::curr::Memo::None,
         operations: vec![set_options_op].try_into().unwrap(),
         ext: stellar_xdr::curr::TransactionExt::V0,
@@ -641,11 +644,10 @@ pub async fn cosign_transaction(
                 network_id: Hash(sha256_passphrase(network_passphrase)),
                 tagged_transaction: TransactionSignaturePayloadTaggedTransaction::Tx(v1.tx.clone()),
             };
-            let mut buf = Vec::new();
-            tx_payload
-                .write_xdr(&mut buf)
+            let tx_bytes = tx_payload
+                .to_xdr(Limits::none())
                 .map_err(|e| format!("XDR error: {e}"))?;
-            (buf, &mut v1.signatures)
+            (tx_bytes, &mut v1.signatures)
         }
         _ => return Err("Only Tx (V1) envelopes supported".to_string()),
     };
@@ -683,8 +685,10 @@ pub async fn cosign_transaction(
 
     let decorated_sig = DecoratedSignature {
         hint: stellar_xdr::curr::SignatureHint(hint),
-        signature: BytesM::try_from(sig_bytes.to_vec())
-            .map_err(|_| "Signature exceeds XDR bounds".to_string())?,
+        signature: stellar_xdr::curr::Signature(
+            BytesM::try_from(sig_bytes.to_vec())
+                .map_err(|_| "Signature exceeds XDR bounds".to_string())?,
+        ),
     };
 
     let mut sigs_vec: Vec<DecoratedSignature> = current_sigs.to_vec();
@@ -712,8 +716,8 @@ mod tests {
 
     #[test]
     fn test_guardrail_rejects_direct_payments() {
-        let source = "GA2C5RFPE6GCKMY3US5PAB6UZLKIGAHWKXX2GIOVPVUIV255KZG42TM5";
-        let dest = "GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H";
+        let source = "GAIQGTOBTTLLDJ4SWGGESM7UWJ2DI4K3ZNHUSHPDKJL2IE5FKY3BSRAA";
+        let dest = "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5";
 
         let source_raw = ed25519::PublicKey::from_string(source).unwrap();
         let dest_raw = ed25519::PublicKey::from_string(dest).unwrap();
@@ -721,17 +725,17 @@ mod tests {
         let payment_op = Operation {
             source_account: None,
             body: OperationBody::Payment(stellar_xdr::curr::PaymentOp {
-                destination: AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(dest_raw.0))),
+                destination: AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(dest_raw.0))).into(),
                 asset: stellar_xdr::curr::Asset::Native,
                 amount: 10_000_000,
             }),
         };
 
         let tx = Transaction {
-            source_account: AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(source_raw.0))),
+            source_account: AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(source_raw.0))).into(),
             fee: 100,
             seq_num: SequenceNumber(1),
-            time_bounds: None,
+            cond: stellar_xdr::curr::Preconditions::None,
             memo: stellar_xdr::curr::Memo::None,
             operations: vec![payment_op].try_into().unwrap(),
             ext: stellar_xdr::curr::TransactionExt::V0,
@@ -751,8 +755,8 @@ mod tests {
 
     #[test]
     fn test_guardrail_accepts_set_options_recovery() {
-        let source = "GA2C5RFPE6GCKMY3US5PAB6UZLKIGAHWKXX2GIOVPVUIV255KZG42TM5";
-        let new_signer = "GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H";
+        let source = "GAIQGTOBTTLLDJ4SWGGESM7UWJ2DI4K3ZNHUSHPDKJL2IE5FKY3BSRAA";
+        let new_signer = "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5";
 
         let env = build_recovery_transaction(source, new_signer).expect("Build failed");
         assert!(validate_recovery_transaction_guardrails(&env).is_ok());
@@ -762,7 +766,7 @@ mod tests {
     fn test_rate_limiting_enforces_max_3_attempts() {
         let audit = Arc::new(RwLock::new(AuditTrailVerifier::new()));
         let state = Sep30ServerState::new(audit);
-        let address = "GA2C5RFPE6GCKMY3US5PAB6UZLKIGAHWKXX2GIOVPVUIV255KZG42TM5";
+        let address = "GAIQGTOBTTLLDJ4SWGGESM7UWJ2DI4K3ZNHUSHPDKJL2IE5FKY3BSRAA";
 
         assert!(state.record_and_check_rate_limit(address).is_ok());
         assert!(state.record_and_check_rate_limit(address).is_ok());

@@ -344,6 +344,7 @@ pub struct MergeReport {
 }
 
 /// JSON event store with atomic, lock-guarded merges.
+#[derive(Clone)]
 pub struct FileEventStore {
     path: PathBuf,
 }

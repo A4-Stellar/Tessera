@@ -1,0 +1,18 @@
+[package]
+name = "tessera-no-std"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+description = "wasm-bindgen-free, zero-cost shared math and bit-packing abstractions for Tessera Soroban contracts (no_std)."
+keywords = ["no-std", "wasm", "soroban", "math", "utilities"]
+
+[lib]
+crate-type = ["rlib"]
+
+# Intentionally dependency-free: this crate must compile for
+# wasm32-unknown-unknown without std and without wasm-bindgen. The parent
+# contracts/Cargo.toml workspace adds it as a member; there is deliberately no
+# [workspace] table here so it inherits the workspace release profile (LTO,
+# opt-level="z", panic="abort", strip="symbols").
+[dependencies]

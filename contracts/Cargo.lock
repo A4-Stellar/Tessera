@@ -2091,6 +2091,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "tessera-no-std"
+version = "0.1.0"
+
+[[package]]
 name = "tessera-registry"
 version = "0.1.0"
 dependencies = [

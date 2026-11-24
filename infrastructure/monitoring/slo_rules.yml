@@ -464,3 +464,36 @@ groups:
           summary: "Tessera API latency (p99 < 100 ms) error budget exhausted"
           description: The 30-day latency SLO is currently breached.
           runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/infrastructure/monitoring/README.md#runbook
+
+  # Shadow indexing: the independent snapshot disagrees with the primary one.
+  # A divergence means a silent XDR parsing bug, a missed event, or a bad RPC
+  # node; the shadow snapshot is saved in the `forensics` RocksDB column family.
+  - name: tessera-indexer-integrity
+    interval: 30s
+    rules:
+      - alert: ShadowDivergence
+        expr: increase(rwa_shadow_divergence_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: page
+          component: indexer
+        annotations:
+          summary: "Shadow indexer diverged from primary on-chain state"
+          description: >-
+            The shadow verifier found a discrepancy in holder balances,
+            compliance states or asset metadata. Inspect the forensics column
+            family and GET /v1/admin/health/shadow before trusting API answers.
+          runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/docs/runbooks/indexer-lag.md
+      - alert: ShadowLagHigh
+        expr: rwa_shadow_lag_ledgers > 50
+        for: 5m
+        labels:
+          severity: ticket
+          component: indexer
+        annotations:
+          summary: "Shadow indexer is more than 50 ledgers behind the primary"
+          description: >-
+            Divergence detection is degraded while the shadow snapshot lags;
+            check the independent RPC endpoint configured via
+            RWA_SHADOW_RPC_URL.
+          runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/docs/runbooks/indexer-lag.md

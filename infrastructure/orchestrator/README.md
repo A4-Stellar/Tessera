@@ -28,6 +28,23 @@ cargo run --release -- orchestrator.toml
 
 Logs are JSON (`RUST_LOG` controls verbosity).
 
+### Kafka Schema Registry
+
+The same binary can serve the Avro schemas registered by the API indexer:
+
+```sh
+export SCHEMA_REGISTRY_DSN=postgres://tessera:...@db-host/tessera
+export SCHEMA_REGISTRY_ADDR=0.0.0.0:8081
+cargo run --release -- schema-registry
+```
+
+It exposes the Confluent Schema Registry protocol (`/subjects`,
+`/subjects/{subject}/versions`, `/schemas/ids/{id}`, `/compatibility/...`)
+over the API's `contract_event_schema` PostgreSQL table. The Python analytics
+SDK (`tessera_analytics.kafka_events`) reads Kafka messages framed with the
+returned schema ids and applies reader-schema evolution (e.g. an added nullable
+`memo` field on `Transferred` decodes old events as `"memo": null`).
+
 ## Cluster requirements
 
 - `synchronous_standby_names` on the primary must list the standby that should

@@ -1,0 +1,40 @@
+export const metadata = {
+  title: "API Versions",
+  description: "Supported Tessera API versions, deprecation schedule, and migration paths.",
+  canonical: "/docs/api-versions",
+};
+
+# API Versions
+
+> **Auto-generated file — do not edit by hand.** Regenerate it with
+> `node docs/scripts/generate-versions-page.mjs` after changing
+> `api/deprecation_map.toml`.
+
+The Tessera REST API versions data endpoints with a path prefix (`/v1` today,
+`/v2` reserved for the next breaking release). Protocol and operations
+endpoints such as `/health`, `/metrics`, `/.well-known/stellar.toml`, and
+`/graphql` are not versioned.
+
+## Supported versions
+
+| Version | Status | Earliest sunset |
+| :------ | :----- | :-------------- |
+| `v1` | `active` | `2025-01-01` |
+| `v2` | `beta` | — |
+
+## Deprecated paths
+
+A request to a deprecated path receives a `Sunset` header and
+`Link: <successor>; rel="successor-version"` until its sunset date. On and
+after that date the API returns `410 Gone` with a `migration_guide` field
+pointing at the documentation below. Paths ending in `/*` match every route
+under that prefix.
+
+| Deprecated path | Sunset | Successor | Migration guide |
+| :-------------- | :----- | :-------- | :-------------- |
+| `/version` | `2027-06-30` | `/v1/meta/versions` | [Migration guide](https://github.com/A4-Stellar/Tessera/blob/main/docs/content/en/docs/api-versions.mdx) |
+| `/sep24/*` | `2027-09-30` | `/v1/sep24/*` | [Migration guide](https://github.com/A4-Stellar/Tessera/blob/main/docs/content/en/docs/api-versions.mdx) |
+| `/sep30/*` | `2027-09-30` | `/v1/sep30/*` | [Migration guide](https://github.com/A4-Stellar/Tessera/blob/main/docs/content/en/docs/api-versions.mdx) |
+| `/v1/legacy/reports` | `2025-01-01` | `/v1/reports` | [Migration guide](https://github.com/A4-Stellar/Tessera/blob/main/docs/content/en/docs/api-versions.mdx) |
+
+Clients can fetch this schedule at runtime from `GET /v1/meta/versions`.

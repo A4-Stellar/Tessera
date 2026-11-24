@@ -24,6 +24,12 @@
 //! [`XdrError::Unsupported`] so callers can fall back to the allocating
 //! `stellar_xdr` decoder.
 //!
+//! Typed, schema-driven event deserialisation is layered on top of these views
+//! by `super::event_decoder`, which looks up the Avro schema registered for
+//! `(contract_id, event_name)` in `super::schema_registry`. This keeps the
+//! allocation-free wire reader usable independently by the benchmarks while
+//! giving consumers schema-evolution-safe JSON.
+//!
 //! This file is self-contained (no `crate::` imports) so the criterion bench
 //! and the allocation test can include it directly.
 
