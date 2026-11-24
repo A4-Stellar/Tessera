@@ -1,0 +1,67 @@
+export const metadata = {
+  title: "Event Schemas",
+  description: "Versioned Avro schemas for Soroban contract events and compatibility rules.",
+  canonical: "/docs/event-schemas",
+};
+
+# Event Schemas
+
+Soroban contract events are emitted as untyped `ScVal` maps. Tessera keeps an
+Avro schema for every `(contract_id, event_name)` pair so consumers receive
+stable, typed JSON even when a contract is upgraded.
+
+## How schemas are registered
+
+1. The indexer compares the contract WASM hash with the last registered hash.
+2. On a change it fetches the new ABI with `soroban contract inspect` and
+   generates an Avro record schema for each event (for example `Transferred`).
+3. The schema is stored in PostgreSQL (`contract_event_schema`) and served by
+   the orchestrator's Confluent-compatible Schema Registry on port 8081.
+4. Events decoded by the indexer (`indexer/event_decoder.rs`, built on the
+   zero-copy `xdr_parser`) and by the Python analytics SDK use the registered
+   schema for deserialization.
+
+## Compatibility
+
+Each schema version declares a compatibility mode. Tessera uses **backward**
+compatibility by default; Confluent's `BACKWARD`, `FORWARD`, `FULL` and `NONE`
+rules are supported by both the Rust registry and the Kafka Schema Registry.
+
+A new field must have a default to be backward compatible. For example, adding
+a nullable `memo` to `Transferred`:
+
+```json
+{
+  "name": "memo",
+  "type": ["null", "string"],
+  "default": null
+}
+```
+
+Events written with the old schema still decode — `memo` is `null`. Fields
+unknown to the reader are skipped, so adding fields is forward compatible as
+well.
+
+## Reading events from Kafka
+
+The Python analytics SDK consumes the `tessera.contract-events` topic directly:
+
+```python
+from tessera_analytics import (
+    AvroBinaryDecoder,
+    CachedSchemaRegistryClient,
+    KafkaEventSource,
+)
+
+registry = CachedSchemaRegistryClient("http://localhost:8081")
+source = KafkaEventSource(consumer, AvroBinaryDecoder(registry))
+for event in source.events(limit=100):
+    print(event["event_name"], event["amount"], event.get("memo"))
+```
+
+Messages use the Confluent framing (magic byte `0`, 4-byte schema id, Avro
+binary payload). The reader fetches the writer schema by id and applies the
+latest subject schema for evolution.
+
+See `docs/content/en/docs/api-versions.mdx` for the endpoint deprecation
+schedule.

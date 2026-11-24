@@ -17,6 +17,7 @@
 //!    the entire cryptographic hash chain, detecting any data corruption, sequence gap,
 //!    or timestamp inconsistency.
 
+pub mod chain_verifier;
 pub mod mmr;
 
 use std::sync::{

@@ -1,0 +1,273 @@
+name: WASM Size Budget
+
+# Enforces the 65,536-byte Soroban contract limit, reports regressions against
+# main, and keeps a code-size issue up to date for contracts near the limit.
+
+on:
+  pull_request:
+    paths:
+      - 'contracts/**'
+      - '.github/workflows/wasm-size.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # (a) Strict size gate. Builds with the existing release profile, optimises
+  #     with wasm-opt, and fails on any contract over its budget.
+  # ---------------------------------------------------------------------------
+  size-budget:
+    name: Size budget gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: contracts -> target
+
+      - name: Install binaryen (wasm-opt)
+        run: |
+          if command -v wasm-opt >/dev/null 2>&1; then
+            wasm-opt --version
+          elif sudo apt-get update && sudo apt-get install -y binaryen; then
+            wasm-opt --version
+          else
+            echo "::warning::binaryen installation failed; continuing with SKIP_WASM_OPT=1"
+            echo "SKIP_WASM_OPT=1" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build release WASM
+        working-directory: contracts
+        run: cargo build --release --target wasm32-unknown-unknown
+
+      - name: Optimize and verify WASM sizes
+        run: |
+          chmod +x contracts/scripts/optimize_wasm.sh
+          SIZE_REPORT="$GITHUB_WORKSPACE/contracts/size-report.json" \
+            bash contracts/scripts/optimize_wasm.sh
+
+      - name: Emit machine-readable size report
+        run: |
+          python3 contracts/scripts/check_wasm_size.py \
+            --wasm-dir contracts/target/wasm32-unknown-unknown/release \
+            --budget contracts/size_budget.json \
+            --json contracts/size-report.json
+
+      - name: Upload current size artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wasm-size-current
+          path: |
+            contracts/target/wasm32-unknown-unknown/release/*.wasm
+            contracts/size-report.json
+          if-no-files-found: error
+          retention-days: 14
+
+  # ---------------------------------------------------------------------------
+  # Baseline build from main. This job is best-effort: if main cannot be built
+  # or checked out, the regression job skips gracefully instead of failing.
+  # ---------------------------------------------------------------------------
+  build-baseline:
+    name: Build baseline from main
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout main for baseline sources
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: baseline
+          fetch-depth: 1
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install binaryen (wasm-opt)
+        run: |
+          if command -v wasm-opt >/dev/null 2>&1; then
+            wasm-opt --version
+          elif sudo apt-get update && sudo apt-get install -y binaryen; then
+            wasm-opt --version
+          else
+            echo "SKIP_WASM_OPT=1" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build, optimize and report baseline sizes
+        run: |
+          chmod +x contracts/scripts/optimize_wasm.sh
+          CONTRACTS_DIR="$GITHUB_WORKSPACE/baseline/contracts" \
+            BUDGET="$GITHUB_WORKSPACE/contracts/size_budget.json" \
+            SIZE_REPORT="$GITHUB_WORKSPACE/baseline-size-report.json" \
+            bash contracts/scripts/optimize_wasm.sh
+
+      - name: Upload baseline size report
+        uses: actions/upload-artifact@v4
+        with:
+          name: wasm-size-baseline
+          path: baseline-size-report.json
+          if-no-files-found: error
+          retention-days: 14
+
+  # ---------------------------------------------------------------------------
+  # (b) Regression comment. Forks and dependabot are explicitly guarded so a
+  #     read-only token can never turn into a hard CI failure.
+  # ---------------------------------------------------------------------------
+  size-regression:
+    name: Size regression comment
+    needs: [size-budget, build-baseline]
+    if: ${{ always() && needs.size-budget.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download current size report
+        uses: actions/download-artifact@v4
+        with:
+          name: wasm-size-current
+          path: current
+
+      - name: Download baseline size report
+        id: download-baseline
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: wasm-size-baseline
+          path: baseline
+
+      - name: Check baseline availability
+        id: baseline
+        run: |
+          if [ -f baseline/baseline-size-report.json ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Generate regression report
+        if: ${{ steps.baseline.outputs.available == 'true' }}
+        run: |
+          python3 contracts/scripts/report_size_regression.py \
+            --current current/size-report.json \
+            --baseline baseline/baseline-size-report.json \
+            --comment regression.md
+
+      - name: Post regression comment
+        if: >-
+          ${{
+            github.event_name == 'pull_request' &&
+            github.event.pull_request.head.repo.full_name == github.repository &&
+            github.actor != 'dependabot[bot]' &&
+            steps.baseline.outputs.available == 'true'
+          }}
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- tessera-wasm-size-regression -->';
+            const body = fs.readFileSync('regression.md', 'utf8');
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const { data: comments } = await github.rest.issues.listComments({
+              owner, repo, issue_number, per_page: 100,
+            });
+            const existing = comments.find((comment) => comment.body && comment.body.includes(marker));
+            const common = { owner, repo, issue_number, body };
+            if (existing) {
+              await github.rest.issues.updateComment({ ...common, comment_id: existing.id });
+              core.info(`Updated existing size regression comment ${existing.id}`);
+            } else {
+              await github.rest.issues.createComment(common);
+              core.info('Posted new size regression comment');
+            }
+
+  # ---------------------------------------------------------------------------
+  # (c) Near-limit issue automation via gh CLI. Only trusted, same-repo PRs
+  #     with a token can create or edit repository issues.
+  # ---------------------------------------------------------------------------
+  near-limit-issue:
+    name: Near-limit code-size issue
+    needs: [size-budget]
+    if: >-
+      ${{
+        github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name == github.repository
+      }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download WASM artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: wasm-size-current
+          path: artifacts
+
+      - name: Generate issue body
+        run: |
+          python3 contracts/scripts/check_wasm_size.py \
+            --wasm-dir artifacts/target/wasm32-unknown-unknown/release \
+            --budget contracts/size_budget.json \
+            --check-issues > issue-body.md
+
+      - name: Detect token availability
+        id: token
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -n "${GH_TOKEN:-}" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open or update code-size issue
+        if: ${{ steps.token.outputs.available == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if ! grep -q '^|' issue-body.md; then
+            echo "No contracts near their size budget; nothing to report."
+            exit 0
+          fi
+          title="WASM contracts approaching size budget"
+          existing="$(gh issue list --repo "$GH_REPO" --label code-size --state open \
+            --search "$title in:title" --json number --jq '.[0].number // empty' || true)"
+          if [ -n "$existing" ]; then
+            gh issue edit "$existing" --repo "$GH_REPO" --title "$title" --body-file issue-body.md
+            echo "Updated existing code-size issue #$existing"
+          else
+            if gh issue create --repo "$GH_REPO" --title "$title" --body-file issue-body.md --label code-size; then
+              echo "Created new code-size issue with the code-size label"
+            else
+              echo "::warning::Could not apply the code-size label (it may not exist); retrying without it."
+              gh issue create --repo "$GH_REPO" --title "$title" --body-file issue-body.md
+            fi
+          fi

@@ -537,12 +537,12 @@ fn bls_point_from_bytes(bytes: &[u8; 96]) -> Option<BlsG1Affine> {
 
 fn bls_fq_from_bytes(bytes: &[u8]) -> Option<BlsFq> {
     let value = BlsFq::from_be_bytes_mod_order(bytes);
-    (field_bytes::<48>(&value) == bytes).then_some(value)
+    (field_bytes::<48, BlsFq>(&value).as_slice() == bytes).then_some(value)
 }
 
 fn bls_scalar_from_bytes(bytes: &[u8; 32]) -> Option<BlsFr> {
     let value = BlsFr::from_be_bytes_mod_order(bytes);
-    (field_bytes::<32>(&value) == bytes).then_some(value)
+    (field_bytes::<32, BlsFr>(&value).as_slice() == bytes.as_slice()).then_some(value)
 }
 
 fn field_bytes<const N: usize, F: PrimeField>(value: &F) -> [u8; N] {
@@ -558,7 +558,6 @@ fn derive_bls_point(
 ) -> Result<BlsG1Affine, ApiError> {
     hasher
         .hash(message)
-        .map(|point| point.into_affine())
         .map_err(|_| ApiError::Unavailable("BLS12-381 hash-to-curve failed".into()))
 }
 
