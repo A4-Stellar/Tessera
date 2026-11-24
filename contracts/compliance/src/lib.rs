@@ -23,6 +23,20 @@ pub use attestation::{IdentityAttestation, RevocationProof};
 pub use oracle_verifier::{OracleAttestation, OracleConfig, OracleSignature};
 pub use verifiable_credentials::VerifiableCredential;
 pub use zk_aggregator::{AggregatedProof, AggregationVerifyingKey, ZkAccreditation};
+use soroban_sdk::{contractclient, contracttype, Address, Bytes, BytesN, Env, Vec};
+
+#[contracttype]
+enum AggKey {
+    Verifier,            // Address of the aggregate-verifier contract (set by admin)
+    Slot(Address),       // user -> bit slot in the bitmap
+    BitmapChunk(u32),    // chunk index -> 256 bits
+}
+
+#[contractclient(name = "AggregateVerifierClient")]
+pub trait AggregateVerifier {
+    /// True iff `proof` is a valid aggregate proof whose public-input digest equals `digest`.
+    fn verify(env: Env, proof: Bytes, digest: BytesN<32>) -> bool;
+}
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
