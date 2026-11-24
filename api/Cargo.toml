@@ -46,7 +46,7 @@ ark-ec = "0.4"
 ark-ff = "0.4"
 ark-groth16 = "0.4"
 ark-snark = "0.4"
-sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "tls-rustls-ring-webpki", "postgres", "json"] }
+sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "tls-rustls-ring-webpki", "postgres", "json", "chrono"] }
 futures = "0.3"
 aes-gcm = "0.10"
 csv = "1.3"

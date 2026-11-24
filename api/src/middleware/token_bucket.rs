@@ -492,6 +492,7 @@ mod tests {
             store: Arc::new(MemoryBucketStore::default()),
             default_tier: TIER,
             api_key_tiers: TokenBucketState::parse_api_key_tiers("ent=100:50, bad, x=1:y"),
+            sandbox_mode: false,
             tenant_limits: None,
             tenant_pool_error: None,
             tenant_cache: DashMap::new(),
