@@ -109,7 +109,6 @@ mod tests {
     }
 
     #[test]
-<<<<<<< HEAD
     fn parses_sandbox_start_command() {
         let cli = Cli::try_parse_from([
             "tessera",
@@ -138,7 +137,9 @@ mod tests {
         assert_eq!(start.seed, Some(7));
         assert!(start.print_only);
         assert!(start.wait);
-=======
+    }
+
+    #[test]
     fn parses_dev_command_with_custom_flags() {
         let cli = Cli::try_parse_from([
             "tessera-cli",
@@ -154,13 +155,14 @@ mod tests {
             "--once",
         ])
         .expect("dev command should parse");
-        let Command::Dev(args) = cli.command;
+        let Command::Dev(args) = cli.command else {
+            panic!("expected dev command");
+        };
         assert_eq!(args.api_port, 8081);
         assert_eq!(args.rpc_url, "http://localhost:8000");
         assert_eq!(args.docs_port, 3001);
         assert!(args.no_docker);
         assert!(args.skip_docs);
         assert!(args.once);
->>>>>>> upstream/main
     }
 }

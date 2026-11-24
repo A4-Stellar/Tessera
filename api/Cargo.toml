@@ -59,7 +59,10 @@ pulsar = { version = "6.9", features = ["tokio", "lz4", "snap", "zstd", "compres
 zstd = "0.13"
 base64 = "0.22"
 mpc-signer = { path = "../services/mpc-signer" }
-ed25519-dalek = { version = "2", default-features = false }
+ed25519-dalek = { version = "2", default-features = false, features = ["rand_core"] }
+# ed25519-dalek 2.x signs with rand_core 0.6's CryptoRng; the repository's
+# `rand` is 0.9, so SEP-30 needs the matching OsRng explicitly.
+rand_core = { version = "0.6", features = ["getrandom"] }
 
 [dev-dependencies]
 insta = { version = "1", features = ["json"] }

@@ -21,6 +21,7 @@ pub mod sandbox;
 pub mod search;
 pub mod security;
 pub mod sep24;
+pub mod sep30;
 #[expect(
     dead_code,
     reason = "The simulation placeholder is not part of the active API router."

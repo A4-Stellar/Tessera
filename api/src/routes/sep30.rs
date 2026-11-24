@@ -23,13 +23,13 @@ use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use mpc_signer::{
     DistributedKeyGenerator, MpcCoordinator, MpcNetwork, MpcNode, SignRequest, ThresholdConfig,
 };
-use rand::rngs::OsRng;
+use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use stellar_strkey::ed25519;
 use stellar_xdr::curr::{
-    AccountId, BytesM, DecoratedSignature, Hash, Limits, Operation, OperationBody,
-    PublicKey, ReadXdr, SequenceNumber, SetOptionsOp, SignerKey, Uint256,
+    AccountId, BytesM, DecoratedSignature, Hash, Limits, Limited, Operation, OperationBody,
+    Preconditions, PublicKey, ReadXdr, SequenceNumber, SetOptionsOp, SignerKey, Uint256,
     Transaction, TransactionEnvelope, TransactionSignaturePayload,
     TransactionSignaturePayloadTaggedTransaction, TransactionV1Envelope, WriteXdr,
 };
@@ -612,10 +612,10 @@ pub fn build_recovery_transaction(
     };
 
     let tx = Transaction {
-        source_account: AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(source_raw.0))),
+        source_account: AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(source_raw.0))).into(),
         fee: 100,
         seq_num: SequenceNumber(1),
-        time_bounds: None,
+        cond: Preconditions::None,
         memo: stellar_xdr::curr::Memo::None,
         operations: vec![set_options_op].try_into().unwrap(),
         ext: stellar_xdr::curr::TransactionExt::V0,
@@ -642,8 +642,9 @@ pub async fn cosign_transaction(
                 tagged_transaction: TransactionSignaturePayloadTaggedTransaction::Tx(v1.tx.clone()),
             };
             let mut buf = Vec::new();
+            let mut limited = Limited::new(&mut buf, Limits::none());
             tx_payload
-                .write_xdr(&mut buf)
+                .write_xdr(&mut limited)
                 .map_err(|e| format!("XDR error: {e}"))?;
             (buf, &mut v1.signatures)
         }
@@ -683,8 +684,10 @@ pub async fn cosign_transaction(
 
     let decorated_sig = DecoratedSignature {
         hint: stellar_xdr::curr::SignatureHint(hint),
-        signature: BytesM::try_from(sig_bytes.to_vec())
-            .map_err(|_| "Signature exceeds XDR bounds".to_string())?,
+        signature: stellar_xdr::curr::Signature(
+            BytesM::try_from(sig_bytes.to_vec())
+                .map_err(|_| "Signature exceeds XDR bounds".to_string())?,
+        ),
     };
 
     let mut sigs_vec: Vec<DecoratedSignature> = current_sigs.to_vec();
@@ -721,17 +724,17 @@ mod tests {
         let payment_op = Operation {
             source_account: None,
             body: OperationBody::Payment(stellar_xdr::curr::PaymentOp {
-                destination: AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(dest_raw.0))),
+                destination: AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(dest_raw.0))).into(),
                 asset: stellar_xdr::curr::Asset::Native,
                 amount: 10_000_000,
             }),
         };
 
         let tx = Transaction {
-            source_account: AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(source_raw.0))),
+            source_account: AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(source_raw.0))).into(),
             fee: 100,
             seq_num: SequenceNumber(1),
-            time_bounds: None,
+            cond: Preconditions::None,
             memo: stellar_xdr::curr::Memo::None,
             operations: vec![payment_op].try_into().unwrap(),
             ext: stellar_xdr::curr::TransactionExt::V0,
