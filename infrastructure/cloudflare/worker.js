@@ -28,6 +28,20 @@
 /** Paths (default-branch ``/stats`` aliases included) that get edge caching. */
 export const DEFAULT_CACHE_PATHS = ['/stats', '/assets', '/v1/stats', '/v1/assets'];
 
+/** Known query parameters preserved during cache-key normalisation. */
+export const KNOWN_QUERY_PARAMS = [
+  'asset_type',
+  'filter',
+  'include_inactive',
+  'issuer',
+  'limit',
+  'offset',
+  'order',
+  'page',
+  'sort',
+  'status',
+];
+
 /** Methods the edge forwards. Everything else is rejected with `405`. */
 export const DEFAULT_ALLOWED_METHODS = ['GET', 'HEAD', 'POST', 'OPTIONS'];
 
@@ -680,17 +694,115 @@ export function getCacheStorage(env = {}, deps = {}) {
   return null;
 }
 
+/** Module-level in-flight origin fetch map for request coalescing. */
+const inFlightOriginFetches = new Map();
+
+/** Resolve in-flight request coalescing map, preferring an injected test map. */
+export function getInFlightMap(deps = {}) {
+  return deps.inFlightFetches || deps.inFlightRequests || inFlightOriginFetches;
+}
+
+/** Check whether a request path matches edge-caching patterns. */
+export function isCacheablePath(pathname, config) {
+  if (config.cachePaths && config.cachePaths.includes(pathname)) return true;
+  // Support /assets/:id and /v1/assets/:id
+  if (/^\/(?:v1\/)?assets\/[^/]+$/.test(pathname)) return true;
+  if (/^\/(?:v1\/)?stats$/.test(pathname)) return true;
+  return false;
+}
+
 /** Only unauthenticated `GET`s to the configured static paths are cacheable. */
 export function isCacheableRequest(request, config) {
   if ((request.method || 'GET').toUpperCase() !== 'GET') return false;
   if (request.headers.has('authorization')) return false;
   const pathname = new URL(request.url).pathname;
-  return config.cachePaths.includes(pathname);
+  return isCacheablePath(pathname, config);
 }
 
-function buildCacheKey(request) {
-  const url = new URL(request.url);
-  return new Request(`${url.origin}${url.pathname}${url.search}`, { method: 'GET' });
+/**
+ * Normalise cache key by stripping unknown query parameters and sorting
+ * known parameters in a deterministic alphabetical order.
+ */
+export function normalizeCacheKeyUrl(rawUrl) {
+  const url = new URL(rawUrl);
+  const params = new URLSearchParams(url.search);
+  const retained = [];
+  for (const [key, value] of params.entries()) {
+    if (KNOWN_QUERY_PARAMS.includes(key)) {
+      retained.push([key, value]);
+    }
+  }
+  retained.sort((a, b) => a[0].localeCompare(b[0]) || a[1].localeCompare(b[1]));
+  const search = retained.length > 0
+    ? '?' + retained.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&')
+    : '';
+  return `${url.origin}${url.pathname}${search}`;
+}
+
+export function buildCacheKey(request) {
+  return new Request(normalizeCacheKeyUrl(request.url), { method: 'GET' });
+}
+
+/**
+ * Check whether a requested asset or contract has been invalidated in Workers KV.
+ * Supports /assets/:id, /v1/assets/:id and global invalidations.
+ */
+export async function isAssetInvalidated(pathname, env = {}, deps = {}) {
+  const kv =
+    env.CACHE_INVALIDATION ||
+    env.INVALIDATED_CONTRACTS ||
+    env.INVALIDATIONS ||
+    env.EDGE_CACHE_KV;
+  if (!kv || typeof kv.get !== 'function') return false;
+
+  const match = pathname.match(/^\/(?:v1\/)?assets\/([^/]+)$/);
+  if (match) {
+    const assetId = decodeURIComponent(match[1]);
+    try {
+      const direct = await kv.get(`invalidated:${assetId}`);
+      if (direct !== null && direct !== undefined) return true;
+      const rawDirect = await kv.get(assetId);
+      if (rawDirect !== null && rawDirect !== undefined) return true;
+
+      const list = await kv.get('invalidated_contracts', 'json');
+      if (Array.isArray(list) && (list.includes(assetId) || list.some((id) => String(id) === String(assetId)))) {
+        return true;
+      }
+    } catch {
+      // Best effort KV lookup failure fails safe to cached
+    }
+    return false;
+  }
+
+  if (/^\/(?:v1\/)?(?:assets|stats)$/.test(pathname)) {
+    try {
+      const globalInv = await kv.get('global_invalidation');
+      if (globalInv !== null && globalInv !== undefined) return true;
+    } catch {
+      // Best effort
+    }
+  }
+
+  return false;
+}
+
+/** Logpush event emission for Cf-Cache-Status observability. */
+export function emitLogpush(request, marker, config, deps = {}) {
+  const entry = {
+    logpush: true,
+    timestamp: deps.now || Date.now(),
+    method: request.method,
+    url: request.url,
+    cf_cache_status: marker,
+    client_ip: resolveClientIp(request),
+    user_agent: request.headers.get('user-agent'),
+  };
+
+  if (deps.logpush && typeof deps.logpush.log === 'function') {
+    deps.logpush.log(entry);
+  } else if (deps.logger && typeof deps.logger.info === 'function') {
+    deps.logger.info(`[logpush] ${JSON.stringify(entry)}`);
+  }
 }
 
 function isCacheableOriginResponse(response, config) {
@@ -719,6 +831,7 @@ async function bufferResponse(response) {
 function withCacheMarker(response, marker) {
   const headers = new Headers(response.headers);
   headers.set('x-edge-cache', marker);
+  headers.set('cf-cache-status', marker);
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,
@@ -731,6 +844,7 @@ async function materializeCached(cached, marker, ageSeconds) {
   const headers = new Headers(cached.headers);
   headers.delete('x-edge-stored-at');
   headers.set('x-edge-cache', marker);
+  headers.set('cf-cache-status', marker);
   if (Number.isFinite(ageSeconds)) headers.set('age', String(Math.max(0, Math.floor(ageSeconds))));
   return new Response(body, {
     status: cached.status,
@@ -748,6 +862,7 @@ function maybeNotModified(request, response) {
   const headers = new Headers();
   headers.set('etag', etag);
   headers.set('x-edge-cache', 'HIT');
+  headers.set('cf-cache-status', 'HIT');
   const cacheControl = response.headers.get('cache-control');
   if (cacheControl) headers.set('cache-control', cacheControl);
   return new Response(null, { status: 304, headers });
@@ -766,6 +881,9 @@ async function fetchAndStore(request, env, config, deps, cache, cacheKey) {
 
   const cacheHeaders = new Headers(buffered.headers);
   cacheHeaders.set('x-edge-stored-at', String(deps.now));
+  if (!cacheHeaders.has('cache-control')) {
+    cacheHeaders.set('cache-control', 'public, max-age=0, s-maxage=10');
+  }
   try {
     await cache.put(
       cacheKey,
@@ -796,6 +914,15 @@ async function handleCacheableRequest(request, env, ctx, config, deps) {
   const cacheKey = buildCacheKey(request);
   const freshSeconds = config.cacheTtlSeconds;
   const staleSeconds = config.cacheTtlSeconds + config.cacheStaleSeconds;
+  const pathname = new URL(request.url).pathname;
+
+  // Invalidation check against Workers KV namespace
+  const invalidated = await isAssetInvalidated(pathname, env, deps);
+  if (invalidated) {
+    emitLogpush(request, 'BYPASS', config, deps);
+    const originResponse = await fetchFromOrigin(request, env, config, deps);
+    return withCacheMarker(originResponse, 'BYPASS');
+  }
 
   let cached = null;
   if (cache) {
@@ -811,17 +938,57 @@ async function handleCacheableRequest(request, env, ctx, config, deps) {
     const ageSeconds = storedAt > 0 ? Math.max(0, (deps.now - storedAt) / 1000) : Number.POSITIVE_INFINITY;
 
     if (ageSeconds <= freshSeconds) {
+      emitLogpush(request, 'HIT', config, deps);
       return maybeNotModified(request, await materializeCached(cached, 'HIT', ageSeconds));
     }
     if (ageSeconds <= staleSeconds) {
       const revalidation = revalidateCache(request, env, config, deps, cache, cacheKey);
       if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(revalidation);
       else await revalidation;
+      emitLogpush(request, 'STALE', config, deps);
       return materializeCached(cached, 'STALE', ageSeconds);
     }
   }
 
-  return withCacheMarker(await fetchAndStore(request, env, config, deps, cache, cacheKey), 'MISS');
+  // Request coalescing: only 1 origin fetch per cache-miss for the same cache key
+  const coalescingKey = cacheKey.url;
+  const inFlight = getInFlightMap(deps);
+
+  if (inFlight.has(coalescingKey)) {
+    const bufferedShared = await inFlight.get(coalescingKey);
+    emitLogpush(request, 'MISS', config, deps);
+    const sharedResponse = new Response(bufferedShared.body.slice(0), {
+      status: bufferedShared.status,
+      statusText: bufferedShared.statusText,
+      headers: new Headers(bufferedShared.headers),
+    });
+    return withCacheMarker(sharedResponse, 'MISS');
+  }
+
+  const fetchPromise = (async () => {
+    try {
+      const res = await fetchAndStore(request, env, config, deps, cache, cacheKey);
+      const bodyBuffer = await res.arrayBuffer();
+      return {
+        status: res.status,
+        statusText: res.statusText,
+        headers: Array.from(res.headers.entries()),
+        body: bodyBuffer,
+      };
+    } finally {
+      inFlight.delete(coalescingKey);
+    }
+  })();
+
+  inFlight.set(coalescingKey, fetchPromise);
+  const bufferedResult = await fetchPromise;
+  emitLogpush(request, 'MISS', config, deps);
+  const originResponse = new Response(bufferedResult.body.slice(0), {
+    status: bufferedResult.status,
+    statusText: bufferedResult.statusText,
+    headers: new Headers(bufferedResult.headers),
+  });
+  return withCacheMarker(originResponse, 'MISS');
 }
 
 /* ------------------------------------------------------------------------- *

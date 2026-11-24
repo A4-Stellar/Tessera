@@ -7,10 +7,12 @@ pub mod dividends;
 pub mod dlq;
 pub mod events;
 pub mod export;
+pub mod forensics;
 pub mod holders;
 pub mod portfolio;
 pub mod privacy;
 pub mod proofs;
+pub mod prospectus;
 #[expect(
     dead_code,
     reason = "The search placeholder is not part of the active API router."
@@ -159,6 +161,8 @@ pub fn router(state: AppState) -> Router {
         .route("/assets/:id/compliance", get(compliance::summary))
         .route("/assets/:id/dividends", get(dividends::list))
         .route("/assets/:id/distributions/:did", get(dividends::get_one))
+        .route("/assets/:id/prospectus", get(prospectus::get_prospectus))
+        .route("/assets/:id/prospectus/history", get(prospectus::get_prospectus_history))
         .route("/assets/:id/export", get(export::export))
         .route("/holders/:address", get(holders::by_address))
         .route(
@@ -233,6 +237,10 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/admin/dlq/retry", axum::routing::post(dlq::retry))
         // Issue #26: per-key differential-privacy budget consumption.
         .route("/v1/admin/privacy/budget", get(privacy::budget))
+        // Issue #83: contract event replay and state reconstruction for audit forensics.
+        .route("/v1/admin/forensics/replay", get(forensics::replay_forensics))
+        // Issue #87: prospectus upload and on-chain hash attestation.
+        .route("/v1/admin/assets/:id/prospectus", axum::routing::post(prospectus::upload_prospectus))
         // `route_layer` (rather than `layer`) so the middleware runs after
         // route matching and can read `MatchedPath` from the request
         // extensions for a low-cardinality route label.
