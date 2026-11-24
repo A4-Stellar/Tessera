@@ -5,12 +5,29 @@ route:
   group_interval: 5m
   repeat_interval: 4h
   routes:
+    # Issue #474: P1 alerts go to Grafana OnCall, which runs the escalation
+    # chain (channel -> 5 min -> on-call engineer -> 15 min -> manager) and
+    # forwards the alert to the triage bot. `continue: false` so the same
+    # alert does not also page through PagerDuty.
+    - matchers: [priority="P1"]
+      receiver: grafana-oncall
+      group_by: ['...']
+      group_wait: 10s
+      continue: false
     - matchers: [severity="critical"]
       receiver: pagerduty
       continue: false
     - matchers: [severity="warning"]
       receiver: warning-chat
 receivers:
+  # Grafana OnCall "Alertmanager" integration URL, mounted as a secret file
+  # (terraform output `alertmanager_integration_url` of
+  # infrastructure/terraform/modules/grafana-oncall).
+  - name: grafana-oncall
+    webhook_configs:
+      - url_file: /etc/alertmanager/secrets/grafana-oncall-url
+        send_resolved: true
+        max_alerts: 0
   - name: pagerduty
     pagerduty_configs:
       - routing_key_file: /etc/alertmanager/secrets/pagerduty-routing-key

@@ -13,6 +13,7 @@ use soroban_sdk::{
 };
 
 mod attestation;
+pub mod multisig_transfer;
 mod oracle_verifier;
 pub mod velocity;
 mod verifiable_credentials;
@@ -20,9 +21,24 @@ pub mod zk_aggregator;
 #[cfg(test)]
 mod zk_aggregator_test;
 pub use attestation::{IdentityAttestation, RevocationProof};
+pub use multisig_transfer::{MultiSigTransferPolicy, PendingTransfer};
 pub use oracle_verifier::{OracleAttestation, OracleConfig, OracleSignature};
 pub use verifiable_credentials::VerifiableCredential;
 pub use zk_aggregator::{AggregatedProof, AggregationVerifyingKey, ZkAccreditation};
+use soroban_sdk::{contractclient, contracttype, Address, Bytes, BytesN, Env, Vec};
+
+#[contracttype]
+enum AggKey {
+    Verifier,            // Address of the aggregate-verifier contract (set by admin)
+    Slot(Address),       // user -> bit slot in the bitmap
+    BitmapChunk(u32),    // chunk index -> 256 bits
+}
+
+#[contractclient(name = "AggregateVerifierClient")]
+pub trait AggregateVerifier {
+    /// True iff `proof` is a valid aggregate proof whose public-input digest equals `digest`.
+    fn verify(env: Env, proof: Bytes, digest: BytesN<32>) -> bool;
+}
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -81,6 +97,21 @@ pub enum Error {
     VelocityWindowInvalid = 24,
     VelocityCapInvalid = 25,
     VelocityReentrant = 26,
+    /// Issue #478 (board-approved transfers), appended after 26.
+    MultisigPolicyInvalid = 27,
+    MultisigPolicyNotSet = 28,
+    /// The amount does not need board approval; use a normal transfer.
+    BelowMultisigThreshold = 29,
+    NotBoardSigner = 30,
+    AlreadySigned = 31,
+    /// Unknown id, or the pending transfer already expired from storage.
+    PendingTransferNotFound = 32,
+    PendingTransferExpired = 33,
+    /// A party is no longer allowlisted, or the velocity cap was hit.
+    MultisigTransferNotCompliant = 34,
+    MultisigInvalidAmount = 35,
+    /// The policy changed after the transfer was requested.
+    MultisigPolicyChanged = 36,
 }
 
 #[derive(Clone)]
@@ -681,6 +712,65 @@ impl ComplianceContract {
             .filter(|a| env.ledger().sequence() < a.valid_until)
     }
 
+    // ---- issue #478: multi-signature board approval for large transfers ----
+
+    /// Configure the board policy: transfers of `token` above
+    /// `threshold_amount` need `required_signatures` distinct co-signers from
+    /// `board`. `expiry_ledgers = 0` uses the 24 h default. Replacing the
+    /// policy invalidates transfers that are still pending.
+    pub fn set_multisig_policy(
+        env: Env,
+        admin: Address,
+        token: Address,
+        threshold_amount: i128,
+        required_signatures: u32,
+        board: Vec<Address>,
+        expiry_ledgers: u32,
+    ) -> MultiSigTransferPolicy {
+        Self::require_admin(&env, &admin);
+        let expiry = if expiry_ledgers == 0 {
+            multisig_transfer::DEFAULT_EXPIRY_LEDGERS
+        } else {
+            expiry_ledgers
+        };
+        multisig_transfer::set_policy(
+            &env,
+            token,
+            threshold_amount,
+            required_signatures,
+            board,
+            expiry,
+        )
+    }
+
+    pub fn get_multisig_policy(env: Env) -> Option<MultiSigTransferPolicy> {
+        multisig_transfer::policy(&env)
+    }
+
+    /// Asked by the asset token before every ordinary transfer.
+    pub fn requires_board_approval(env: Env, token: Address, amount: i128) -> bool {
+        multisig_transfer::requires_board_approval(&env, &token, amount)
+    }
+
+    /// Request a transfer above the threshold. Signed by `from`. Returns the
+    /// pending transfer id.
+    pub fn request_transfer(env: Env, from: Address, to: Address, amount: i128) -> u64 {
+        Self::require_not_paused(&env);
+        multisig_transfer::request(&env, from, to, amount)
+    }
+
+    /// Approve a pending transfer as a board member. Returns `true` when this
+    /// signature reached the threshold and the transfer was executed.
+    pub fn co_sign(env: Env, signer: Address, transfer_id: u64) -> bool {
+        Self::require_not_paused(&env);
+        multisig_transfer::co_sign(&env, signer, transfer_id)
+    }
+
+    /// A pending transfer, or `None` once it executed or expired.
+    pub fn get_pending_transfer(env: Env, transfer_id: u64) -> Option<PendingTransfer> {
+        multisig_transfer::pending(&env, transfer_id)
+    }
+
     pub fn version(_env: Env) -> u64 {
         1
     }
@@ -785,9 +875,38 @@ impl ComplianceContract {
         }
     }
 }
+
+fn bit_is_set(env: &Env, slot: u32) -> bool {
+    let chunk: BytesN<32> = env.storage().persistent()
+        .get(&AggKey::BitmapChunk(slot / 256))
+        .unwrap_or(BytesN::from_array(env, &[0u8; 32]));
+    let idx = slot % 256;
+    (chunk.to_array()[(idx / 8) as usize] >> (idx % 8)) & 1 == 1
+}
+
+fn set_bit(env: &Env, slot: u32, value: bool) {
+    let key = AggKey::BitmapChunk(slot / 256);
+    let mut arr = env.storage().persistent().get::<_, BytesN<32>>(&key)
+        .unwrap_or(BytesN::from_array(env, &[0u8; 32])).to_array();
+    let idx = slot % 256;
+    if value { arr[(idx / 8) as usize] |= 1 << (idx % 8); }
+    else     { arr[(idx / 8) as usize] &= !(1 << (idx % 8)); }
+    env.storage().persistent().set(&key, &BytesN::from_array(env, &arr));
+}
+
+fn batch_digest(env: &Env, root: &BytesN<32>, slots: &Vec<u32>) -> BytesN<32> {
+    let mut pre = Bytes::new(env);
+    pre.append(&Bytes::from_array(env, &root.to_array()));
+    for s in slots.iter() {
+        pre.append(&Bytes::from_array(env, &s.to_be_bytes()));
+    }
+    env.crypto().sha256(&pre).into() // on some soroban-sdk versions: .to_bytes()
+}
 pub mod zk_balance_verifier;
 pub mod zk_range_proof;
 pub mod zk_verifier;
 
+#[cfg(test)]
+mod multisig_transfer_test;
 #[cfg(test)]
 mod mutation_test;

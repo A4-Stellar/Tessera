@@ -29,12 +29,12 @@ mod indexer;
 mod middleware;
 mod models;
 mod routes;
+pub mod rsocket;
 mod security;
 mod services;
 pub mod storage;
 pub mod tracing;
 mod ws;
-pub mod rsocket;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -115,6 +115,35 @@ async fn main() {
         }
     }
 
+    // Issues #475/#476: bridge and cap-table compliance alerts go to the
+    // webhook service when an endpoint is configured.
+    if let Ok(url) = std::env::var("RWA_ALERT_WEBHOOK_URL") {
+        let (dispatcher, rx) = services::webhook::WebhookDispatcher::new(2);
+        dispatcher.register(services::webhook::Subscription {
+            id: "tessera-alerts".into(),
+            endpoint_url: url,
+            secret_key: std::env::var("RWA_ALERT_WEBHOOK_SECRET").unwrap_or_default(),
+            asset_filter: None,
+            event_filter: None,
+        });
+        state.bridge = Arc::new(
+            services::bridge_monitor::BridgeMonitor::default()
+                .with_sink(Box::new(dispatcher.clone())),
+        );
+        state.compliance_webhooks = Arc::new(dispatcher.clone());
+        dispatcher.run(rx);
+    }
+    // Issue #476: EDGAR import and report signing.
+    if let Ok(user_agent) = std::env::var("RWA_SEC_USER_AGENT") {
+        state.edgar = Arc::new(services::edgar::SecEdgar::new(user_agent));
+    }
+    match services::edgar::ReportSigner::from_env() {
+        Some(signer) => state.report_signer = Arc::new(signer),
+        None => tracing::warn!(
+            "RWA_REPORT_SIGNING_KEY not set; cap-table reports are signed with a per-process key"
+        ),
+    }
+
     // Issue #26: differential privacy for aggregate endpoints.
     match analytics::differential_privacy::PrivacyEngine::from_env() {
         Ok(engine) => state.privacy = Arc::new(engine),
@@ -154,15 +183,34 @@ async fn main() {
         Ok(Some(router)) => {
             let router = Arc::new(router);
             router.spawn_health_monitor(shutdown_rx.clone());
-            if let Err(error) = sqlx::raw_sql(include_str!(
-                "db/migrations/0004_tenant_rate_limits.sql"
-            ))
-                .execute(router.primary())
-                .await
+            if let Err(error) =
+                sqlx::raw_sql(include_str!("db/migrations/0004_tenant_rate_limits.sql"))
+                    .execute(router.primary())
+                    .await
             {
                 tracing::error!(%error, "tenant rate-limit schema initialization failed");
                 std::process::exit(1);
             }
+            // Versioned Avro schemas for Soroban contract events. The same
+            // table is served by the orchestrator's Kafka Schema Registry
+            // adapter (infrastructure/orchestrator/).
+            if let Err(error) = sqlx::raw_sql(include_str!(
+                "db/migrations/0005_contract_event_schemas.sql"
+            ))
+            .execute(router.primary())
+            .await
+            {
+                tracing::error!(%error, "contract event schema initialization failed");
+                std::process::exit(1);
+            }
+            // Durable registry used by the orchestrator's Kafka Schema
+            // Registry. The in-memory copy in AppState stays authoritative
+            // for the hot decode path.
+            state.persistent_schemas = Some(Arc::new(
+                indexer::schema_registry::PostgresSchemaRegistry::from_pool(
+                    router.primary().clone(),
+                ),
+            ));
             // Issue #163: quarantine table behind `POST /v1/admin/dlq/retry`.
             state.dlq = indexer::dlq::DeadLetterQueue::open(router.primary().clone()).await;
             if let Some(dlq) = state.dlq.clone() {
@@ -211,9 +259,53 @@ async fn main() {
         }
     }
 
+    // Issue #468: in sandbox mode expose a separate pool for RLS-scoped
+    // reset/status endpoints. The role must not be BYPASSRLS/SUPERUSER, or the
+    // tenant policies in 0005 would be silently bypassed.
+    if std::env::var("RWA_SANDBOX_MODE")
+        .ok()
+        .is_some_and(|value| value == "true" || value == "1")
+    {
+        let url = std::env::var("RWA_SANDBOX_DATABASE_URL")
+            .or_else(|_| std::env::var("RWA_DATABASE_URL"))
+            .unwrap_or_default();
+        match sqlx::postgres::PgPoolOptions::new().connect_lazy(&url) {
+            Ok(pool) => {
+                tracing::info!("sandbox mode enabled; RLS-scoped reset endpoints active");
+                state.sandbox_db = Some(Arc::new(pool));
+            }
+            Err(error) => {
+                tracing::error!(%error, "invalid sandbox database URL");
+                std::process::exit(1);
+            }
+        }
+    }
+
     // Spawn the indexer; it owns its own clone of the shared state.
     let indexer = Indexer::new(state.clone());
-    tokio::spawn(async move { indexer.run(shutdown_rx).await });
+    let indexer_shutdown = shutdown_rx.clone();
+    tokio::spawn(async move { indexer.run(indexer_shutdown).await });
+
+    // Shadow indexer: independent RPC node + independent snapshot, diffed
+    // against the primary snapshot every 60 seconds. Divergences are dumped
+    // into a separate RocksDB column family for forensics. A failure to open
+    // the forensics store degrades to alerting without persistence; it never
+    // prevents the shadow reader from starting.
+    let forensics_path = std::path::PathBuf::from(std::env::var("RWA_SHADOW_FORENSICS_PATH")
+        .unwrap_or_else(|_| "./data/shadow-forensics".into()));
+    if let Some(parent) = forensics_path.parent() {
+        if let Err(error) = std::fs::create_dir_all(parent) {
+            tracing::warn!(%error, path = %parent.display(), "cannot create shadow forensics directory");
+        }
+    }
+    match storage::rocksdb::RocksLedger::open(&forensics_path) {
+        Ok(db) => state.shadow.set_forensics(Arc::new(db)),
+        Err(error) => tracing::warn!(%error, "shadow forensics store unavailable; divergences will not be persisted"),
+    }
+    let shadow = Arc::clone(&state.shadow);
+    let shadow_state = state.clone();
+    let shadow_shutdown = shutdown_rx.clone();
+    tokio::spawn(async move { shadow.run(shadow_state, shadow_shutdown).await });
 
     let app = routes::router(state).layer(tower_http::trace::TraceLayer::new_for_http());
 
@@ -288,5 +380,5 @@ fn init_tracing() {
         .with(fmt::layer().with_writer(middleware::pii_scrubber::ScrubbingMakeWriter))
         .init();
 }
-pub mod graphql;
 pub mod events;
+pub mod graphql;

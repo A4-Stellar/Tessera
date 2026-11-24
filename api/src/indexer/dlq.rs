@@ -497,11 +497,8 @@ mod tests {
             assert_eq!(report.still_quarantined, 1);
             assert_eq!(report.poisoned, if expected_attempt == 5 { 1 } else { 0 });
         }
-        let (attempts, quarantined, retry_at): (
-            i32,
-            bool,
-            Option<chrono::DateTime<chrono::Utc>>,
-        ) = sqlx::query_as("SELECT attempts, quarantined, retry_at FROM failed_events")
+        let (attempts, quarantined, retry_at): (i32, bool, Option<String>) =
+            sqlx::query_as("SELECT attempts, quarantined, retry_at::TEXT FROM failed_events")
             .fetch_one(&pool)
             .await
             .unwrap();

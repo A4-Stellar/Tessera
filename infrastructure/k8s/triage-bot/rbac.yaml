@@ -1,0 +1,36 @@
+# Least privilege for the triage bot (issue #474): it may read the indexer
+# deployment and its pods, and patch only that deployment's pod template
+# (the `kubectl.kubernetes.io/restartedAt` annotation, i.e. a rolling restart).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tessera-triage
+  namespace: tessera
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: tessera-triage
+  namespace: tessera
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: ["tessera-indexer"]
+    verbs: ["get", "patch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tessera-triage
+  namespace: tessera
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: tessera-triage
+subjects:
+  - kind: ServiceAccount
+    name: tessera-triage
+    namespace: tessera

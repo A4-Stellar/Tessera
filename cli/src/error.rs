@@ -31,6 +31,9 @@ pub enum CliError {
     },
     Prompt(String),
     Template(String),
+    /// `docker compose` could not be launched or exited non-zero.
+    Sandbox(String),
+    /// `dev` environment command failed.
     Dev(String),
 }
 
@@ -74,6 +77,7 @@ impl Display for CliError {
             }
             Self::Prompt(message) => write!(formatter, "interactive prompt failed: {message}"),
             Self::Template(message) => write!(formatter, "template error: {message}"),
+            Self::Sandbox(message) => write!(formatter, "sandbox error: {message}"),
             Self::Dev(message) => write!(formatter, "dev environment error: {message}"),
         }
     }

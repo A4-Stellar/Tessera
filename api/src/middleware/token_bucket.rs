@@ -117,10 +117,7 @@ impl RedisBucketStore {
 #[async_trait]
 impl BucketStore for RedisBucketStore {
     async fn take(&self, key: &str, tier: Tier) -> Result<Decision, String> {
-        let connection = self
-            .client
-            .get_multiplexed_async_connection()
-            .await;
+        let connection = self.client.get_multiplexed_async_connection().await;
         let mut con = match connection {
             Ok(con) => con,
             Err(error) => {
@@ -180,11 +177,20 @@ impl BucketStore for RedisBucketStore {
     }
 }
 
+/// Sandbox tenants get a relaxed but still bounded bucket (issue #468). The
+/// limit stays a real token bucket so a runaway integration test cannot take
+/// the shared API down.
+pub const SANDBOX_RATE_PER_SECOND: u64 = 1_000;
+pub const SANDBOX_RATE_BURST: u32 = 1_000;
+pub const SANDBOX_TENANT_HEADER: &str = "x-sandbox-tenant-id";
+
 pub struct TokenBucketState {
     pub store: Arc<dyn BucketStore>,
     pub default_tier: Tier,
     /// Legacy tier overrides by `X-API-Key` value for non-tenant requests.
     pub api_key_tiers: HashMap<String, Tier>,
+    /// When true, `X-Sandbox-Tenant-ID` selects the relaxed 1000 req/s tier.
+    pub sandbox_mode: bool,
     tenant_limits: Option<PgPool>,
     tenant_pool_error: Option<String>,
     tenant_cache: DashMap<String, (Tier, Instant)>,
@@ -200,11 +206,26 @@ impl TokenBucketState {
             store,
             default_tier,
             api_key_tiers,
+            sandbox_mode: false,
             tenant_limits: None,
             tenant_pool_error: None,
             tenant_cache: DashMap::new(),
         }
         .with_tenant_pool()
+    }
+
+    /// Enable the sandbox rate tier (`RWA_SANDBOX_MODE=true` in the stack).
+    pub fn with_sandbox_mode(mut self, enabled: bool) -> Self {
+        self.sandbox_mode = enabled;
+        self
+    }
+
+    /// The bucket applied to sandbox tenants.
+    pub fn sandbox_tier() -> Tier {
+        Tier {
+            capacity: SANDBOX_RATE_BURST,
+            refill_per_second: SANDBOX_RATE_PER_SECOND as f64,
+        }
     }
 
     /// Parse `RWA_API_KEY_TIERS`: `key=capacity:refill_per_second,...`.
@@ -271,7 +292,9 @@ impl TokenBucketState {
                 .insert(tenant_id.to_string(), (self.default_tier, Instant::now()));
             return Ok(self.default_tier);
         };
-        let capacity = row.try_get::<i64, _>("capacity").map_err(|e| e.to_string())?;
+        let capacity = row
+            .try_get::<i64, _>("capacity")
+            .map_err(|e| e.to_string())?;
         let refill_rate = row
             .try_get::<i64, _>("refill_rate")
             .map_err(|e| e.to_string())?;
@@ -282,7 +305,9 @@ impl TokenBucketState {
             || !(1..=u32::MAX as i64).contains(&refill_rate)
             || !(1..=86_400).contains(&interval)
         {
-            return Err(format!("invalid rate-limit configuration for tenant {tenant_id}"));
+            return Err(format!(
+                "invalid rate-limit configuration for tenant {tenant_id}"
+            ));
         }
         let refill_per_second = refill_rate as f64 / interval as f64;
         let tier = Tier {
@@ -303,7 +328,8 @@ fn insert_rate_limit_headers(headers: &mut HeaderMap, decision: &Decision) {
     );
     headers.insert(
         "x-ratelimit-reset",
-        HeaderValue::from(decision.reset_seconds.to_string()),
+        HeaderValue::from_str(&decision.reset_seconds.to_string())
+            .unwrap_or_else(|_| HeaderValue::from_static("0")),
     );
 }
 
@@ -332,6 +358,17 @@ pub async fn token_bucket_middleware(
         },
         None => None,
     };
+    // Sandbox tenants use a separate bucket namespace and a relaxed tier so
+    // load tests cannot starve production tenants sharing this process.
+    // Invalid values are ignored here; `sandbox_tenant_middleware` rejects them.
+    let sandbox_tenant = if state.sandbox_mode {
+        req.headers()
+            .get(SANDBOX_TENANT_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(crate::middleware::tenant::tenant_id_from_header)
+    } else {
+        None
+    };
     let api_key = req
         .headers()
         .get("X-API-Key")
@@ -340,10 +377,11 @@ pub async fn token_bucket_middleware(
         // a client mint fresh buckets, or collide with another client's IP.
         .filter(|value| state.api_key_tiers.contains_key(*value))
         .map(str::to_string);
-    let key = match (&tenant_id, &api_key) {
-        (Some(tenant_id), _) => format!("tenant:{tenant_id}"),
-        (None, Some(api_key)) => format!("key:{api_key}"),
-        (None, None) => format!(
+    let key = match (&sandbox_tenant, &tenant_id, &api_key) {
+        (Some(sandbox), _, _) => format!("sandbox:{sandbox}"),
+        (None, Some(tenant_id), _) => format!("tenant:{tenant_id}"),
+        (None, None, Some(api_key)) => format!("key:{api_key}"),
+        (None, None, None) => format!(
             "ip:{}",
             req.extensions()
                 .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
@@ -351,21 +389,30 @@ pub async fn token_bucket_middleware(
                 .unwrap_or_else(|| "unknown".to_string())
         ),
     };
-    let tier = match tenant_id.as_deref() {
-        Some(tenant_id) => match state.tier_for_tenant(tenant_id).await {
-            Ok(tier) => tier,
-            Err(error) => {
-                tracing::error!(%error, "tenant rate-limit lookup failed");
-                return (StatusCode::SERVICE_UNAVAILABLE, "Rate-limit configuration unavailable")
-                    .into_response();
-            }
-        },
-        None => state.tier_for(api_key.as_deref()),
+    let tier = if sandbox_tenant.is_some() {
+        TokenBucketState::sandbox_tier()
+    } else {
+        match tenant_id.as_deref() {
+            Some(tenant_id) => match state.tier_for_tenant(tenant_id).await {
+                Ok(tier) => tier,
+                Err(error) => {
+                    tracing::error!(%error, "tenant rate-limit lookup failed");
+                    return (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "Rate-limit configuration unavailable",
+                    )
+                        .into_response();
+                }
+            },
+            None => state.tier_for(api_key.as_deref()),
+        }
     };
 
     match state.store.take(&key, tier).await {
         Ok(decision) => {
-            if let Some(tenant) = tenant_id {
+            if let Some(tenant) = sandbox_tenant {
+                metrics::counter!("rate_limit_applied", "tenant" => tenant).increment(1);
+            } else if let Some(tenant) = tenant_id {
                 metrics::counter!("rate_limit_applied", "tenant" => tenant).increment(1);
             }
             let mut response = if decision.allowed {
@@ -382,7 +429,8 @@ pub async fn token_bucket_middleware(
                     .headers_mut()
                     .insert(
                         header::RETRY_AFTER,
-                        HeaderValue::from(decision.retry_after.to_string()),
+                        HeaderValue::from_str(&decision.retry_after.to_string())
+                            .unwrap_or_else(|_| HeaderValue::from_static("0")),
                     );
                 response
             };
@@ -446,6 +494,7 @@ mod tests {
             store: Arc::new(MemoryBucketStore::default()),
             default_tier: TIER,
             api_key_tiers: TokenBucketState::parse_api_key_tiers("ent=100:50, bad, x=1:y"),
+            sandbox_mode: false,
             tenant_limits: None,
             tenant_pool_error: None,
             tenant_cache: DashMap::new(),

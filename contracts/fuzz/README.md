@@ -160,3 +160,52 @@ a fixed bug is kept fixed.
    real Ed25519 keys and `cap_table` builds real Merkle trees, because a target
    that only feeds garbage can prove a function rejects garbage — it cannot
    prove the function accepts the right thing.
+
+## WASM-level harness (issue #470)
+
+`wasm_host` is a new libFuzzer target that goes one level below the native
+`Env::default()` targets:
+
+1. **Mock host functions.** `harness::StorageOracle` implements the
+   `MockHost` trait and records every `storage().set()` / `storage().get()`
+   call, qualified by contract address. Reading a key that was never written is
+   a fuzz finding: in production the contract's `.unwrap()` on that read traps.
+2. **Arbitrary `ScVal` arguments.** For every exported function the target
+   builds `Vec<Val>` values skewed toward XDR shapes (integers at boundary
+   values, bytes, symbols, booleans). `harness::generate_adversarial_scval()`
+   supplies raw XDR for byte-level cases.
+3. **Real WASM execution.** Point `TESSERA_WASM_DIR` at a directory of compiled
+   `.wasm` files and the target registers each one with
+   `Env::register_contract_wasm`, then invokes it inside the sandboxed host.
+   Without the variable the mock-host layer still runs, so the target is useful
+   in a fresh checkout.
+4. **Structure-aware mutation.** `harness::StructureAwareMutator` mutates
+   discriminants, XDR length prefixes (including `u32::MAX`) and integer
+   boundary bytes according to an `AbiSchema` instead of flipping random bits.
+   Its `mutate(&mut self, &mut Vec<u8>)` shape is LibAFL's mutator signature; an
+   adapter is:
+
+   ```rust
+   // impl libafl::mutators::Mutator<I, Testcase<&mut Vec<u8>>> for AbiMutator {
+   //     fn mutate(&mut self, _state: &mut I, input: &mut Vec<u8>, _stage: u32)
+   //         -> Result<libafl::mutators::MutationResult, libafl::Error>
+   //     { self.inner.mutate(input); Ok(MutationResult::Mutated) }
+   // }
+   ```
+
+   LibAFL is an optional downstream integration and is not a dependency of this
+   package, so the default build stays offline-friendly.
+5. **Coverage in CI.** `.github/workflows/fuzz.yml` has a `wasm-fuzz` matrix
+   that builds each contract for `wasm32v1-none`, runs `wasm_host` for 300 s
+   with `RUSTFLAGS="-C instrument-coverage"`, and uploads an LCOV report.
+
+### Bug found
+
+The WASM harness exposed that `contracts/bridge` and `contracts/debt-token`
+did not compile: both referenced helper functions (`require_admin`,
+`require_initialized`) and view methods that were missing from their source.
+In `debt-token`, `accrue_interest` and `trigger_default` had no admin check at
+all despite the module contract claiming otherwise; in `bridge`, the signature
+loop incremented a counter that was never declared and never checked the
+verification result. Regression tests live in
+`contracts/debt-token/src/test.rs` and `contracts/bridge/src/test.rs`.

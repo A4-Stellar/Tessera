@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "limit_bytes": 65536,
+  "warning_threshold_percent": 85,
+  "notes": "Per-contract WASM size budgets for the Tessera Soroban workspace. The Soroban contract size limit is 65,536 bytes; the 85% warning threshold (55,705 bytes) drives the near-limit code-size issue. Every workspace member defaults to the hard limit until measured evidence justifies a tighter per-contract budget. The tessera-no-std utility crate is an rlib (no WASM artifact) and is intentionally not listed here. Update this file together with .github/workflows/wasm-size.yml and contracts/scripts/check_wasm_size.py when adding new workspace members.",
+  "contracts": {
+    "tessera-common": 65536,
+    "tessera-registry": 65536,
+    "tessera-compliance": 65536,
+    "tessera-dividend": 65536,
+    "tessera-asset-token": 65536,
+    "tessera-cap-table": 65536,
+    "vaults": 65536,
+    "bridge": 65536,
+    "debt-token": 65536,
+    "tessera-vesting": 65536,
+    "amm": 65536,
+    "tessera-confidential-token": 65536,
+    "tessera-index-token": 65536,
+    "tessera-state-channel": 65536,
+    "tessera-settlement": 65536,
+    "tessera-governance": 65536,
+    "tessera-flash-loan": 65536,
+    "tessera-lease-token": 65536,
+    "tessera-escrow": 65536,
+    "tessera-emergency-liquidation": 65536,
+    "tessera-insurance": 65536,
+    "tessera-fx-hedge": 65536
+  }
+}

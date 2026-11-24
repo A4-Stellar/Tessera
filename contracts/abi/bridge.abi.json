@@ -108,6 +108,168 @@
         }
       ],
       "output": "()"
+    },
+    {
+      "name": "is_processed",
+      "doc": "Invokes `is_processed` on bridge.",
+      "inputs": [
+        {
+          "name": "message_hash",
+          "type": "BytesN<32>"
+        }
+      ],
+      "output": "bool"
+    },
+    {
+      "name": "nonce_of",
+      "doc": "Invokes `nonce_of` on bridge.",
+      "inputs": [
+        {
+          "name": "caller",
+          "type": "Address"
+        }
+      ],
+      "output": "u64"
+    },
+    {
+      "name": "get_request",
+      "doc": "Invokes `get_request` on bridge.",
+      "inputs": [
+        {
+          "name": "caller",
+          "type": "Address"
+        },
+        {
+          "name": "nonce",
+          "type": "u64"
+        }
+      ],
+      "output": "BridgeRequest"
+    },
+    {
+      "name": "configure_circuit_breaker",
+      "doc": "Invokes `configure_circuit_breaker` on bridge.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "config",
+          "type": "CircuitConfig"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "get_circuit_config",
+      "doc": "Invokes `get_circuit_config` on bridge.",
+      "inputs": [],
+      "output": "Option<CircuitConfig>"
+    },
+    {
+      "name": "set_guardians",
+      "doc": "Invokes `set_guardians` on bridge.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "guardians",
+          "type": "Vec<Address>"
+        },
+        {
+          "name": "threshold",
+          "type": "u32"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "get_guardians",
+      "doc": "Invokes `get_guardians` on bridge.",
+      "inputs": [],
+      "output": "(Vec<Address>, u32)"
+    },
+    {
+      "name": "set_anomaly_reporter",
+      "doc": "Invokes `set_anomaly_reporter` on bridge.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "reporter",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "report_anomaly",
+      "doc": "Invokes `report_anomaly` on bridge.",
+      "inputs": [
+        {
+          "name": "reporter",
+          "type": "Address"
+        },
+        {
+          "name": "score_bps",
+          "type": "u32"
+        }
+      ],
+      "output": "bool"
+    },
+    {
+      "name": "pause",
+      "doc": "Invokes `pause` on bridge.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "unpause",
+      "doc": "Invokes `unpause` on bridge.",
+      "inputs": [
+        {
+          "name": "signers",
+          "type": "Vec<Address>"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "is_paused",
+      "doc": "Invokes `is_paused` on bridge.",
+      "inputs": [],
+      "output": "bool"
+    },
+    {
+      "name": "circuit_state",
+      "doc": "Invokes `circuit_state` on bridge.",
+      "inputs": [],
+      "output": "CircuitState"
+    },
+    {
+      "name": "upgrade",
+      "doc": "Invokes `upgrade` on bridge.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "new_wasm_hash",
+          "type": "BytesN<32>"
+        }
+      ],
+      "output": "()"
     }
   ]
 }

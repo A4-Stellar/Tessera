@@ -31,12 +31,12 @@ tests:
             exp_annotations:
               summary: "Tessera API availability (99.9%) SLO burning error budget at >14.4x"
               description: "The availability error budget is burning at 90.9x the sustainable rate over 1h (confirmed over 5m). At this rate 2% of the 30-day budget is consumed within the window."
-              runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/infrastructure/monitoring/README.md#runbook
+              runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/docs/runbooks/api-error-budget.md
           - exp_labels: {severity: page, slo: availability, burn_rate: "6", window: 6h}
             exp_annotations:
               summary: "Tessera API availability (99.9%) SLO burning error budget at >6x"
               description: "The availability error budget is burning at 90.9x the sustainable rate over 6h (confirmed over 30m). At this rate 5% of the 30-day budget is consumed within the window."
-              runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/infrastructure/monitoring/README.md#runbook
+              runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/docs/runbooks/api-error-budget.md
       - eval_time: 70m
         alertname: TesseraApiErrorBudgetExhausted
         exp_alerts:
@@ -44,7 +44,7 @@ tests:
             exp_annotations:
               summary: "Tessera API availability (99.9%) error budget exhausted"
               description: The 30-day availability SLO is currently breached.
-              runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/infrastructure/monitoring/README.md#runbook
+              runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/docs/runbooks/api-error-budget.md
 
   # Healthy service: no errors, everything under 100 ms -> nothing fires.
   - interval: 1m

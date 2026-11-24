@@ -10,6 +10,39 @@ fn env(name: &str) -> Result<String, String> {
     std::env::var(name).map_err(|_| format!("environment variable {name} is not set"))
 }
 
+/// `tessera-orchestrator schema-registry` serves the Confluent-compatible
+/// Schema Registry for the Avro event schemas registered by the API indexer.
+/// It shares the API's PostgreSQL table, so no separate schema store is
+/// needed. Address and DSN come from `SCHEMA_REGISTRY_ADDR` /
+/// `SCHEMA_REGISTRY_DSN` (falling back to `DATABASE_URL`).
+async fn run_schema_registry() -> Result<(), String> {
+    use sqlx::postgres::PgPoolOptions;
+    use tessera_orchestrator::schema_registry::{
+        serve, PostgresSchemaStore, MIGRATION_SQL,
+    };
+
+    let dsn = std::env::var("SCHEMA_REGISTRY_DSN")
+        .or_else(|_| std::env::var("DATABASE_URL"))
+        .map_err(|_| "SCHEMA_REGISTRY_DSN or DATABASE_URL is not set".to_string())?;
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect_lazy(&dsn)
+        .map_err(|e| e.to_string())?;
+    sqlx::raw_sql(MIGRATION_SQL)
+        .execute(&pool)
+        .await
+        .map_err(|e| format!("schema registry migration failed: {e}"))?;
+
+    let addr = std::env::var("SCHEMA_REGISTRY_ADDR")
+        .unwrap_or_else(|_| "0.0.0.0:8081".to_string())
+        .parse()
+        .map_err(|e| format!("invalid SCHEMA_REGISTRY_ADDR: {e}"))?;
+    info!(%addr, "starting Kafka Schema Registry");
+    serve(Arc::new(PostgresSchemaStore::new(pool)), addr)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[tokio::main]
 async fn main() -> Result<(), String> {
     tracing_subscriber::fmt()
@@ -19,6 +52,10 @@ async fn main() -> Result<(), String> {
         )
         .json()
         .init();
+
+    if std::env::args().nth(1).as_deref() == Some("schema-registry") {
+        return run_schema_registry().await;
+    }
 
     let path = std::env::args()
         .nth(1)

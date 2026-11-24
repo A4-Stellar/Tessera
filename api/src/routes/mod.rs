@@ -2,17 +2,22 @@
 
 pub mod assets;
 pub mod audit;
+pub mod bridge;
+pub mod cap_table_import;
 pub mod compliance;
+pub mod da;
 pub mod dividends;
 pub mod dlq;
 pub mod events;
 pub mod export;
 pub mod forensics;
 pub mod holders;
+pub mod meta;
 pub mod portfolio;
 pub mod privacy;
 pub mod proofs;
-pub mod prospectus;
+/// Regulatory sandbox lifecycle (issue #468).
+pub mod sandbox;
 #[expect(
     dead_code,
     reason = "The search placeholder is not part of the active API router."
@@ -20,6 +25,7 @@ pub mod prospectus;
 pub mod search;
 pub mod security;
 pub mod sep24;
+pub mod sep30;
 #[expect(
     dead_code,
     reason = "The simulation placeholder is not part of the active API router."
@@ -76,6 +82,9 @@ pub enum ApiError {
     NotFound(String),
     BadRequest(String),
     Unauthorized(String),
+    Forbidden(String),
+    Conflict(String),
+    Gone(String),
     Unavailable(String),
 }
 
@@ -85,6 +94,9 @@ impl IntoResponse for ApiError {
             ApiError::NotFound(msg) => (StatusCode::NOT_FOUND, "not_found", msg),
             ApiError::BadRequest(msg) => (StatusCode::BAD_REQUEST, "bad_request", msg),
             ApiError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, "unauthorized", msg),
+            ApiError::Forbidden(msg) => (StatusCode::FORBIDDEN, "forbidden", msg),
+            ApiError::Conflict(msg) => (StatusCode::CONFLICT, "conflict", msg),
+            ApiError::Gone(msg) => (StatusCode::GONE, "gone", msg),
             ApiError::Unavailable(msg) => {
                 (StatusCode::SERVICE_UNAVAILABLE, "service_unavailable", msg)
             }
@@ -114,6 +126,7 @@ pub fn router(state: AppState) -> Router {
         .allow_headers([
             header::CONTENT_TYPE,
             axum::http::HeaderName::from_static("x-tenant-id"),
+            axum::http::HeaderName::from_static("x-sandbox-tenant-id"),
             axum::http::HeaderName::from_static("x-api-key"),
         ]);
 
@@ -129,16 +142,20 @@ pub fn router(state: AppState) -> Router {
         } else {
             Arc::new(MemoryBucketStore::default())
         };
-    let token_bucket_state = Arc::new(TokenBucketState::new(
-        store,
-        Tier {
-            capacity: burst,
-            refill_per_second: per_second as f64,
-        },
-        TokenBucketState::parse_api_key_tiers(
-            &std::env::var("RWA_API_KEY_TIERS").unwrap_or_default(),
-        ),
-    ));
+    let sandbox_mode = env_value("RWA_SANDBOX_MODE", false);
+    let token_bucket_state = Arc::new(
+        TokenBucketState::new(
+            store,
+            Tier {
+                capacity: burst,
+                refill_per_second: per_second as f64,
+            },
+            TokenBucketState::parse_api_key_tiers(
+                &std::env::var("RWA_API_KEY_TIERS").unwrap_or_default(),
+            ),
+        )
+        .with_sandbox_mode(sandbox_mode),
+    );
 
     // Snapshot-backed endpoints: cacheable and safe to answer with 304 when
     // the client's ETag still matches the last indexed ledger.
@@ -151,6 +168,7 @@ pub fn router(state: AppState) -> Router {
         .route("/rsocket", get(crate::rsocket::handler))
         .route("/assets", get(assets::list))
         .route("/assets/:id", get(assets::detail))
+        .route("/assets/:id/da-proof", get(da::da_proof))
         .route("/assets/:id/events", get(assets::events))
         .route("/assets/:id/metrics/analytics", get(assets::analytics))
         .route(
@@ -159,6 +177,11 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/assets/:id/holders", get(holders::list_or_aggregate))
         .route("/assets/:id/compliance", get(compliance::summary))
+        // Issue #478: board-approved transfers awaiting co-signers.
+        .route(
+            "/assets/:id/pending-transfers",
+            get(pending_transfers::list),
+        )
         .route("/assets/:id/dividends", get(dividends::list))
         .route("/assets/:id/distributions/:did", get(dividends::get_one))
         .route("/assets/:id/prospectus", get(prospectus::get_prospectus))
@@ -169,12 +192,11 @@ pub fn router(state: AppState) -> Router {
             "/holders/:address/compliance",
             get(holders::by_address_compliance),
         )
-        .route(
-            "/holders/:address/portfolio",
-            get(portfolio::get_portfolio),
-        )
+        .route("/holders/:address/portfolio", get(portfolio::get_portfolio))
         .route("/compliance/:address", get(compliance::for_address))
         .route("/security/anomalies", get(security::list))
+        // Issue #475: bridge packet monitoring.
+        .route("/bridge/packets", get(bridge::packets))
         .route("/audit/verify", get(audit::verify))
         .route(
             "/audit/entries",
@@ -233,14 +255,57 @@ pub fn router(state: AppState) -> Router {
             axum::routing::post(proofs::verify),
         )
         .nest("/v1", data_routes)
+        // Issue #478: relay a board member's signed `co_sign` transaction.
+        .route(
+            "/v1/assets/:id/pending-transfers/:transfer_id/sign",
+            axum::routing::post(pending_transfers::sign),
+        )
         .route("/v1/ws", get(crate::ws::handler))
+        // Versioned aliases for the protocol-standard root endpoints. The
+        // root paths stay available for anchors/well-known clients, but the
+        // deprecation map marks them with a successor and sunset date.
+        .route("/v1/health", get(health))
+        .route("/v1/metrics", get(metrics))
+        .route("/v1/version", get(version))
+        .route(
+            "/v1/sep24/transactions/deposit/interactive",
+            axum::routing::post(sep24::interactive_deposit),
+        )
+        .route("/v1/sep24/transaction", get(sep24::get_transaction))
+        .route("/v1/sep24/transactions", get(sep24::list_transactions))
+        .route(
+            "/v1/sep24/transactions/:id/confirm_external",
+            axum::routing::post(sep24::confirm_external),
+        )
+        .route(
+            "/v1/sep24/transactions/:id/complete",
+            axum::routing::post(sep24::complete),
+        )
+        .route(
+            "/v1/sep24/transactions/:id/kyc",
+            axum::routing::post(sep24::submit_kyc),
+        )
         .route("/v1/admin/dlq/retry", axum::routing::post(dlq::retry))
+        // Issue #475: other-chain watchers report packet sends/receipts.
+        .route(
+            "/v1/admin/bridge/observations",
+            axum::routing::post(bridge::observe),
+        )
+        // Issue #476: EDGAR Form 4 import and signed cap-table reports.
+        .route(
+            "/v1/admin/cap-table/import-edgar",
+            axum::routing::post(cap_table_import::import_edgar),
+        )
+        .route(
+            "/v1/admin/cap-table/reports/sign",
+            axum::routing::post(cap_table_import::sign_report),
+        )
         // Issue #26: per-key differential-privacy budget consumption.
         .route("/v1/admin/privacy/budget", get(privacy::budget))
-        // Issue #83: contract event replay and state reconstruction for audit forensics.
-        .route("/v1/admin/forensics/replay", get(forensics::replay_forensics))
-        // Issue #87: prospectus upload and on-chain hash attestation.
-        .route("/v1/admin/assets/:id/prospectus", axum::routing::post(prospectus::upload_prospectus))
+        // Shadow-indexer health: independent-node lag and last verification.
+        .route("/v1/admin/health/shadow", get(shadow_health))
+        // Machine-readable API version/deprecation catalogue.
+        .route("/v1/meta/versions", get(meta::versions))
         // `route_layer` (rather than `layer`) so the middleware runs after
         // route matching and can read `MatchedPath` from the request
         // extensions for a low-cardinality route label.
@@ -304,6 +369,13 @@ pub fn router(state: AppState) -> Router {
         .layer(middleware::from_fn_with_state(
             token_bucket_state,
             token_bucket_middleware,
+        ))
+        // API versioning: annotate deprecated paths with Sunset/Link and
+        // return 410 Gone once the sunset date has passed. The map is shared
+        // with GET /v1/meta/versions so both surfaces agree.
+        .layer(middleware::from_fn_with_state(
+            Arc::new(meta::versions_map().clone()),
+            crate::middleware::deprecation::deprecation_middleware,
         ))
         .layer(cors)
         // Drop named personal-data fields for non-admin callers (issue #284).
@@ -406,12 +478,15 @@ async fn index() -> Json<serde_json::Value> {
             "GET /v1/assets",
             "GET /v1/assets/:id",
             "POST /v1/assets/:id/proofs/verify",
+            "GET /v1/assets/:id/da-proof",
             "GET /v1/assets/:id/events",
             "GET /v1/assets/:id/metrics/analytics",
             "GET /v1/assets/:id/analytics",
             "GET /v1/assets/:id/holders",
             "GET /v1/assets/:id/holders?view=aggregate",
             "GET /v1/assets/:id/compliance",
+            "GET /v1/assets/:id/pending-transfers",
+            "POST /v1/assets/:id/pending-transfers/:transfer_id/sign",
             "GET /v1/assets/:id/dividends",
             "GET /v1/assets/:id/distributions/:did",
             "GET /v1/assets/:id/export",
@@ -420,11 +495,17 @@ async fn index() -> Json<serde_json::Value> {
             "GET /v1/holders/:address/portfolio",
             "GET /v1/compliance/:address",
             "GET /v1/security/anomalies",
+            "GET /v1/bridge/packets?status=pending|completed|timeout",
+            "POST /v1/admin/bridge/observations",
+            "POST /v1/admin/cap-table/import-edgar",
+            "POST /v1/admin/cap-table/reports/sign",
             "GET /v1/audit/:entry_id/proof",
             "GET /v1/audit/mmr",
             "GET /v1/proofs/mmr",
             "GET /v1/proofs/mmr/:ledger_seq?account=:address",
             "GET /v1/admin/privacy/budget",
+            "POST /sandbox/reset",
+            "GET /sandbox/status",
             "GET /.well-known/stellar.toml",
             "POST /sep24/transactions/deposit/interactive",
             "GET /sep24/transaction",
@@ -447,6 +528,16 @@ async fn version() -> Json<serde_json::Value> {
     Json(json!({
         "version": env!("CARGO_PKG_VERSION"),
         "release": concat!("v", env!("CARGO_PKG_VERSION")),
+    }))
+}
+
+/// Shadow-indexer health: reports the lag of the independent snapshot and
+/// the time of the last primary-vs-shadow verification (issue: silent XDR
+/// parsing bugs / missed events).
+async fn shadow_health(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let status = state.shadow.status();
+    Json(serde_json::to_value(status).unwrap_or_else(|error| {
+        json!({ "status": "error", "message": error.to_string() })
     }))
 }
 
