@@ -1,0 +1,61 @@
+syntax = "proto3";
+
+package tessera.ebpf.ddos;
+
+service DdosControlService {
+    rpc BlockIp (BlockIpRequest) returns (BlockIpResponse);
+    rpc UnblockIp (UnblockIpRequest) returns (UnblockIpResponse);
+    rpc ListBlocked (ListBlockedRequest) returns (ListBlockedResponse);
+    rpc GetStats (GetStatsRequest) returns (GetStatsResponse);
+}
+
+message BlockIpRequest {
+    string ip_or_cidr = 1;
+    string reason = 2;
+    uint32 ttl_seconds = 3;
+}
+
+message BlockIpResponse {
+    bool success = 1;
+    string message = 2;
+    uint32 total_blocked = 3;
+}
+
+message UnblockIpRequest {
+    string ip_or_cidr = 1;
+}
+
+message UnblockIpResponse {
+    bool success = 1;
+    string message = 2;
+    uint32 total_blocked = 3;
+}
+
+message ListBlockedRequest {
+    uint32 limit = 1;
+    uint32 offset = 2;
+}
+
+message BlockedEntry {
+    string ip_or_cidr = 1;
+    string reason = 2;
+    uint64 blocked_at_ns = 3;
+    uint64 expires_at_ns = 4;
+}
+
+message ListBlockedResponse {
+    repeated BlockedEntry entries = 1;
+    uint32 total_count = 2;
+}
+
+message GetStatsRequest {}
+
+message GetStatsResponse {
+    uint64 total_packets = 1;
+    uint64 syn_passed = 2;
+    uint64 syn_dropped = 3;
+    uint64 geoip_dropped = 4;
+    uint64 dynamic_dropped = 5;
+    uint64 other_passed = 6;
+    uint32 active_rate_limit_entries = 7;
+}

@@ -31,6 +31,7 @@ pub mod sep30;
     reason = "The simulation placeholder is not part of the active API router."
 )]
 pub mod simulate;
+pub mod slo;
 pub mod stats;
 pub mod time_travel;
 
@@ -302,6 +303,11 @@ pub fn router(state: AppState) -> Router {
         )
         // Issue #26: per-key differential-privacy budget consumption.
         .route("/v1/admin/privacy/budget", get(privacy::budget))
+        // Issue #471: SLO alerting with multi-window burn rate and error budget report.
+        .route(
+            "/v1/admin/slo/report",
+            axum::routing::post(slo::slo_report).get(slo::slo_report),
+        )
         // Shadow-indexer health: independent-node lag and last verification.
         .route("/v1/admin/health/shadow", get(shadow_health))
         // Machine-readable API version/deprecation catalogue.
@@ -504,6 +510,8 @@ async fn index() -> Json<serde_json::Value> {
             "GET /v1/proofs/mmr",
             "GET /v1/proofs/mmr/:ledger_seq?account=:address",
             "GET /v1/admin/privacy/budget",
+            "POST /v1/admin/slo/report",
+            "GET /v1/admin/slo/report",
             "POST /sandbox/reset",
             "GET /sandbox/status",
             "GET /.well-known/stellar.toml",
