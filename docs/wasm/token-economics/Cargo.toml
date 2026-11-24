@@ -1,0 +1,19 @@
+[package]
+name = "tessera-token-economics"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+description = "Agent-based token-economics simulator compiled to WebAssembly for the docs site."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# Zero dependencies on purpose: the module builds offline with the pinned
+# toolchain and exposes a tiny numeric ABI that needs no wasm-bindgen glue.
+[dependencies]
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true

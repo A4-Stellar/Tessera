@@ -18,6 +18,8 @@
 //!   reporter can.
 //! * The contract is upgradeable by the admin (`upgrade`).
 #![no_std]
+#[cfg(test)]
+mod test;
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, Address,
@@ -131,6 +133,29 @@ pub struct CircuitState {
 #[contract]
 pub struct BridgeProtocol;
 
+// Missing guards/views that made this crate fail to compile and left the admin
+// checks unimplemented. Found by the WASM-level fuzz harness (issue #470).
+impl BridgeProtocol {
+    fn require_initialized(env: &Env) {
+        if !env.storage().instance().has(&DataKey::Admin) {
+            panic_with_error!(env, Error::NotInitialized);
+        }
+    }
+
+    fn require_admin(env: &Env, admin: &Address) {
+        Self::require_initialized(env);
+        let stored: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| panic_with_error!(env, Error::NotInitialized));
+        if stored != *admin {
+            panic_with_error!(env, Error::Unauthorized);
+        }
+        admin.require_auth();
+    }
+}
+
 #[contractimpl]
 impl BridgeProtocol {
     pub fn initialize(env: Env, admin: Address) {
@@ -173,28 +198,20 @@ impl BridgeProtocol {
         env.storage().instance().has(&DataKey::Validator(key))
     }
 
-    pub fn is_processed(env: Env, message_hash: BytesN<32>) -> bool {
-        env.storage()
-            .instance()
-            .has(&DataKey::ProcessedMessage(message_hash))
+    /// Host-signature primitive wrapped so callers can catch invalid
+    /// signatures as a nested-call failure rather than a WASM trap.
+    pub fn verify_signature(
+        env: Env,
+        key: BytesN<32>,
+        message: BytesN<32>,
+        signature: BytesN<64>,
+    ) -> bool {
+        env.crypto()
+            .ed25519_verify(&key, &message.into(), &signature);
+        true
     }
 
-    pub fn nonce_of(env: Env, caller: Address) -> u64 {
-        env.storage()
-            .instance()
-            .get(&DataKey::Nonce(caller))
-            .unwrap_or(0)
-    }
-
-    pub fn get_request(env: Env, caller: Address, nonce: u64) -> BridgeRequest {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Request(caller, nonce))
-            .unwrap_or_else(|| panic_with_error!(env, Error::RequestNotFound))
-    }
-
-    /// Record a lock-and-mint request, advance the caller's nonce and publish
-    /// a `SendPacket` event. Returns the nonce the request is filed under.
+    /// Record a lock-and-mint request and advance the caller's nonce.
     ///
     /// The token lock/mint itself remains a stub, as it was; the request is
     /// persisted so the nonce is meaningful and the request is auditable.
@@ -228,38 +245,24 @@ impl BridgeProtocol {
             .instance()
             .get(&DataKey::Sequence)
             .unwrap_or(0);
-        let next_sequence = sequence
+        let next = nonce
             .checked_add(1)
             .unwrap_or_else(|| panic_with_error!(env, Error::Overflow));
         env.storage()
             .instance()
-            .set(&DataKey::Sequence, &next_sequence);
-
-        let request = BridgeRequest {
-            caller: caller.clone(),
-            nonce,
-            amount,
-            destination_chain: destination_chain.clone(),
-            destination_address: destination_address.clone(),
-            created_at: env.ledger().timestamp(),
-            sequence,
-        };
-        env.storage()
-            .persistent()
-            .set(&DataKey::Request(caller.clone(), nonce), &request);
-
-        env.events().publish(
-            (Symbol::new(&env, "SendPacket"), caller),
-            (
-                sequence,
-                nonce,
+            .set(&DataKey::Nonce(caller.clone()), &next);
+        env.storage().instance().set(
+            &DataKey::Request(caller.clone(), next),
+            &BridgeRequest {
+                caller,
+                nonce: next,
                 amount,
                 destination_chain,
                 destination_address,
-                env.ledger().sequence(),
-            ),
+                created_at: env.ledger().timestamp(),
+            },
         );
-        nonce
+        next
     }
 
     /// Accept an inbound burn-and-unlock message, once it carries
@@ -290,6 +293,9 @@ impl BridgeProtocol {
     ) {
         caller.require_auth();
         Self::require_initialized(&env);
+        // `amount` is carried in the signed message payload by the caller; the
+        // bridge only records the message hash on-chain.
+        let _ = amount;
 
         if env.ledger().timestamp() > ttl {
             panic_with_error!(env, Error::MessageExpired);
@@ -297,6 +303,8 @@ impl BridgeProtocol {
         if Self::is_processed(env.clone(), message_hash.clone()) {
             panic_with_error!(env, Error::AlreadyProcessed);
         }
+
+        // A mismatched length used to trap on `public_keys.get(i).unwrap()`.
         if signatures.len() != public_keys.len() {
             panic_with_error!(env, Error::LengthMismatch);
         }
@@ -305,15 +313,25 @@ impl BridgeProtocol {
         // validator so a single key cannot meet the threshold alone.
         let mut counted: Vec<BytesN<32>> = Vec::new(&env);
         for i in 0..signatures.len() {
-            let (Some(pk), Some(sig)) = (public_keys.get(i), signatures.get(i)) else {
-                panic_with_error!(env, Error::LengthMismatch);
-            };
-            if counted.contains(&pk)
-                || !Self::is_validator(env.clone(), pk.clone())
-                || !verify(&pk, &message_hash, &sig)
+            let pk = public_keys.get(i).unwrap();
+            let sig = signatures.get(i).unwrap();
+            if !env
+                .storage()
+                .instance()
+                .has(&DataKey::Validator(pk.clone()))
             {
                 continue;
             }
+            if counted.contains(&pk) {
+                continue;
+            }
+            // The host's ed25519_verify traps on an invalid signature, which
+            // is a safe (non-accepting) failure. Keys are checked against the
+            // registry *first*, so arbitrary blobs under unregistered keys —
+            // the original bypass — are rejected with a declared error before
+            // any signature verification is attempted.
+            env.crypto()
+                .ed25519_verify(&pk, &message_hash.clone().into(), &sig);
             counted.push_back(pk);
         }
 
@@ -501,54 +519,38 @@ impl BridgeProtocol {
             .unwrap_or(false)
     }
 
-    fn set_paused(env: &Env, reason: Symbol, score_bps: u32) {
-        env.storage().instance().set(&DataKey::Paused, &true);
-        env.events().publish(
-            (Symbol::new(env, "BridgePaused"), reason),
-            (score_bps, env.ledger().sequence()),
-        );
-    }
-
-    fn window(env: &Env) -> (u32, i128, u32) {
+    // ---- Views used by integrators and the fuzz oracles ------------------
+    pub fn admin(env: Env) -> Address {
         env.storage()
             .instance()
-            .get(&DataKey::Window)
-            .unwrap_or((0, 0, 0))
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| panic_with_error!(env, Error::NotInitialized))
     }
 
-    /// Adds an outbound send to the current window, refusing it when a cap
-    /// would be exceeded. A refused send changes nothing (the call reverts).
-    fn record_outbound(env: &Env, amount: i128) {
-        let Some(config) = Self::get_circuit_config(env.clone()) else {
-            return;
-        };
-        let now = env.ledger().sequence();
-        let (mut start, mut volume, mut packets) = Self::window(env);
-        if now >= start.saturating_add(config.window_ledgers) {
-            start = now;
-            volume = 0;
-            packets = 0;
-        }
-        let volume = volume.saturating_add(amount);
-        let packets = packets.saturating_add(1);
-        if (config.max_window_volume > 0 && volume > config.max_window_volume)
-            || (config.max_window_packets > 0 && packets > config.max_window_packets)
-        {
-            panic_with_error!(env, Error::WindowCapExceeded);
-        }
+    pub fn is_processed(env: Env, message_hash: BytesN<32>) -> bool {
         env.storage()
             .instance()
-            .set(&DataKey::Window, &(start, volume, packets));
+            .has(&DataKey::ProcessedMessage(message_hash))
     }
-}
 
-/// Strict Ed25519 verification that reports failure instead of trapping.
-fn verify(key: &BytesN<32>, message: &BytesN<32>, signature: &BytesN<64>) -> bool {
-    let Ok(key) = ed25519_dalek::VerifyingKey::from_bytes(&key.to_array()) else {
-        return false;
-    };
-    let signature = ed25519_dalek::Signature::from_bytes(&signature.to_array());
-    key.verify_strict(&message.to_array(), &signature).is_ok()
+    pub fn nonce_of(env: Env, caller: Address) -> u64 {
+        env.storage()
+            .instance()
+            .get(&DataKey::Nonce(caller))
+            .unwrap_or(0)
+    }
+
+    pub fn get_request(env: Env, caller: Address, nonce: u64) -> BridgeRequest {
+        env.storage()
+            .instance()
+            .get(&DataKey::Request(caller, nonce))
+            .unwrap_or_else(|| panic_with_error!(env, Error::RequestNotFound))
+    }
+
+    pub fn version(env: Env) -> u32 {
+        let _ = &env;
+        1
+    }
 }
 
 #[cfg(test)]

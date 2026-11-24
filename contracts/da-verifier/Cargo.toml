@@ -1,0 +1,17 @@
+[package]
+name = "tessera-da-verifier"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Soroban verifier for EigenDA aggregate BLS proofs and stake-weighted quorums (issue #469)."
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+doctest = false
+
+[dependencies]
+soroban-sdk = { workspace = true }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }

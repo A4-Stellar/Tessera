@@ -14,7 +14,7 @@ pub mod config;
 pub mod dns;
 pub mod failover;
 pub mod postgres;
-pub mod triage;
+pub mod schema_registry;
 pub mod types;
 
 pub use failover::{

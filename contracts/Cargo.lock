@@ -2026,6 +2026,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "tessera-da-verifier"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "tessera-dividend"
 version = "0.1.0"
 dependencies = [
@@ -2091,6 +2098,10 @@ version = "0.1.0"
 dependencies = [
  "soroban-sdk",
 ]
+
+[[package]]
+name = "tessera-no-std"
+version = "0.1.0"
 
 [[package]]
 name = "tessera-registry"

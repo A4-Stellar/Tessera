@@ -1,7 +1,7 @@
-# Standalone package: intentionally not a member of the `contracts` workspace
-# (see `exclude = ["fuzz"]` in contracts/Cargo.toml).
-[workspace]
-
+# Member of the standalone `contracts/fuzz` workspace (itself excluded from
+# the `contracts` workspace). It used to declare its own `[workspace]`, which
+# current Cargo rejects as "multiple workspace roots" when the fuzz package
+# pulls it in as a path dependency.
 [package]
 name = "tessera-fuzz-harness"
 version = "0.1.0"

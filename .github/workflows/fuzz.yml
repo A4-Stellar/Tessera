@@ -47,7 +47,7 @@ env:
   ALL_TARGETS: >-
     ["asset_token","transfer_extremes","compliance","registry","dividend",
      "tax_withholding","cap_table","debt_token","bridge","vaults",
-     "cross_contract_invariants","differential"]
+     "cross_contract_invariants","differential","wasm_host"]
 
 jobs:
   proptests:
@@ -151,5 +151,91 @@ jobs:
         with:
           name: fuzz-crash-${{ matrix.target }}
           path: contracts/fuzz/artifacts/${{ matrix.target }}
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # Issue #470: WASM-level fuzzing. Each contract is built to WASM and driven
+  # through the mock-host/storage-oracle target for 300 s, with source-based
+  # coverage collected and uploaded per contract.
+  wasm-fuzz:
+    name: WASM fuzz ${{ matrix.contract }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        contract:
+          - asset-token
+          - dividend
+          - compliance
+          - registry
+          - vaults
+          - debt-token
+          - bridge
+          - cap-table
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: llvm-tools-preview, rust-src
+          targets: wasm32v1-none
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            contracts -> target
+            contracts/fuzz -> target
+          key: wasm-fuzz
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: Build contract wasm
+        working-directory: contracts
+        run: |
+          mkdir -p "$RUNNER_TEMP/tessera-wasm"
+          package=$(grep -m1 '^name' "${{ matrix.contract }}/Cargo.toml" | sed 's/.*"\(.*\)".*/\1/')
+          cargo build --release --target wasm32v1-none -p "$package"
+          find target/wasm32v1-none/release -maxdepth 1 -name '*.wasm' \
+            -exec cp {} "$RUNNER_TEMP/tessera-wasm/" \;
+
+      - name: Build WASM-level fuzz target
+        working-directory: contracts/fuzz
+        env:
+          RUSTFLAGS: "-C instrument-coverage"
+        run: cargo fuzz build wasm_host
+
+      - name: Fuzz the contract wasm (300 s)
+        working-directory: contracts/fuzz
+        env:
+          RUSTFLAGS: "-C instrument-coverage"
+          TESSERA_WASM_DIR: ${{ runner.temp }}/tessera-wasm
+        run: |
+          cargo fuzz run wasm_host -- \
+            -max_total_time=300 -rss_limit_mb=2560 -timeout=25 \
+            -artifact_prefix=artifacts/wasm_host-
+
+      - name: Collect source-based coverage
+        if: always()
+        working-directory: contracts/fuzz
+        shell: bash
+        run: |
+          set -e
+          LLVM_PROFDATA=$(find "$(rustc --print sysroot)" -name llvm-profdata | head -n1)
+          LLVM_COV=$(find "$(rustc --print sysroot)" -name llvm-cov | head -n1)
+          PROFILES=$(find . -name '*.profraw' -print | tr '\n' ' ')
+          if [ -z "$PROFILES" ] || [ -z "$LLVM_PROFDATA" ] || [ -z "$LLVM_COV" ]; then
+            echo "no coverage data to merge" && exit 0
+          fi
+          "$LLVM_PROFDATA" merge -sparse $PROFILES -o wasm-fuzz.profdata
+          BIN=$(find target -type f -name 'wasm_host-*' -perm -u+x | head -n1)
+          "$LLVM_COV" export "$BIN" -instr-profile=wasm-fuzz.profdata \
+            -format=lcov > wasm-fuzz-${{ matrix.contract }}.lcov
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wasm-fuzz-coverage-${{ matrix.contract }}
+          path: |
+            contracts/fuzz/wasm-fuzz-*.lcov
+            contracts/fuzz/wasm-fuzz.profdata
           if-no-files-found: ignore
           retention-days: 14

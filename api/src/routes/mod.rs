@@ -5,15 +5,18 @@ pub mod audit;
 pub mod bridge;
 pub mod cap_table_import;
 pub mod compliance;
+pub mod da;
 pub mod dividends;
 pub mod dlq;
 pub mod events;
 pub mod export;
 pub mod holders;
-pub mod pending_transfers;
+pub mod meta;
 pub mod portfolio;
 pub mod privacy;
 pub mod proofs;
+/// Regulatory sandbox lifecycle (issue #468).
+pub mod sandbox;
 #[expect(
     dead_code,
     reason = "The search placeholder is not part of the active API router."
@@ -21,6 +24,7 @@ pub mod proofs;
 pub mod search;
 pub mod security;
 pub mod sep24;
+pub mod sep30;
 #[expect(
     dead_code,
     reason = "The simulation placeholder is not part of the active API router."
@@ -121,6 +125,7 @@ pub fn router(state: AppState) -> Router {
         .allow_headers([
             header::CONTENT_TYPE,
             axum::http::HeaderName::from_static("x-tenant-id"),
+            axum::http::HeaderName::from_static("x-sandbox-tenant-id"),
             axum::http::HeaderName::from_static("x-api-key"),
         ]);
 
@@ -136,16 +141,20 @@ pub fn router(state: AppState) -> Router {
         } else {
             Arc::new(MemoryBucketStore::default())
         };
-    let token_bucket_state = Arc::new(TokenBucketState::new(
-        store,
-        Tier {
-            capacity: burst,
-            refill_per_second: per_second as f64,
-        },
-        TokenBucketState::parse_api_key_tiers(
-            &std::env::var("RWA_API_KEY_TIERS").unwrap_or_default(),
-        ),
-    ));
+    let sandbox_mode = env_value("RWA_SANDBOX_MODE", false);
+    let token_bucket_state = Arc::new(
+        TokenBucketState::new(
+            store,
+            Tier {
+                capacity: burst,
+                refill_per_second: per_second as f64,
+            },
+            TokenBucketState::parse_api_key_tiers(
+                &std::env::var("RWA_API_KEY_TIERS").unwrap_or_default(),
+            ),
+        )
+        .with_sandbox_mode(sandbox_mode),
+    );
 
     // Snapshot-backed endpoints: cacheable and safe to answer with 304 when
     // the client's ETag still matches the last indexed ledger.
@@ -158,6 +167,7 @@ pub fn router(state: AppState) -> Router {
         .route("/rsocket", get(crate::rsocket::handler))
         .route("/assets", get(assets::list))
         .route("/assets/:id", get(assets::detail))
+        .route("/assets/:id/da-proof", get(da::da_proof))
         .route("/assets/:id/events", get(assets::events))
         .route("/assets/:id/metrics/analytics", get(assets::analytics))
         .route(
@@ -179,10 +189,7 @@ pub fn router(state: AppState) -> Router {
             "/holders/:address/compliance",
             get(holders::by_address_compliance),
         )
-        .route(
-            "/holders/:address/portfolio",
-            get(portfolio::get_portfolio),
-        )
+        .route("/holders/:address/portfolio", get(portfolio::get_portfolio))
         .route("/compliance/:address", get(compliance::for_address))
         .route("/security/anomalies", get(security::list))
         // Issue #475: bridge packet monitoring.
@@ -251,6 +258,30 @@ pub fn router(state: AppState) -> Router {
             axum::routing::post(pending_transfers::sign),
         )
         .route("/v1/ws", get(crate::ws::handler))
+        // Versioned aliases for the protocol-standard root endpoints. The
+        // root paths stay available for anchors/well-known clients, but the
+        // deprecation map marks them with a successor and sunset date.
+        .route("/v1/health", get(health))
+        .route("/v1/metrics", get(metrics))
+        .route("/v1/version", get(version))
+        .route(
+            "/v1/sep24/transactions/deposit/interactive",
+            axum::routing::post(sep24::interactive_deposit),
+        )
+        .route("/v1/sep24/transaction", get(sep24::get_transaction))
+        .route("/v1/sep24/transactions", get(sep24::list_transactions))
+        .route(
+            "/v1/sep24/transactions/:id/confirm_external",
+            axum::routing::post(sep24::confirm_external),
+        )
+        .route(
+            "/v1/sep24/transactions/:id/complete",
+            axum::routing::post(sep24::complete),
+        )
+        .route(
+            "/v1/sep24/transactions/:id/kyc",
+            axum::routing::post(sep24::submit_kyc),
+        )
         .route("/v1/admin/dlq/retry", axum::routing::post(dlq::retry))
         // Issue #475: other-chain watchers report packet sends/receipts.
         .route(
@@ -268,6 +299,10 @@ pub fn router(state: AppState) -> Router {
         )
         // Issue #26: per-key differential-privacy budget consumption.
         .route("/v1/admin/privacy/budget", get(privacy::budget))
+        // Shadow-indexer health: independent-node lag and last verification.
+        .route("/v1/admin/health/shadow", get(shadow_health))
+        // Machine-readable API version/deprecation catalogue.
+        .route("/v1/meta/versions", get(meta::versions))
         // `route_layer` (rather than `layer`) so the middleware runs after
         // route matching and can read `MatchedPath` from the request
         // extensions for a low-cardinality route label.
@@ -331,6 +366,13 @@ pub fn router(state: AppState) -> Router {
         .layer(middleware::from_fn_with_state(
             token_bucket_state,
             token_bucket_middleware,
+        ))
+        // API versioning: annotate deprecated paths with Sunset/Link and
+        // return 410 Gone once the sunset date has passed. The map is shared
+        // with GET /v1/meta/versions so both surfaces agree.
+        .layer(middleware::from_fn_with_state(
+            Arc::new(meta::versions_map().clone()),
+            crate::middleware::deprecation::deprecation_middleware,
         ))
         .layer(cors)
         // Drop named personal-data fields for non-admin callers (issue #284).
@@ -433,6 +475,7 @@ async fn index() -> Json<serde_json::Value> {
             "GET /v1/assets",
             "GET /v1/assets/:id",
             "POST /v1/assets/:id/proofs/verify",
+            "GET /v1/assets/:id/da-proof",
             "GET /v1/assets/:id/events",
             "GET /v1/assets/:id/metrics/analytics",
             "GET /v1/assets/:id/analytics",
@@ -458,6 +501,8 @@ async fn index() -> Json<serde_json::Value> {
             "GET /v1/proofs/mmr",
             "GET /v1/proofs/mmr/:ledger_seq?account=:address",
             "GET /v1/admin/privacy/budget",
+            "POST /sandbox/reset",
+            "GET /sandbox/status",
             "GET /.well-known/stellar.toml",
             "POST /sep24/transactions/deposit/interactive",
             "GET /sep24/transaction",
@@ -480,6 +525,16 @@ async fn version() -> Json<serde_json::Value> {
     Json(json!({
         "version": env!("CARGO_PKG_VERSION"),
         "release": concat!("v", env!("CARGO_PKG_VERSION")),
+    }))
+}
+
+/// Shadow-indexer health: reports the lag of the independent snapshot and
+/// the time of the last primary-vs-shadow verification (issue: silent XDR
+/// parsing bugs / missed events).
+async fn shadow_health(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let status = state.shadow.status();
+    Json(serde_json::to_value(status).unwrap_or_else(|error| {
+        json!({ "status": "error", "message": error.to_string() })
     }))
 }
 

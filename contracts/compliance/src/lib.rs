@@ -25,6 +25,20 @@ pub use multisig_transfer::{MultiSigTransferPolicy, PendingTransfer};
 pub use oracle_verifier::{OracleAttestation, OracleConfig, OracleSignature};
 pub use verifiable_credentials::VerifiableCredential;
 pub use zk_aggregator::{AggregatedProof, AggregationVerifyingKey, ZkAccreditation};
+use soroban_sdk::{contractclient, contracttype, Address, Bytes, BytesN, Env, Vec};
+
+#[contracttype]
+enum AggKey {
+    Verifier,            // Address of the aggregate-verifier contract (set by admin)
+    Slot(Address),       // user -> bit slot in the bitmap
+    BitmapChunk(u32),    // chunk index -> 256 bits
+}
+
+#[contractclient(name = "AggregateVerifierClient")]
+pub trait AggregateVerifier {
+    /// True iff `proof` is a valid aggregate proof whose public-input digest equals `digest`.
+    fn verify(env: Env, proof: Bytes, digest: BytesN<32>) -> bool;
+}
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -860,6 +874,33 @@ impl ComplianceContract {
             false
         }
     }
+}
+
+fn bit_is_set(env: &Env, slot: u32) -> bool {
+    let chunk: BytesN<32> = env.storage().persistent()
+        .get(&AggKey::BitmapChunk(slot / 256))
+        .unwrap_or(BytesN::from_array(env, &[0u8; 32]));
+    let idx = slot % 256;
+    (chunk.to_array()[(idx / 8) as usize] >> (idx % 8)) & 1 == 1
+}
+
+fn set_bit(env: &Env, slot: u32, value: bool) {
+    let key = AggKey::BitmapChunk(slot / 256);
+    let mut arr = env.storage().persistent().get::<_, BytesN<32>>(&key)
+        .unwrap_or(BytesN::from_array(env, &[0u8; 32])).to_array();
+    let idx = slot % 256;
+    if value { arr[(idx / 8) as usize] |= 1 << (idx % 8); }
+    else     { arr[(idx / 8) as usize] &= !(1 << (idx % 8)); }
+    env.storage().persistent().set(&key, &BytesN::from_array(env, &arr));
+}
+
+fn batch_digest(env: &Env, root: &BytesN<32>, slots: &Vec<u32>) -> BytesN<32> {
+    let mut pre = Bytes::new(env);
+    pre.append(&Bytes::from_array(env, &root.to_array()));
+    for s in slots.iter() {
+        pre.append(&Bytes::from_array(env, &s.to_be_bytes()));
+    }
+    env.crypto().sha256(&pre).into() // on some soroban-sdk versions: .to_bytes()
 }
 pub mod zk_balance_verifier;
 pub mod zk_range_proof;

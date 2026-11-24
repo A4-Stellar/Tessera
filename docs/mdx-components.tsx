@@ -20,6 +20,7 @@ import { ExemptionChecker } from "@/components/ExemptionChecker";
 import RegulatoryMatrix from "@/components/RegulatoryMatrix";
 import { NetworkGraph } from "@/components/NetworkGraph";
 import { WasmSandbox } from "@/components/WasmSandbox";
+import TokenEconomicsSimulator from "@/components/TokenEconomicsSimulator";
 
 /**
  * Global MDX component map. Custom components (CalloutBox, ApiEndpoint,
@@ -64,6 +65,7 @@ export function useMDXComponents(components: MDXComponents): MDXComponents {
     RegulatoryMatrix,
     NetworkGraph,
     WasmSandbox,
+    TokenEconomicsSimulator,
     ...components,
   };
 }

@@ -13,6 +13,10 @@ publish = false
 name = "system_suite"
 path = "system_suite.rs"
 
+[[test]]
+name = "sandbox_isolation"
+path = "sandbox_isolation.rs"
+
 [[bin]]
 name = "system_suite_replay"
 path = "system_suite.rs"

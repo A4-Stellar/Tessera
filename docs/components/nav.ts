@@ -47,6 +47,7 @@ const baseNavSections = [
       { title: "Issuer Wizard", href: "/docs/web-app#issuer-wizard" },
       { title: "Prospectus Viewer", href: "/docs/prospectus-viewer" },
       { title: "Integration", href: "/docs/integration" },
+      { title: "Token Economics", href: "/docs/token-economics" },
       { title: "Component Library", href: "/docs/components" },
     ],
   },

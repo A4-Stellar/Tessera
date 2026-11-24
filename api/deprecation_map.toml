@@ -1,0 +1,47 @@
+# Tessera API versioning / deprecation map.
+#
+# Consumed by three places, all of which must understand this *restricted*
+# TOML subset (no dependencies are used for parsing):
+#   - api/src/middleware/deprecation.rs   (runtime Sunset/Link/410 enforcement)
+#   - api/src/routes/meta.rs              (`GET /v1/meta/versions`)
+#   - docs/scripts/generate-versions-page.mjs (generated docs page)
+#
+# Supported shapes only:
+#   [versions]          key = "status"          (plain string values)
+#   [[deprecated]]      path / sunset / successor / docs_url = "..."
+# Blank lines and `#' comments are allowed. A path ending in `/*` matches
+# every request below that prefix (e.g. `/sep24/*` matches `/sep24/transaction`).
+#
+# Protocol/operations endpoints are intentionally NOT deprecated:
+# `/health`, `/metrics`, `/.well-known/stellar.toml`, and `/graphql`.
+
+[versions]
+v1 = "active"
+v2 = "beta"
+
+[[deprecated]]
+path = "/version"
+sunset = "2027-06-30"
+successor = "/v1/meta/versions"
+docs_url = "https://github.com/A4-Stellar/Tessera/blob/main/docs/content/en/docs/api-versions.mdx"
+
+[[deprecated]]
+path = "/sep24/*"
+sunset = "2027-09-30"
+successor = "/v1/sep24/*"
+docs_url = "https://github.com/A4-Stellar/Tessera/blob/main/docs/content/en/docs/api-versions.mdx"
+
+[[deprecated]]
+path = "/sep30/*"
+sunset = "2027-09-30"
+successor = "/v1/sep30/*"
+docs_url = "https://github.com/A4-Stellar/Tessera/blob/main/docs/content/en/docs/api-versions.mdx"
+
+# Past-sunset fixture: exercised by api/tests/deprecation_enforcement.rs to
+# verify 410 Gone handling. Keep it in the future-facing docs page as an
+# explicit example of a removed endpoint.
+[[deprecated]]
+path = "/v1/legacy/reports"
+sunset = "2025-01-01"
+successor = "/v1/reports"
+docs_url = "https://github.com/A4-Stellar/Tessera/blob/main/docs/content/en/docs/api-versions.mdx"
