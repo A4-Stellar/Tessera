@@ -6,7 +6,11 @@ import { z } from "zod";
 const STORAGE_KEY = "tessera-issuer-wizard";
 
 type AssetType = "real_estate" | "invoice" | "commodity";
-type Step = 0 | 1 | 2 | 3;
+type Step = 0 | 1 | 2 | 3 | 4;
+const LAST_STEP: Step = 4;
+
+/** Issue #478: largest board the compliance contract accepts. */
+const MAX_BOARD_SIGNERS = 20;
 type DeployStatus = "idle" | "deploying" | "success";
 
 type WizardForm = {
@@ -18,6 +22,11 @@ type WizardForm = {
   decimals: string;
   jurisdiction: string;
   allowlist: string;
+  /** Issue #478: board approval for large transfers. */
+  multisigEnabled: boolean;
+  multisigThreshold: string;
+  multisigRequired: string;
+  boardSigners: string;
   complianceNote: string;
 };
 
@@ -30,6 +39,10 @@ const defaultState: WizardForm = {
   decimals: "7",
   jurisdiction: "US",
   allowlist: "",
+  multisigEnabled: false,
+  multisigThreshold: "100000",
+  multisigRequired: "3",
+  boardSigners: "",
   complianceNote: "Initial issue approved for issuer and primary admin.",
 };
 
@@ -52,6 +65,40 @@ const allowlistSchema = z
     return addresses.every((address) => /^G[A-Z2-7]{55}$/.test(address));
   }, "Add at least one valid Stellar public key for the allowlist.");
 
+const PUBLIC_KEY = /^G[A-Z2-7]{55}$/;
+
+/** Issue #478: m-of-n board policy, validated like `set_multisig_policy`. */
+const multisigSchema = z
+  .object({
+    multisigEnabled: z.boolean(),
+    multisigThreshold: z.string(),
+    multisigRequired: z.string(),
+    boardSigners: z.string(),
+  })
+  .superRefine((value, ctx) => {
+    if (!value.multisigEnabled) return;
+    const threshold = Number(value.multisigThreshold);
+    if (!Number.isFinite(threshold) || threshold <= 0) {
+      ctx.addIssue({ code: "custom", path: ["multisigThreshold"], message: "The approval threshold must be greater than zero." });
+    }
+    const signers = parseAllowlist(value.boardSigners);
+    if (signers.length === 0 || !signers.every((s) => PUBLIC_KEY.test(s))) {
+      ctx.addIssue({ code: "custom", path: ["boardSigners"], message: "Add at least one valid Stellar public key per board signer." });
+    } else if (new Set(signers).size !== signers.length) {
+      ctx.addIssue({ code: "custom", path: ["boardSigners"], message: "Each board signer can only be listed once." });
+    } else if (signers.length > MAX_BOARD_SIGNERS) {
+      ctx.addIssue({ code: "custom", path: ["boardSigners"], message: `A board can have at most ${MAX_BOARD_SIGNERS} signers.` });
+    }
+    const required = Number(value.multisigRequired);
+    if (!Number.isInteger(required) || required < 1 || (signers.length > 0 && required > signers.length)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["multisigRequired"],
+        message: `Required signatures must be a whole number between 1 and ${Math.max(signers.length, 1)}.`,
+      });
+    }
+  });
+
 const stepSchemas: Record<Step, z.ZodTypeAny> = {
   0: z.object({
     projectName: z.string().trim().min(2, "Project name must be at least 2 characters."),
@@ -65,15 +112,17 @@ const stepSchemas: Record<Step, z.ZodTypeAny> = {
     jurisdiction: z.string().trim().min(2, "Jurisdiction is required."),
     allowlist: allowlistSchema,
   }),
-  2: z.object({
+  2: multisigSchema,
+  3: z.object({
     complianceNote: z.string().trim().min(10, "Add a brief compliance note."),
   }),
-  3: z.object({}),
+  4: z.object({}),
 };
 
 const formSummary = [
   "Project details",
   "Token configuration",
+  "Board approvals",
   "Compliance review",
   "Deployment",
 ] as const;
@@ -139,9 +188,16 @@ export function IssuerWizard() {
               jurisdiction: form.jurisdiction,
               allowlist: form.allowlist,
             }
-          : {
-              complianceNote: form.complianceNote,
-            }
+          : targetStep === 2
+            ? {
+                multisigEnabled: form.multisigEnabled,
+                multisigThreshold: form.multisigThreshold,
+                multisigRequired: form.multisigRequired,
+                boardSigners: form.boardSigners,
+              }
+            : {
+                complianceNote: form.complianceNote,
+              }
     );
 
     if (!parsed.success) {
@@ -176,13 +232,28 @@ cargo run --bin issuer -- deploy \
   --supply "$TOTAL_SUPPLY" \
   --decimals "$DECIMALS" \
   --jurisdiction "$JURISDICTION" \
-  --allowlist "$ALLOWLIST"`,
+  --allowlist "$ALLOWLIST"${
+    form.multisigEnabled
+      ? `
+
+# Board approval (m-of-n) for transfers above the threshold (issue #478).
+# COMPLIANCE_CONTRACT and ASSET_TOKEN_CONTRACT are the ids printed by the deploy above.
+stellar contract invoke --id "$COMPLIANCE_CONTRACT" --source "$ISSUER_ADDRESS" -- \\
+  set_multisig_policy \\
+  --admin "$ISSUER_ADDRESS" \\
+  --token "$ASSET_TOKEN_CONTRACT" \\
+  --threshold_amount ${form.multisigThreshold || "0"} \\
+  --required_signatures ${form.multisigRequired || "1"} \\
+  --board '${JSON.stringify(parseAllowlist(form.boardSigners))}' \\
+  --expiry_ledgers 17280`
+      : ""
+  }`,
     [form]
   );
 
   const nextStep = () => {
     if (!validateStep(step as Step)) return;
-    setStep((current) => (Math.min(current + 1, 3) as Step));
+    setStep((current) => (Math.min(current + 1, LAST_STEP) as Step));
   };
 
   const previousStep = () => {
@@ -190,7 +261,7 @@ cargo run --bin issuer -- deploy \
   };
 
   const completeWizard = () => {
-    if (!validateStep(2)) return;
+    if (!validateStep(2) || !validateStep(3)) return;
     setDeployStatus("deploying");
     setTimeout(() => setDeployStatus("success"), 600);
   };
@@ -205,7 +276,7 @@ cargo run --bin issuer -- deploy \
     }
   };
 
-  const isLastStep = currentStepIndex === 3;
+  const isLastStep = currentStepIndex === LAST_STEP;
 
   return (
     <div className="my-12 rounded-2xl border border-white/10 bg-base-900/70 p-6 shadow-2xl shadow-brand-500/5">
@@ -219,7 +290,7 @@ cargo run --bin issuer -- deploy \
         </div>
       </div>
 
-      <div className="mb-8 grid gap-3 md:grid-cols-4">
+      <div className="mb-8 grid gap-3 md:grid-cols-5">
         {formSummary.map((title, index) => {
           const isActive = index === currentStepIndex;
           const isComplete = index < currentStepIndex;
@@ -354,6 +425,72 @@ cargo run --bin issuer -- deploy \
       {currentStepIndex === 2 && (
         <div className="space-y-6">
           <div className="rounded-xl border border-brand-500/25 bg-brand-500/5 p-4">
+            <h3 className="text-lg font-semibold text-white">Board approval for large transfers</h3>
+            <p className="mt-2 text-sm text-base-200/80">
+              Transfers above the threshold are held as pending requests for 24 hours and settle only after the required
+              number of board members co-sign them. Smaller transfers are not affected.
+            </p>
+          </div>
+
+          <label className="flex items-center gap-3 text-sm text-base-100">
+            <input
+              type="checkbox"
+              checked={form.multisigEnabled}
+              onChange={(event) => updateField("multisigEnabled", event.target.checked)}
+            />
+            Require board approval above a threshold
+          </label>
+
+          {form.multisigEnabled && (
+            <div className="grid gap-6 md:grid-cols-2">
+              <label className="flex flex-col gap-2 text-sm text-base-100">
+                Approval threshold (token units)
+                <input
+                  type="number"
+                  min="1"
+                  value={form.multisigThreshold}
+                  onChange={(event) => updateField("multisigThreshold", event.target.value)}
+                  className="rounded-xl border border-white/10 bg-base-950/80 px-3 py-2 text-white outline-none transition focus:border-brand-500"
+                />
+                {errors.multisigThreshold && <span className="text-xs text-red-300">{errors.multisigThreshold}</span>}
+              </label>
+
+              <label className="flex flex-col gap-2 text-sm text-base-100">
+                Required signatures (m)
+                <input
+                  type="number"
+                  min="1"
+                  max={MAX_BOARD_SIGNERS}
+                  value={form.multisigRequired}
+                  onChange={(event) => updateField("multisigRequired", event.target.value)}
+                  className="rounded-xl border border-white/10 bg-base-950/80 px-3 py-2 text-white outline-none transition focus:border-brand-500"
+                />
+                {errors.multisigRequired && <span className="text-xs text-red-300">{errors.multisigRequired}</span>}
+              </label>
+
+              <div className="md:col-span-2">
+                <label className="flex flex-col gap-2 text-sm text-base-100">
+                  Board signers (n)
+                  <textarea
+                    value={form.boardSigners}
+                    onChange={(event) => updateField("boardSigners", event.target.value)}
+                    className="min-h-[120px] rounded-xl border border-white/10 bg-base-950/80 px-3 py-2 font-mono text-white outline-none transition focus:border-brand-500"
+                    placeholder={"G...\nG...\nG..."}
+                  />
+                  {errors.boardSigners && <span className="text-xs text-red-300">{errors.boardSigners}</span>}
+                </label>
+                <p className="mt-2 text-xs text-base-200/70" aria-live="polite">
+                  {`${form.multisigRequired || "?"} of ${parseAllowlist(form.boardSigners).length} board signatures required`}
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {currentStepIndex === 3 && (
+        <div className="space-y-6">
+          <div className="rounded-xl border border-brand-500/25 bg-brand-500/5 p-4">
             <h3 className="text-lg font-semibold text-white">Compliance gate summary</h3>
             <ul className="mt-3 space-y-2 text-sm text-base-200/80">
               <li>• The issuer address must be present in the allowlist before the initial mint.</li>
@@ -375,7 +512,7 @@ cargo run --bin issuer -- deploy \
         </div>
       )}
 
-      {currentStepIndex === 3 && (
+      {currentStepIndex === LAST_STEP && (
         <div className="space-y-6">
           <div className="grid gap-4 md:grid-cols-2">
             <div className="rounded-xl border border-white/10 bg-base-950/70 p-4">

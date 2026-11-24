@@ -2,7 +2,7 @@
 name = "tessera-orchestrator"
 version = "0.1.0"
 edition = "2021"
-description = "Cross-region PostgreSQL failover controller for Tessera: heartbeat and replication-lag monitoring, zero-data-loss replica promotion and DNS re-routing."
+description = "Tessera infrastructure automation: cross-region PostgreSQL failover controller and the automated P1 alert triage bot."
 license = "Apache-2.0"
 
 # Standalone crate, like services/mpc-signer: it is deployed next to the
@@ -11,10 +11,14 @@ license = "Apache-2.0"
 
 [dependencies]
 async-trait = "0.1"
+# Issue #474: HTTP listener for the triage bot's alert webhooks.
+axum = { version = "0.7", default-features = false, features = ["http1", "json", "tokio"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 futures = "0.3"
 hex = "0.4"
 hmac = "0.12"
+# Issue #474: the triage bot's cache flush/restore.
+redis = { version = "0.24", default-features = false, features = ["tokio-comp"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -32,3 +36,8 @@ tokio = { version = "1", features = ["full", "test-util"] }
 [[bin]]
 name = "tessera-orchestrator"
 path = "src/main.rs"
+
+# Issue #474: automated P1 alert triage bot.
+[[bin]]
+name = "tessera-triage"
+path = "src/bin/triage.rs"

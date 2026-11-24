@@ -2,6 +2,8 @@
 
 pub mod assets;
 pub mod audit;
+pub mod bridge;
+pub mod cap_table_import;
 pub mod compliance;
 pub mod da;
 pub mod dividends;
@@ -79,6 +81,9 @@ pub enum ApiError {
     NotFound(String),
     BadRequest(String),
     Unauthorized(String),
+    Forbidden(String),
+    Conflict(String),
+    Gone(String),
     Unavailable(String),
 }
 
@@ -88,6 +93,9 @@ impl IntoResponse for ApiError {
             ApiError::NotFound(msg) => (StatusCode::NOT_FOUND, "not_found", msg),
             ApiError::BadRequest(msg) => (StatusCode::BAD_REQUEST, "bad_request", msg),
             ApiError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, "unauthorized", msg),
+            ApiError::Forbidden(msg) => (StatusCode::FORBIDDEN, "forbidden", msg),
+            ApiError::Conflict(msg) => (StatusCode::CONFLICT, "conflict", msg),
+            ApiError::Gone(msg) => (StatusCode::GONE, "gone", msg),
             ApiError::Unavailable(msg) => {
                 (StatusCode::SERVICE_UNAVAILABLE, "service_unavailable", msg)
             }
@@ -168,6 +176,11 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/assets/:id/holders", get(holders::list_or_aggregate))
         .route("/assets/:id/compliance", get(compliance::summary))
+        // Issue #478: board-approved transfers awaiting co-signers.
+        .route(
+            "/assets/:id/pending-transfers",
+            get(pending_transfers::list),
+        )
         .route("/assets/:id/dividends", get(dividends::list))
         .route("/assets/:id/distributions/:did", get(dividends::get_one))
         .route("/assets/:id/export", get(export::export))
@@ -179,6 +192,8 @@ pub fn router(state: AppState) -> Router {
         .route("/holders/:address/portfolio", get(portfolio::get_portfolio))
         .route("/compliance/:address", get(compliance::for_address))
         .route("/security/anomalies", get(security::list))
+        // Issue #475: bridge packet monitoring.
+        .route("/bridge/packets", get(bridge::packets))
         .route("/audit/verify", get(audit::verify))
         .route(
             "/audit/entries",
@@ -237,6 +252,11 @@ pub fn router(state: AppState) -> Router {
             axum::routing::post(proofs::verify),
         )
         .nest("/v1", data_routes)
+        // Issue #478: relay a board member's signed `co_sign` transaction.
+        .route(
+            "/v1/assets/:id/pending-transfers/:transfer_id/sign",
+            axum::routing::post(pending_transfers::sign),
+        )
         .route("/v1/ws", get(crate::ws::handler))
         // Versioned aliases for the protocol-standard root endpoints. The
         // root paths stay available for anchors/well-known clients, but the
@@ -263,6 +283,20 @@ pub fn router(state: AppState) -> Router {
             axum::routing::post(sep24::submit_kyc),
         )
         .route("/v1/admin/dlq/retry", axum::routing::post(dlq::retry))
+        // Issue #475: other-chain watchers report packet sends/receipts.
+        .route(
+            "/v1/admin/bridge/observations",
+            axum::routing::post(bridge::observe),
+        )
+        // Issue #476: EDGAR Form 4 import and signed cap-table reports.
+        .route(
+            "/v1/admin/cap-table/import-edgar",
+            axum::routing::post(cap_table_import::import_edgar),
+        )
+        .route(
+            "/v1/admin/cap-table/reports/sign",
+            axum::routing::post(cap_table_import::sign_report),
+        )
         // Issue #26: per-key differential-privacy budget consumption.
         .route("/v1/admin/privacy/budget", get(privacy::budget))
         // Shadow-indexer health: independent-node lag and last verification.
@@ -448,6 +482,8 @@ async fn index() -> Json<serde_json::Value> {
             "GET /v1/assets/:id/holders",
             "GET /v1/assets/:id/holders?view=aggregate",
             "GET /v1/assets/:id/compliance",
+            "GET /v1/assets/:id/pending-transfers",
+            "POST /v1/assets/:id/pending-transfers/:transfer_id/sign",
             "GET /v1/assets/:id/dividends",
             "GET /v1/assets/:id/distributions/:did",
             "GET /v1/assets/:id/export",
@@ -456,6 +492,10 @@ async fn index() -> Json<serde_json::Value> {
             "GET /v1/holders/:address/portfolio",
             "GET /v1/compliance/:address",
             "GET /v1/security/anomalies",
+            "GET /v1/bridge/packets?status=pending|completed|timeout",
+            "POST /v1/admin/bridge/observations",
+            "POST /v1/admin/cap-table/import-edgar",
+            "POST /v1/admin/cap-table/reports/sign",
             "GET /v1/audit/:entry_id/proof",
             "GET /v1/audit/mmr",
             "GET /v1/proofs/mmr",

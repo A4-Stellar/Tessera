@@ -5,6 +5,10 @@
 //! promotion, DNS) so that it can be exercised deterministically in tests and
 //! backed by real PostgreSQL ([`postgres`]) and DNS providers ([`dns`]) in
 //! production.
+//!
+//! It also hosts the automated P1 alert triage bot ([`triage`], issue #474),
+//! which runs runbook steps with timeouts and rollback, reports to Slack and
+//! records every action in the audit trail.
 
 pub mod config;
 pub mod dns;

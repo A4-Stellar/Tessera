@@ -1,0 +1,69 @@
+# Automated P1 triage bot (issue #474). Build the image from
+# infrastructure/orchestrator/Dockerfile.triage. Secrets live in the
+# `tessera-triage` Secret (keys referenced below); nothing sensitive is in
+# this file.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tessera-triage
+  namespace: tessera
+  labels: { app: tessera-triage }
+spec:
+  # One replica: Grafana OnCall triggers the webhook once per alert group and
+  # the bot keeps its de-duplication window in memory.
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app: tessera-triage }
+  template:
+    metadata:
+      labels: { app: tessera-triage }
+    spec:
+      serviceAccountName: tessera-triage
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: triage
+          image: tessera-triage:latest
+          ports:
+            - { name: http, containerPort: 8085 }
+          env:
+            - { name: TRIAGE_LISTEN, value: "0.0.0.0:8085" }
+            - { name: TRIAGE_INDEXER_DEPLOYMENT, value: tessera-indexer }
+            - { name: TRIAGE_CACHE_PATTERN, value: "cache:v1:*" }
+            - { name: TRIAGE_AUDIT_API_URL, value: "http://tessera-api.tessera.svc.cluster.local" }
+            - name: TRIAGE_WEBHOOK_TOKEN
+              valueFrom: { secretKeyRef: { name: tessera-triage, key: webhook-token } }
+            - name: TRIAGE_DATABASE_URL
+              valueFrom: { secretKeyRef: { name: tessera-triage, key: database-url } }
+            - name: TRIAGE_REDIS_URL
+              valueFrom: { secretKeyRef: { name: tessera-triage, key: redis-url } }
+            - name: TRIAGE_SLACK_WEBHOOK_URL
+              valueFrom: { secretKeyRef: { name: tessera-triage, key: slack-webhook-url } }
+            - name: TRIAGE_AUDIT_API_KEY
+              valueFrom: { secretKeyRef: { name: tessera-triage, key: audit-api-key, optional: true } }
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 50m, memory: 32Mi }
+            limits: { memory: 128Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tessera-triage
+  namespace: tessera
+spec:
+  selector: { app: tessera-triage }
+  ports:
+    - { name: http, port: 80, targetPort: http }

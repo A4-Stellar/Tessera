@@ -418,6 +418,25 @@
         }
       ],
       "output": "()"
+    },
+    {
+      "name": "board_transfer",
+      "doc": "Invokes `board_transfer` on asset-token.",
+      "inputs": [
+        {
+          "name": "from",
+          "type": "Address"
+        },
+        {
+          "name": "to",
+          "type": "Address"
+        },
+        {
+          "name": "amount",
+          "type": "i128"
+        }
+      ],
+      "output": "()"
     }
   ]
 }

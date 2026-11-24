@@ -19,3 +19,5 @@ soroban-sdk = { workspace = true, features = ["testutils"] }
 # Issue #317 tests load a proof fixture produced by `contracts/zk-aggregator`.
 hex = "0.4"
 serde_json = "1"
+# Issue #478 tests settle board-approved transfers on the real asset token.
+tessera-asset-token = { path = "../asset-token" }

@@ -490,6 +490,48 @@ fn hmac_sha256_hex(key: &str, message: &[u8]) -> String {
     format!("{checksum:016x}{checksum:016x}{checksum:016x}{checksum:016x}")
 }
 
+// ── Alert adapters (issues #475, #476) ────────────────────────────────────
+
+impl crate::services::bridge_monitor::AlertSink for WebhookDispatcher {
+    fn send(&self, alert: &crate::services::bridge_monitor::BridgeAlert) {
+        let event = WebhookEvent {
+            delivery_id: 0,
+            asset_contract: "bridge".into(),
+            event_type: alert.event_type().into(),
+            ledger: 0,
+            occurred_at: chrono::Utc::now().to_rfc3339(),
+            payload: crate::services::bridge_monitor::webhook_payload(alert),
+        };
+        let dispatcher = self.clone();
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move { dispatcher.enqueue(event).await });
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::services::edgar::ComplianceAlerts for WebhookDispatcher {
+    async fn discrepancy(
+        &self,
+        report: &crate::services::edgar::ReconciliationReport,
+        row: &crate::services::edgar::ReconciliationRow,
+    ) {
+        self.enqueue(WebhookEvent {
+            delivery_id: 0,
+            asset_contract: format!("asset:{}", report.asset_id),
+            event_type: "cap_table_discrepancy".into(),
+            ledger: 0,
+            occurred_at: chrono::Utc::now().to_rfc3339(),
+            payload: serde_json::json!({
+                "issuer_cik": report.issuer_cik,
+                "total_supply": report.total_supply,
+                "row": row,
+            }),
+        })
+        .await;
+    }
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

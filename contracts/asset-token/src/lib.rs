@@ -77,6 +77,10 @@ pub enum Error {
     PermitInvalidOwnerKey = 50,
     InsufficientAllowance = 51,
     AllowanceExpired = 52,
+    /// Issue #478: the amount is above the compliance contract's board
+    /// threshold; request it with `request_transfer` on the compliance
+    /// contract instead.
+    BoardApprovalRequired = 53,
 }
 
 #[contracttype]
@@ -239,6 +243,25 @@ impl AssetTokenContract {
         spender.require_auth();
         Self::require_transferable(&env, &from, &to, amount);
         permit::spend(&env, &from, &spender, amount);
+        Self::execute_transfer(&env, &from, &to, amount);
+    }
+
+    /// Issue #478: settle a transfer the compliance contract's board approved
+    /// (m-of-n `co_sign`). Only the configured compliance contract may call
+    /// this. It has already re-checked the allowlist and velocity caps for
+    /// both parties, which is why this path does not call back into it:
+    /// Soroban does not allow the compliance contract to be re-entered.
+    /// Pause, liquidation and lockups still apply.
+    pub fn board_transfer(env: Env, from: Address, to: Address, amount: i128) {
+        multi_class::require_single_class(&env);
+        let compliance: Address = env.storage().instance().get(&DataKey::Compliance).unwrap();
+        compliance.require_auth();
+        Self::require_not_paused(&env);
+        Self::require_active(&env);
+        Self::require_not_locked(&env, &from);
+        if amount <= 0 {
+            panic_with_error!(env, Error::InvalidAmount);
+        }
         Self::execute_transfer(&env, &from, &to, amount);
     }
 
@@ -599,6 +622,24 @@ impl AssetTokenContract {
         if !Self::velocity_allows(env, &compliance, from, amount) {
             panic_with_error!(env, Error::VelocityExceeded);
         }
+        if Self::board_approval_required(env, &compliance, amount) {
+            panic_with_error!(env, Error::BoardApprovalRequired);
+        }
+    }
+
+    /// Issue #478: asks the compliance contract whether `amount` needs board
+    /// approval. A compliance contract deployed before #478 has no
+    /// `requires_board_approval`; the failed call then means "no policy".
+    fn board_approval_required(env: &Env, compliance: &Address, amount: i128) -> bool {
+        let args: Vec<Val> = (env.current_contract_address(), amount).into_val(env);
+        matches!(
+            env.try_invoke_contract::<bool, soroban_sdk::Error>(
+                compliance,
+                &Symbol::new(env, "requires_board_approval"),
+                args,
+            ),
+            Ok(Ok(true))
+        )
     }
 
     fn execute_transfer(env: &Env, from: &Address, to: &Address, amount: i128) {

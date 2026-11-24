@@ -2014,6 +2014,7 @@ dependencies = [
  "hex",
  "serde_json",
  "soroban-sdk",
+ "tessera-asset-token",
  "tessera-common",
 ]
 

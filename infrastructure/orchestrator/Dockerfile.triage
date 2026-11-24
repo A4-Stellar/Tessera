@@ -1,0 +1,11 @@
+# Image for the automated P1 triage bot (issue #474).
+#   docker build -f Dockerfile.triage -t tessera-triage .
+FROM rust:1-bookworm AS build
+WORKDIR /src
+COPY . .
+RUN cargo build --release --locked --bin tessera-triage
+
+FROM gcr.io/distroless/cc-debian12:nonroot
+COPY --from=build /src/target/release/tessera-triage /usr/local/bin/tessera-triage
+EXPOSE 8085
+ENTRYPOINT ["/usr/local/bin/tessera-triage"]

@@ -484,6 +484,9 @@ pub(crate) fn scval_to_json(v: &xdr::ScVal) -> Result<serde_json::Value, IndexEr
         }
         xdr::ScVal::Symbol(s) => Value::String(s.to_string()),
         xdr::ScVal::String(s) => Value::String(s.to_string()),
+        // Issue #475: bridge events carry message hashes and chain names as
+        // bytes; lowercase hex keeps them comparable across chains.
+        xdr::ScVal::Bytes(b) => Value::String(hex::encode(b.as_slice())),
         xdr::ScVal::Address(a) => Value::String(address_to_string(a)?),
         xdr::ScVal::Vec(Some(items)) => {
             let mut arr = Vec::with_capacity(items.len());
