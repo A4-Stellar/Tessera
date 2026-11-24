@@ -162,40 +162,26 @@ async fn main() {
                 tracing::error!(%error, "tenant rate-limit schema initialization failed");
                 std::process::exit(1);
             }
-            // Issue #468: sandbox tables + FORCE ROW LEVEL SECURITY.
-            if let Err(error) =
-                sqlx::raw_sql(include_str!("db/migrations/0005_sandbox_tenant_rls.sql"))
-                    .execute(router.primary())
-                    .await
+            // Versioned Avro schemas for Soroban contract events. The same
+            // table is served by the orchestrator's Kafka Schema Registry
+            // adapter (infrastructure/orchestrator/).
+            if let Err(error) = sqlx::raw_sql(include_str!(
+                "db/migrations/0005_contract_event_schemas.sql"
+            ))
+            .execute(router.primary())
+            .await
             {
-                tracing::error!(%error, "sandbox RLS schema initialization failed");
+                tracing::error!(%error, "contract event schema initialization failed");
                 std::process::exit(1);
             }
-            // Issue #469: EigenDA DA-proof records.
-            if let Err(error) =
-                sqlx::raw_sql(include_str!("db/migrations/0006_eigenda_da_proofs.sql"))
-                    .execute(router.primary())
-                    .await
-            {
-                tracing::error!(%error, "EigenDA schema initialization failed");
-                std::process::exit(1);
-            }
-            // Issue #469: wire EigenDA when a disperser URL is configured.
-            if std::env::var("EIGENDA_DISPERSER_URL").is_ok() {
-                match indexer::eigenda::HttpDisperser::from_env() {
-                    Ok(disperser) => {
-                        state.da_disperser = Some(Arc::new(disperser));
-                        state.da_store = Some(Arc::new(indexer::eigenda::PgProofStore::new(
-                            router.primary().clone(),
-                        )));
-                        tracing::info!("EigenDA commitments enabled");
-                    }
-                    Err(error) => {
-                        tracing::error!(%error, "EigenDA configuration invalid");
-                        std::process::exit(1);
-                    }
-                }
-            }
+            // Durable registry used by the orchestrator's Kafka Schema
+            // Registry. The in-memory copy in AppState stays authoritative
+            // for the hot decode path.
+            state.persistent_schemas = Some(Arc::new(
+                indexer::schema_registry::PostgresSchemaRegistry::from_pool(
+                    router.primary().clone(),
+                ),
+            ));
             // Issue #163: quarantine table behind `POST /v1/admin/dlq/retry`.
             state.dlq = indexer::dlq::DeadLetterQueue::open(router.primary().clone()).await;
             if let Some(dlq) = state.dlq.clone() {
@@ -268,7 +254,29 @@ async fn main() {
 
     // Spawn the indexer; it owns its own clone of the shared state.
     let indexer = Indexer::new(state.clone());
-    tokio::spawn(async move { indexer.run(shutdown_rx).await });
+    let indexer_shutdown = shutdown_rx.clone();
+    tokio::spawn(async move { indexer.run(indexer_shutdown).await });
+
+    // Shadow indexer: independent RPC node + independent snapshot, diffed
+    // against the primary snapshot every 60 seconds. Divergences are dumped
+    // into a separate RocksDB column family for forensics. A failure to open
+    // the forensics store degrades to alerting without persistence; it never
+    // prevents the shadow reader from starting.
+    let forensics_path = std::path::PathBuf::from(std::env::var("RWA_SHADOW_FORENSICS_PATH")
+        .unwrap_or_else(|_| "./data/shadow-forensics".into()));
+    if let Some(parent) = forensics_path.parent() {
+        if let Err(error) = std::fs::create_dir_all(parent) {
+            tracing::warn!(%error, path = %parent.display(), "cannot create shadow forensics directory");
+        }
+    }
+    match storage::rocksdb::RocksLedger::open(&forensics_path) {
+        Ok(db) => state.shadow.set_forensics(Arc::new(db)),
+        Err(error) => tracing::warn!(%error, "shadow forensics store unavailable; divergences will not be persisted"),
+    }
+    let shadow = Arc::clone(&state.shadow);
+    let shadow_state = state.clone();
+    let shadow_shutdown = shutdown_rx.clone();
+    tokio::spawn(async move { shadow.run(shadow_state, shadow_shutdown).await });
 
     let app = routes::router(state).layer(tower_http::trace::TraceLayer::new_for_http());
 

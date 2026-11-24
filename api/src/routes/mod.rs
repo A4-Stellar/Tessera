@@ -9,6 +9,7 @@ pub mod dlq;
 pub mod events;
 pub mod export;
 pub mod holders;
+pub mod meta;
 pub mod portfolio;
 pub mod privacy;
 pub mod proofs;
@@ -237,15 +238,37 @@ pub fn router(state: AppState) -> Router {
         )
         .nest("/v1", data_routes)
         .route("/v1/ws", get(crate::ws::handler))
-        // Sandbox lifecycle. Same handlers are reachable at both the root and
-        // `/v1` so integrators can keep one base URL in their SDK config.
-        .route("/sandbox/reset", axum::routing::post(sandbox::reset))
-        .route("/sandbox/status", get(sandbox::status))
-        .route("/v1/sandbox/reset", axum::routing::post(sandbox::reset))
-        .route("/v1/sandbox/status", get(sandbox::status))
+        // Versioned aliases for the protocol-standard root endpoints. The
+        // root paths stay available for anchors/well-known clients, but the
+        // deprecation map marks them with a successor and sunset date.
+        .route("/v1/health", get(health))
+        .route("/v1/metrics", get(metrics))
+        .route("/v1/version", get(version))
+        .route(
+            "/v1/sep24/transactions/deposit/interactive",
+            axum::routing::post(sep24::interactive_deposit),
+        )
+        .route("/v1/sep24/transaction", get(sep24::get_transaction))
+        .route("/v1/sep24/transactions", get(sep24::list_transactions))
+        .route(
+            "/v1/sep24/transactions/:id/confirm_external",
+            axum::routing::post(sep24::confirm_external),
+        )
+        .route(
+            "/v1/sep24/transactions/:id/complete",
+            axum::routing::post(sep24::complete),
+        )
+        .route(
+            "/v1/sep24/transactions/:id/kyc",
+            axum::routing::post(sep24::submit_kyc),
+        )
         .route("/v1/admin/dlq/retry", axum::routing::post(dlq::retry))
         // Issue #26: per-key differential-privacy budget consumption.
         .route("/v1/admin/privacy/budget", get(privacy::budget))
+        // Shadow-indexer health: independent-node lag and last verification.
+        .route("/v1/admin/health/shadow", get(shadow_health))
+        // Machine-readable API version/deprecation catalogue.
+        .route("/v1/meta/versions", get(meta::versions))
         // `route_layer` (rather than `layer`) so the middleware runs after
         // route matching and can read `MatchedPath` from the request
         // extensions for a low-cardinality route label.
@@ -310,10 +333,12 @@ pub fn router(state: AppState) -> Router {
             token_bucket_state,
             token_bucket_middleware,
         ))
-        // Validate `X-Sandbox-Tenant-ID` on every route, not just sandbox
-        // ones, so a malformed value can never reach a Postgres GUC.
-        .layer(middleware::from_fn(
-            crate::middleware::sandbox::sandbox_tenant_middleware,
+        // API versioning: annotate deprecated paths with Sunset/Link and
+        // return 410 Gone once the sunset date has passed. The map is shared
+        // with GET /v1/meta/versions so both surfaces agree.
+        .layer(middleware::from_fn_with_state(
+            Arc::new(meta::versions_map().clone()),
+            crate::middleware::deprecation::deprecation_middleware,
         ))
         .layer(cors)
         // Drop named personal-data fields for non-admin callers (issue #284).
@@ -460,6 +485,16 @@ async fn version() -> Json<serde_json::Value> {
     Json(json!({
         "version": env!("CARGO_PKG_VERSION"),
         "release": concat!("v", env!("CARGO_PKG_VERSION")),
+    }))
+}
+
+/// Shadow-indexer health: reports the lag of the independent snapshot and
+/// the time of the last primary-vs-shadow verification (issue: silent XDR
+/// parsing bugs / missed events).
+async fn shadow_health(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let status = state.shadow.status();
+    Json(serde_json::to_value(status).unwrap_or_else(|error| {
+        json!({ "status": "error", "message": error.to_string() })
     }))
 }
 

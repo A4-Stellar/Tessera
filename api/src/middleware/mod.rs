@@ -1,4 +1,5 @@
 pub mod anonymizer;
+pub mod deprecation;
 pub mod pii_scrubber;
 #[expect(
     dead_code,

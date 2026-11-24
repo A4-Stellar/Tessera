@@ -231,6 +231,7 @@ mod tests {
                 axum::routing::get(list_entries).post(create_entry),
             )
             .route("/v1/audit/entries/:sequence", axum::routing::get(get_entry))
+            .route("/v1/audit/:entry_id/proof", axum::routing::get(mmr_proof))
             .route("/v1/audit/anchors", axum::routing::get(list_anchors))
             .route("/v1/audit/anchor", axum::routing::post(publish_anchor))
             .with_state(state.clone());

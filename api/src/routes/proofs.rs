@@ -536,7 +536,7 @@ fn bls_fq_from_bytes(bytes: &[u8]) -> Option<BlsFq> {
 
 fn bls_scalar_from_bytes(bytes: &[u8; 32]) -> Option<BlsFr> {
     let value = BlsFr::from_be_bytes_mod_order(bytes);
-    (field_bytes::<32, BlsFr>(&value) == *bytes).then_some(value)
+    (field_bytes::<32, BlsFr>(&value).as_slice() == bytes.as_slice()).then_some(value)
 }
 
 fn field_bytes<const N: usize, F: PrimeField>(value: &F) -> [u8; N] {

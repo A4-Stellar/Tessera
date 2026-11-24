@@ -329,7 +329,7 @@ fn insert_rate_limit_headers(headers: &mut HeaderMap, decision: &Decision) {
     headers.insert(
         "x-ratelimit-reset",
         HeaderValue::from_str(&decision.reset_seconds.to_string())
-            .expect("rate-limit seconds are ASCII digits"),
+            .unwrap_or_else(|_| HeaderValue::from_static("0")),
     );
 }
 
@@ -425,11 +425,13 @@ pub async fn token_bucket_middleware(
                     ),
                 )
                     .into_response();
-                response.headers_mut().insert(
-                    header::RETRY_AFTER,
-                    HeaderValue::from_str(&decision.retry_after.to_string())
-                        .expect("retry-after seconds are ASCII digits"),
-                );
+                response
+                    .headers_mut()
+                    .insert(
+                        header::RETRY_AFTER,
+                        HeaderValue::from_str(&decision.retry_after.to_string())
+                            .unwrap_or_else(|_| HeaderValue::from_static("0")),
+                    );
                 response
             };
             insert_rate_limit_headers(response.headers_mut(), &decision);

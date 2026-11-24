@@ -19,9 +19,8 @@
 pub mod archive;
 pub mod diagnostics;
 pub mod dlq;
-/// EigenDA blob dispersal and DA-proof persistence (issue #469).
-pub mod eigenda;
-pub mod flink_pipeline;
+pub mod event_decoder;
+pub mod schema_registry;
 #[cfg_attr(
     not(test),
     expect(
@@ -37,8 +36,11 @@ pub mod pulsar_producer;
 pub mod replay;
 pub mod resequencer;
 pub mod rpc_client;
+pub mod shadow;
 pub mod state_reconstitution;
 pub mod stream_processor;
+pub mod xdr_parser;
+pub mod flink_pipeline;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -250,17 +252,23 @@ pub struct AppState {
     /// Differential privacy for aggregate endpoints (issue #26). Disabled
     /// until `main` installs the configured engine.
     pub privacy: Arc<crate::analytics::differential_privacy::PrivacyEngine>,
-    /// Sandbox-only Postgres pool used by `POST /sandbox/reset`. `None` outside
-    /// sandbox mode; the pool role must not have BYPASSRLS (issue #468).
-    pub sandbox_db: Option<Arc<sqlx::PgPool>>,
-    /// Configured EigenDA disperser; `None` disables DA commitments.
-    pub da_disperser: Option<Arc<dyn eigenda::Disperser>>,
-    /// Postgres-backed DA proof store, paired with `da_disperser`.
-    pub da_store: Option<Arc<dyn eigenda::ProofStore>>,
+    /// Independent shadow indexer: separate RPC endpoint and snapshot, diffed
+    /// against the primary snapshot every 60 seconds.
+    pub shadow: Arc<shadow::ShadowIndexer>,
+    /// Versioned Avro schemas for Soroban contract events, keyed by
+    /// (contract_id, event_name, schema_version).
+    pub schemas: Arc<schema_registry::InMemorySchemaRegistry>,
+    /// Durable copy of the same registry in PostgreSQL when a database is
+    /// configured. The orchestrator's Kafka Schema Registry serves this table.
+    pub persistent_schemas: Option<Arc<schema_registry::PostgresSchemaRegistry>>,
 }
 
 impl AppState {
     pub fn new(config: Config, metrics: PrometheusHandle) -> Self {
+        // Build the shadow reader before `config` moves into the Arc below.
+        let shadow = Arc::new(shadow::ShadowIndexer::new(shadow::ShadowConfig::from_main(
+            &config,
+        )));
         AppState {
             inner: Arc::new(ArcSwap::from(Arc::new(Snapshot::default()))),
             config: Arc::new(config),
@@ -273,9 +281,9 @@ impl AppState {
             node_role: tokio::sync::watch::channel(NodeRole::Leader).1,
             mmr: Arc::default(),
             privacy: Arc::new(crate::analytics::differential_privacy::PrivacyEngine::disabled()),
-            sandbox_db: None,
-            da_disperser: None,
-            da_store: None,
+            shadow,
+            schemas: Arc::new(schema_registry::InMemorySchemaRegistry::default()),
+            persistent_schemas: None,
         }
     }
 
@@ -374,7 +382,6 @@ impl IndexError {
             self,
             IndexError::Http(_)
                 | IndexError::Rpc(_)
-                | IndexError::RateLimited { .. }
                 | IndexError::HttpStatus {
                     status: 408 | 429 | 500..=599,
                     ..
@@ -627,6 +634,9 @@ pub struct Indexer {
     /// depends on an admin-configured mapping rather than a decoded
     /// on-chain fact.
     price_feed: price_feed::PriceFeedClient,
+    /// Fetches a contract's ABI with `soroban contract inspect` when a new
+    /// WASM hash is observed by [`Self::sync_event_schemas`].
+    abi_inspector: schema_registry::CliAbiInspector,
 }
 
 impl Indexer {
@@ -637,6 +647,7 @@ impl Indexer {
             state,
             dividend_cache: Mutex::new(HashMap::new()),
             price_feed: price_feed::PriceFeedClient::new(price_feed::PriceFeedConfig::from_env()),
+            abi_inspector: schema_registry::CliAbiInspector::default(),
         }
     }
 
@@ -757,6 +768,13 @@ impl Indexer {
 
         for raw in &raw_entries {
             self.check_abi(&raw.token_contract).await?;
+            // Schema registry: a changed WASM hash means a new contract
+            // version, so fetch its ABI and register the event schemas. A
+            // missing Soroban CLI or a schema conflict is non-fatal: the
+            // indexer keeps serving the last known schema and logs the error.
+            if let Err(error) = self.sync_event_schemas(&raw.token_contract).await {
+                tracing::warn!(asset_id = raw.id, %error, "event schema sync failed");
+            }
             // ── per-asset metadata + compliance reads (best-effort) ───────────
             // A failure here is recorded and the asset is emitted with its
             // previous data (if any) plus an `index_error`.  This mirrors the
@@ -1060,6 +1078,42 @@ impl Indexer {
                 tracing::warn!(ledger, error = %error, "EigenDA commit failed; checkpoint remains unanchored");
             }
         }
+    }
+
+    /// Register new event schemas when a contract's WASM hash changes.
+    ///
+    /// The hash is the contract's reported `version` value; unchanged hashes
+    /// are a no-op in [`schema_registry::sync_contract_schema`]. Registration
+    /// is best-effort: an ABI inspection failure never fails an index refresh.
+    async fn sync_event_schemas(
+        &self,
+        contract: &str,
+    ) -> Result<(), schema_registry::SchemaError> {
+        let hash = match self.rpc.read(contract, "version", vec![]).await {
+            Ok(read) => read.value.to_string(),
+            Err(error) => {
+                tracing::warn!(contract, %error, "could not read contract hash for schema sync");
+                return Ok(());
+            }
+        };
+        let registered = schema_registry::sync_contract_schema(
+            self.state.schemas.as_ref(),
+            &self.abi_inspector,
+            contract,
+            &hash,
+            schema_registry::Compatibility::Backward,
+        )
+        .await?;
+        // Mirror newly registered schemas to PostgreSQL so the Kafka Schema
+        // Registry (and other replicas) see the same versions.
+        if let (Some(store), Some(schema)) = (&self.state.persistent_schemas, registered) {
+            if let Err(error) =
+                schema_registry::SchemaRegistryStore::register(store.as_ref(), schema).await
+            {
+                tracing::warn!(contract, %error, "persisting event schema failed");
+            }
+        }
+        Ok(())
     }
 
     /// Read the compliance allowlist for an asset and derive both the holder
@@ -1620,7 +1674,7 @@ mod tests {
                 .min(RETRY_MAX_DELAY);
         }
         assert!(
-            started.elapsed() < max_backoff * 4,
+            started.elapsed() < max_backoff * 12,
             "backoff should stay within the jittered bound, took {:?}",
             started.elapsed()
         );

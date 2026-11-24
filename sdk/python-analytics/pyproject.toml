@@ -34,6 +34,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Direct Kafka consumption with Schema-Registry-backed Avro decoding. The
+# decoder itself is stdlib-only; confluent-kafka is only needed for the
+# production consumer passed to `KafkaEventSource`.
+kafka = [
+    "confluent-kafka>=2.3,<3",
+]
 test = [
     "flit>=3.9,<4",
     "mypy>=1.10,<2",
