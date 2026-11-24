@@ -293,7 +293,7 @@ groups:
             The availability error budget is burning at {{ $value | printf "%.1f" }}x
             the sustainable rate over 1h (confirmed over 5m). At this
             rate 2% of the 30-day budget is consumed within the window.
-          runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/infrastructure/monitoring/README.md#runbook
+          runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/docs/runbooks/api-error-budget.md
       - alert: TesseraApiErrorBudgetFastBurn
         expr: |
           tessera:error_budget:burn_rate6h{slo="availability"} > 6
@@ -311,7 +311,7 @@ groups:
             The availability error budget is burning at {{ $value | printf "%.1f" }}x
             the sustainable rate over 6h (confirmed over 30m). At this
             rate 5% of the 30-day budget is consumed within the window.
-          runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/infrastructure/monitoring/README.md#runbook
+          runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/docs/runbooks/api-error-budget.md
       - alert: TesseraApiErrorBudgetSlowBurn
         expr: |
           tessera:error_budget:burn_rate1d{slo="availability"} > 3
@@ -329,7 +329,7 @@ groups:
             The availability error budget is burning at {{ $value | printf "%.1f" }}x
             the sustainable rate over 1d (confirmed over 2h). At this
             rate 10% of the 30-day budget is consumed within the window.
-          runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/infrastructure/monitoring/README.md#runbook
+          runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/docs/runbooks/api-error-budget.md
       - alert: TesseraApiErrorBudgetSlowBurn
         expr: |
           tessera:error_budget:burn_rate3d{slo="availability"} > 1
@@ -347,7 +347,7 @@ groups:
             The availability error budget is burning at {{ $value | printf "%.1f" }}x
             the sustainable rate over 3d (confirmed over 6h). At this
             rate 10% of the 30-day budget is consumed within the window.
-          runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/infrastructure/monitoring/README.md#runbook
+          runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/docs/runbooks/api-error-budget.md
       - alert: TesseraApiErrorBudgetLow
         expr: tessera:error_budget:remaining_ratio{slo="availability"} < 0.25
         for: 15m
@@ -359,7 +359,7 @@ groups:
           description: >-
             {{ $value | humanizePercentage }} of the 30-day availability error budget
             remains. Freeze risky deploys until it recovers.
-          runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/infrastructure/monitoring/README.md#runbook
+          runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/docs/runbooks/api-error-budget.md
       - alert: TesseraApiErrorBudgetExhausted
         expr: tessera:error_budget:remaining_ratio{slo="availability"} <= 0
         for: 5m
@@ -369,7 +369,7 @@ groups:
         annotations:
           summary: "Tessera API availability (99.9%) error budget exhausted"
           description: The 30-day availability SLO is currently breached.
-          runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/infrastructure/monitoring/README.md#runbook
+          runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/docs/runbooks/api-error-budget.md
       - alert: TesseraApiErrorBudgetFastBurn
         expr: |
           tessera:error_budget:burn_rate1h{slo="latency"} > 14.4
@@ -387,7 +387,7 @@ groups:
             The latency error budget is burning at {{ $value | printf "%.1f" }}x
             the sustainable rate over 1h (confirmed over 5m). At this
             rate 2% of the 30-day budget is consumed within the window.
-          runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/infrastructure/monitoring/README.md#runbook
+          runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/docs/runbooks/api-error-budget.md
       - alert: TesseraApiErrorBudgetFastBurn
         expr: |
           tessera:error_budget:burn_rate6h{slo="latency"} > 6
@@ -405,7 +405,7 @@ groups:
             The latency error budget is burning at {{ $value | printf "%.1f" }}x
             the sustainable rate over 6h (confirmed over 30m). At this
             rate 5% of the 30-day budget is consumed within the window.
-          runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/infrastructure/monitoring/README.md#runbook
+          runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/docs/runbooks/api-error-budget.md
       - alert: TesseraApiErrorBudgetSlowBurn
         expr: |
           tessera:error_budget:burn_rate1d{slo="latency"} > 3
@@ -423,7 +423,7 @@ groups:
             The latency error budget is burning at {{ $value | printf "%.1f" }}x
             the sustainable rate over 1d (confirmed over 2h). At this
             rate 10% of the 30-day budget is consumed within the window.
-          runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/infrastructure/monitoring/README.md#runbook
+          runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/docs/runbooks/api-error-budget.md
       - alert: TesseraApiErrorBudgetSlowBurn
         expr: |
           tessera:error_budget:burn_rate3d{slo="latency"} > 1
@@ -441,7 +441,7 @@ groups:
             The latency error budget is burning at {{ $value | printf "%.1f" }}x
             the sustainable rate over 3d (confirmed over 6h). At this
             rate 10% of the 30-day budget is consumed within the window.
-          runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/infrastructure/monitoring/README.md#runbook
+          runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/docs/runbooks/api-error-budget.md
       - alert: TesseraApiErrorBudgetLow
         expr: tessera:error_budget:remaining_ratio{slo="latency"} < 0.25
         for: 15m
@@ -453,7 +453,7 @@ groups:
           description: >-
             {{ $value | humanizePercentage }} of the 30-day latency error budget
             remains. Freeze risky deploys until it recovers.
-          runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/infrastructure/monitoring/README.md#runbook
+          runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/docs/runbooks/api-error-budget.md
       - alert: TesseraApiErrorBudgetExhausted
         expr: tessera:error_budget:remaining_ratio{slo="latency"} <= 0
         for: 5m
@@ -463,4 +463,4 @@ groups:
         annotations:
           summary: "Tessera API latency (p99 < 100 ms) error budget exhausted"
           description: The 30-day latency SLO is currently breached.
-          runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/infrastructure/monitoring/README.md#runbook
+          runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/docs/runbooks/api-error-budget.md

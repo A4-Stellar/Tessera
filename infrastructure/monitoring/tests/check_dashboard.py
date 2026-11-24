@@ -15,7 +15,7 @@ import yaml
 here = pathlib.Path(__file__).resolve().parent.parent
 rules = yaml.safe_load((here / "slo_rules.yml").read_text())
 dashboard = json.loads((here / "slo_dashboard.json").read_text())
-readme = (here / "README.md").read_text()
+runbook = (here.parent.parent / "docs" / "runbooks" / "api-error-budget.md").read_text()
 
 recorded = {r["record"] for g in rules["groups"] for r in g["rules"] if "record" in r}
 alerts = {r["alert"] for g in rules["groups"] for r in g["rules"] if "alert" in r}
@@ -25,7 +25,7 @@ exprs += [a["expr"] for a in dashboard["annotations"]["list"] if "expr" in a]
 used = {m for e in exprs for m in re.findall(r"tessera:[a-z0-9_:]+", e)}
 
 errors = [f"dashboard queries unrecorded series {m}" for m in sorted(used - recorded)]
-errors += [f"README runbook does not cover alert {a}" for a in sorted(alerts) if a not in readme]
+errors += [f"docs/runbooks/api-error-budget.md does not cover alert {a}" for a in sorted(alerts) if a not in runbook]
 ids = [p["id"] for p in dashboard["panels"]]
 if len(ids) != len(set(ids)):
     errors.append("duplicate panel ids")

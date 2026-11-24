@@ -115,6 +115,35 @@ async fn main() {
         }
     }
 
+    // Issues #475/#476: bridge and cap-table compliance alerts go to the
+    // webhook service when an endpoint is configured.
+    if let Ok(url) = std::env::var("RWA_ALERT_WEBHOOK_URL") {
+        let (dispatcher, rx) = services::webhook::WebhookDispatcher::new(2);
+        dispatcher.register(services::webhook::Subscription {
+            id: "tessera-alerts".into(),
+            endpoint_url: url,
+            secret_key: std::env::var("RWA_ALERT_WEBHOOK_SECRET").unwrap_or_default(),
+            asset_filter: None,
+            event_filter: None,
+        });
+        state.bridge = Arc::new(
+            services::bridge_monitor::BridgeMonitor::default()
+                .with_sink(Box::new(dispatcher.clone())),
+        );
+        state.compliance_webhooks = Arc::new(dispatcher.clone());
+        dispatcher.run(rx);
+    }
+    // Issue #476: EDGAR import and report signing.
+    if let Ok(user_agent) = std::env::var("RWA_SEC_USER_AGENT") {
+        state.edgar = Arc::new(services::edgar::SecEdgar::new(user_agent));
+    }
+    match services::edgar::ReportSigner::from_env() {
+        Some(signer) => state.report_signer = Arc::new(signer),
+        None => tracing::warn!(
+            "RWA_REPORT_SIGNING_KEY not set; cap-table reports are signed with a per-process key"
+        ),
+    }
+
     // Issue #26: differential privacy for aggregate endpoints.
     match analytics::differential_privacy::PrivacyEngine::from_env() {
         Ok(engine) => state.privacy = Arc::new(engine),

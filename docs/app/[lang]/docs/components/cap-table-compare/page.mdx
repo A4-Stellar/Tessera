@@ -1,6 +1,6 @@
 export const metadata = {
   title: "CapTableCompare",
-  description: "Side-by-side comparison of up to four tokenized assets: holder concentration (Gini coefficient, largest holder), minimum investment, dividend yield and schedule, and compliance rules.",
+  description: "Compares cap tables: up to four tokenized assets side by side, or one asset's on-chain holders against SEC EDGAR Form 4 filings.",
   canonical: "/docs/components/cap-table-compare",
 };
 
@@ -8,7 +8,10 @@ export const metadata = {
 
 # CapTableCompare
 
-{"Side-by-side comparison of up to four tokenized assets: holder concentration (Gini coefficient, largest holder), minimum investment, dividend yield and schedule, and compliance rules. Cells that differ from the first selected asset are highlighted and annotated with the difference; the table can be exported as CSV or JSON."}
+{"Compares cap tables: up to four tokenized assets side by side, or one asset's on-chain holders against SEC EDGAR Form 4 filings."}
+
+- `mode="assets"`{" (default): side-by-side comparison of up to four tokenized assets: holder concentration (Gini coefficient, largest holder), minimum investment, dividend yield and schedule, and compliance rules. Cells that differ from the first selected asset are highlighted and annotated with the difference; the table can be exported as CSV or JSON."}
+- `mode="edgar"`{" (issue #476): one asset's on-chain holders against an uploaded CSV of SEC EDGAR Form 4 holdings, with new, departed and changed holders, 5 % / 10 % highlighting and a signed PDF export."}
 
 Source: `components/CapTableCompare.tsx` · available in every MDX page as `<CapTableCompare />`.
 
@@ -25,6 +28,13 @@ Source: `components/CapTableCompare.tsx` · available in every MDX page as `<Cap
     </tr>
   </thead>
   <tbody>
+    <tr>
+      <td><code>{"mode"}</code></td>
+      <td><code>{"\"assets\" | \"edgar\""}</code></td>
+      <td>No</td>
+      <td>—</td>
+      <td><code>{"\"assets\""}</code>{" compares up to four assets; "}<code>{"\"edgar\""}</code>{" reconciles one asset's holders with EDGAR Form 4 filings."}</td>
+    </tr>
     <tr>
       <td><code>{"assets"}</code></td>
       <td><code>{"CompareAsset[]"}</code></td>
@@ -50,7 +60,7 @@ Source: `components/CapTableCompare.tsx` · available in every MDX page as `<Cap
       <td><code>{"apiBaseUrl"}</code></td>
       <td><code>{"string"}</code></td>
       <td>No</td>
-      <td>See source</td>
+      <td>—</td>
       <td>{"API base URL for "}<code>{"source=\"api\""}</code>{"; defaults to "}<code>{"NEXT_PUBLIC_API_BASE_URL"}</code>{"."}</td>
     </tr>
     <tr>
@@ -66,6 +76,48 @@ Source: `components/CapTableCompare.tsx` · available in every MDX page as `<Cap
       <td>No</td>
       <td>—</td>
       <td>{"Called with the export payload; the file is still downloaded. Useful for analytics or tests."}</td>
+    </tr>
+    <tr>
+      <td><code>{"assetId"}</code></td>
+      <td><code>{"string | number"}</code></td>
+      <td>Yes</td>
+      <td>—</td>
+      <td>{"Asset id in the Tessera API."}</td>
+    </tr>
+    <tr>
+      <td><code>{"holders"}</code></td>
+      <td><code>{"OnChainHolder[]"}</code></td>
+      <td>No</td>
+      <td>—</td>
+      <td>{"Pre-loaded on-chain data (skips the API fetch, e.g. in docs examples)."}</td>
+    </tr>
+    <tr>
+      <td><code>{"totalSupply"}</code></td>
+      <td><code>{"string"}</code></td>
+      <td>No</td>
+      <td>—</td>
+      <td>{"Total supply in base units, with "}<code>{"holders"}</code>{"."}</td>
+    </tr>
+    <tr>
+      <td><code>{"decimals"}</code></td>
+      <td><code>{"number"}</code></td>
+      <td>No</td>
+      <td>—</td>
+      <td>{"Token decimals, with "}<code>{"holders"}</code>{". Defaults to 0."}</td>
+    </tr>
+    <tr>
+      <td><code>{"filing"}</code></td>
+      <td><code>{"FilingHolder[]"}</code></td>
+      <td>No</td>
+      <td>—</td>
+      <td>{"Pre-loaded filing holders instead of an upload."}</td>
+    </tr>
+    <tr>
+      <td><code>{"fetchImpl"}</code></td>
+      <td><code>{"FetchLike"}</code></td>
+      <td>No</td>
+      <td>—</td>
+      <td><code>{"fetch"}</code>{" replacement, for tests."}</td>
     </tr>
   </tbody>
 </table>

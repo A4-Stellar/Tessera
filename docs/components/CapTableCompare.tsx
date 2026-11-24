@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useWebSocket } from "@/hooks/useWebSocket";
+import { CapTableEdgarCompare, type CapTableEdgarCompareProps } from "@/components/CapTableEdgarCompare";
 import { API_BASE_URL } from "@/lib/api";
 import {
   MAX_COMPARED_ASSETS,
@@ -213,24 +214,48 @@ interface CapTableCompareProps {
   assets?: CompareAsset[];
   /** IDs selected on first render (at most four). Defaults to the first two assets. */
   initialSelection?: string[];
-  /** Load the asset list and metrics from the Tessera API instead of `assets`. */
+  /**
+   * Load the asset list and metrics from the Tessera API instead of `assets`.
+   * @default "props"
+   */
   source?: "props" | "api";
   /** API base URL for `source="api"`; defaults to `NEXT_PUBLIC_API_BASE_URL`. */
   apiBaseUrl?: string;
-  /** With `source="api"`, refresh an asset's metrics when the WebSocket stream reports activity for its token contract. */
+  /**
+   * With `source="api"`, refresh an asset's metrics when the WebSocket stream reports activity for its token contract.
+   * @default false
+   */
   live?: boolean;
   /** Called with the export payload; the file is still downloaded. Useful for analytics or tests. */
   onExport?: (format: "csv" | "json", content: string) => void;
 }
 
+type CapTableCompareModeProps =
+  | ({
+      /** `"assets"` compares up to four assets; `"edgar"` reconciles one asset's holders with EDGAR Form 4 filings. */
+      mode?: "assets";
+    } & CapTableCompareProps)
+  | ({
+      /** `"assets"` compares up to four assets; `"edgar"` reconciles one asset's holders with EDGAR Form 4 filings. */
+      mode: "edgar";
+    } & CapTableEdgarCompareProps);
+
 /**
- * Side-by-side comparison of up to four tokenized assets: holder concentration
- * (Gini coefficient, largest holder), minimum investment, dividend yield and
- * schedule, and compliance rules. Cells that differ from the first selected
- * asset are highlighted and annotated with the difference; the table can be
- * exported as CSV or JSON.
+ * Compares cap tables: up to four tokenized assets side by side, or one asset's on-chain holders against SEC EDGAR Form 4 filings.
+ *
+ * - `mode="assets"` (default): side-by-side comparison of up to four tokenized assets: holder concentration (Gini coefficient, largest holder), minimum investment, dividend yield and schedule, and compliance rules. Cells that differ from the first selected asset are highlighted and annotated with the difference; the table can be exported as CSV or JSON.
+ * - `mode="edgar"` (issue #476): one asset's on-chain holders against an uploaded CSV of SEC EDGAR Form 4 holdings, with new, departed and changed holders, 5 % / 10 % highlighting and a signed PDF export.
  */
-export function CapTableCompare({
+export function CapTableCompare(props: CapTableCompareModeProps) {
+  if (props.mode === "edgar") {
+    const { mode: _mode, ...edgar } = props;
+    return <CapTableEdgarCompare {...edgar} />;
+  }
+  const { mode: _mode, ...assets } = props;
+  return <AssetComparison {...assets} />;
+}
+
+function AssetComparison({
   assets: assetsProp,
   initialSelection,
   source = "props",

@@ -248,6 +248,7 @@ dependencies = [
 name = "bridge"
 version = "0.1.0"
 dependencies = [
+ "ed25519-dalek",
  "soroban-sdk",
 ]
 
@@ -2013,6 +2014,7 @@ dependencies = [
  "hex",
  "serde_json",
  "soroban-sdk",
+ "tessera-asset-token",
  "tessera-common",
 ]
 

@@ -8,3 +8,11 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 soroban-sdk = { workspace = true }
+# Non-trapping signature check: the host's `ed25519_verify` traps on a bad
+# signature, which the fuzz target treats as a finding. A bad signature must
+# simply not count towards MIN_SIGNATURES.
+ed25519-dalek = { version = "2.2", default-features = false }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+ed25519-dalek = { version = "2.2", default-features = false, features = ["rand_core"] }

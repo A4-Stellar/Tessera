@@ -721,6 +721,103 @@
         }
       ],
       "output": "bool"
+    },
+    {
+      "name": "set_multisig_policy",
+      "doc": "Invokes `set_multisig_policy` on compliance.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "token",
+          "type": "Address"
+        },
+        {
+          "name": "threshold_amount",
+          "type": "i128"
+        },
+        {
+          "name": "required_signatures",
+          "type": "u32"
+        },
+        {
+          "name": "board",
+          "type": "Vec<Address>"
+        },
+        {
+          "name": "expiry_ledgers",
+          "type": "u32"
+        }
+      ],
+      "output": "MultiSigTransferPolicy"
+    },
+    {
+      "name": "get_multisig_policy",
+      "doc": "Invokes `get_multisig_policy` on compliance.",
+      "inputs": [],
+      "output": "Option<MultiSigTransferPolicy>"
+    },
+    {
+      "name": "requires_board_approval",
+      "doc": "Invokes `requires_board_approval` on compliance.",
+      "inputs": [
+        {
+          "name": "token",
+          "type": "Address"
+        },
+        {
+          "name": "amount",
+          "type": "i128"
+        }
+      ],
+      "output": "bool"
+    },
+    {
+      "name": "request_transfer",
+      "doc": "Invokes `request_transfer` on compliance.",
+      "inputs": [
+        {
+          "name": "from",
+          "type": "Address"
+        },
+        {
+          "name": "to",
+          "type": "Address"
+        },
+        {
+          "name": "amount",
+          "type": "i128"
+        }
+      ],
+      "output": "u64"
+    },
+    {
+      "name": "co_sign",
+      "doc": "Invokes `co_sign` on compliance.",
+      "inputs": [
+        {
+          "name": "signer",
+          "type": "Address"
+        },
+        {
+          "name": "transfer_id",
+          "type": "u64"
+        }
+      ],
+      "output": "bool"
+    },
+    {
+      "name": "get_pending_transfer",
+      "doc": "Invokes `get_pending_transfer` on compliance.",
+      "inputs": [
+        {
+          "name": "transfer_id",
+          "type": "u64"
+        }
+      ],
+      "output": "Option<PendingTransfer>"
     }
   ]
 }

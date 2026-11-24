@@ -1,0 +1,30 @@
+# Chaos experiment for the automated P1 triage bot (issue #474).
+#
+# Partitions the indexer from Soroban RPC so it stops advancing while its
+# readiness probe still passes: the failure mode only the HighIndexerLag
+# alert reveals. `triage_p1_check.sh` applies this, fires the P1 alert and
+# checks the bot restarts the indexer within 90 s. The in-process version of
+# the same scenario runs in CI: infrastructure/orchestrator/tests/triage_chaos.rs.
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: indexer-rpc-partition
+  namespace: tessera-chaos
+  labels:
+    app.kubernetes.io/part-of: tessera
+    chaos.tessera.finance/experiment: triage-p1
+spec:
+  action: partition
+  mode: all
+  selector:
+    namespaces: [tessera]
+    labelSelectors:
+      app.kubernetes.io/name: tessera-indexer
+  direction: to
+  target:
+    mode: all
+    selector:
+      namespaces: [tessera]
+      labelSelectors:
+        app.kubernetes.io/name: soroban-rpc
+  duration: "3m"

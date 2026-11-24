@@ -137,6 +137,59 @@
       "gridPos": { "h": 8, "w": 6, "x": 6, "y": 32 },
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "targets": [{ "expr": "sum(rate(rwa_indexer_refresh_total{outcome=\"success\"}[15m]))" }]
+    },
+    {
+      "id": 11,
+      "title": "Bridge monitoring",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 40 },
+      "panels": []
+    },
+    {
+      "id": 12,
+      "title": "Bridge packets by status",
+      "description": "SendPacket events paired with their RecvPacket (issue #475). Timeouts had no RecvPacket within expected_relay_ledgers.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 41 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [{ "expr": "sum by (status) (rwa_bridge_packets)", "legendFormat": "{{status}}" }]
+    },
+    {
+      "id": 13,
+      "title": "Bridge timeouts (1h)",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 4, "x": 8, "y": 41 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] }
+        }
+      },
+      "targets": [{ "expr": "sum(increase(rwa_bridge_timeouts_total[1h]))" }]
+    },
+    {
+      "id": 14,
+      "title": "Bridge anomaly score (bps) by destination chain",
+      "description": "z-score of outbound volume/velocity scaled to basis points. The contract's circuit breaker opens at its anomaly_threshold_bps (8000 in the reference config).",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 41 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "max": 10000,
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 5000 }, { "color": "red", "value": 8000 }] }
+        }
+      },
+      "targets": [{ "expr": "max by (chain) (rwa_bridge_anomaly_score_bps)", "legendFormat": "{{chain}}" }]
+    },
+    {
+      "id": 15,
+      "title": "Bridge outbound volume by destination chain",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 41 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [{ "expr": "sum by (chain) (rate(rwa_bridge_outbound_amount_total[10m]))", "legendFormat": "{{chain}}" }]
     }
   ],
   "templating": {

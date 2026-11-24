@@ -85,30 +85,12 @@ docker run --rm -v "$PWD:/w" -w /w --entrypoint promtool prom/prometheus:v2.54.1
 docker run --rm -v "$PWD:/w" -w /w --entrypoint promtool prom/prometheus:v2.54.1 test rules tests/slo_rules_test.yml
 docker run --rm -v "$PWD:/w" -w /w --entrypoint amtool prom/alertmanager:v0.27.0 check-config alertmanager.yml
 python3 tests/check_dashboard.py
+python3 tests/check_runbooks.py
 ```
 
 ## Runbook
 
-**`TesseraApiErrorBudgetFastBurn`** (page). The budget will run out within
-days if nothing changes.
-- On the dashboard, check *Requests by status class* (availability) or
-  *p99 latency by route* (latency) to find the failing or slow route.
-- Check whether a deploy happened in the last hour; roll back if it lines
-  up with the burn.
-- For availability, check Soroban RPC health. Indexer refresh failures
-  (`rwa_indexer_refresh_total{outcome="failure"}`) and RPC failures
-  (`rwa_rpc_failures_total`) usually come before 5xx responses from
-  snapshot-backed routes.
-- For latency, check rate-limiter and Redis latency, and the database
-  replica lag (`db_replica_lag_seconds`).
-
-**`TesseraApiErrorBudgetSlowBurn`** (ticket). A sustained, lower-level burn
-that will exhaust the budget before the window ends. Open an issue, find the
-route responsible with the same panels, and fix it within the week.
-
-**`TesseraApiErrorBudgetLow`** (ticket). Less than 25 % of the budget is
-left. Freeze risky deploys and non-urgent migrations until it recovers.
-
-**`TesseraApiErrorBudgetExhausted`** (page). The 30-day SLO is breached.
-Only ship reliability fixes until the budget is positive again, and write a
-post-incident review.
+The burn-rate runbook lives in
+[`docs/runbooks/api-error-budget.md`](../../docs/runbooks/api-error-budget.md),
+which every alert's `runbook_url` annotation links to. All alerts link to a
+file under `docs/runbooks/`; `python3 tests/check_runbooks.py` checks this.

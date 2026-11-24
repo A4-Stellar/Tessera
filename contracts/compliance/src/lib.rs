@@ -13,6 +13,7 @@ use soroban_sdk::{
 };
 
 mod attestation;
+pub mod multisig_transfer;
 mod oracle_verifier;
 pub mod velocity;
 mod verifiable_credentials;
@@ -20,6 +21,7 @@ pub mod zk_aggregator;
 #[cfg(test)]
 mod zk_aggregator_test;
 pub use attestation::{IdentityAttestation, RevocationProof};
+pub use multisig_transfer::{MultiSigTransferPolicy, PendingTransfer};
 pub use oracle_verifier::{OracleAttestation, OracleConfig, OracleSignature};
 pub use verifiable_credentials::VerifiableCredential;
 pub use zk_aggregator::{AggregatedProof, AggregationVerifyingKey, ZkAccreditation};
@@ -81,6 +83,21 @@ pub enum Error {
     VelocityWindowInvalid = 24,
     VelocityCapInvalid = 25,
     VelocityReentrant = 26,
+    /// Issue #478 (board-approved transfers), appended after 26.
+    MultisigPolicyInvalid = 27,
+    MultisigPolicyNotSet = 28,
+    /// The amount does not need board approval; use a normal transfer.
+    BelowMultisigThreshold = 29,
+    NotBoardSigner = 30,
+    AlreadySigned = 31,
+    /// Unknown id, or the pending transfer already expired from storage.
+    PendingTransferNotFound = 32,
+    PendingTransferExpired = 33,
+    /// A party is no longer allowlisted, or the velocity cap was hit.
+    MultisigTransferNotCompliant = 34,
+    MultisigInvalidAmount = 35,
+    /// The policy changed after the transfer was requested.
+    MultisigPolicyChanged = 36,
 }
 
 #[derive(Clone)]
@@ -681,6 +698,65 @@ impl ComplianceContract {
             .filter(|a| env.ledger().sequence() < a.valid_until)
     }
 
+    // ---- issue #478: multi-signature board approval for large transfers ----
+
+    /// Configure the board policy: transfers of `token` above
+    /// `threshold_amount` need `required_signatures` distinct co-signers from
+    /// `board`. `expiry_ledgers = 0` uses the 24 h default. Replacing the
+    /// policy invalidates transfers that are still pending.
+    pub fn set_multisig_policy(
+        env: Env,
+        admin: Address,
+        token: Address,
+        threshold_amount: i128,
+        required_signatures: u32,
+        board: Vec<Address>,
+        expiry_ledgers: u32,
+    ) -> MultiSigTransferPolicy {
+        Self::require_admin(&env, &admin);
+        let expiry = if expiry_ledgers == 0 {
+            multisig_transfer::DEFAULT_EXPIRY_LEDGERS
+        } else {
+            expiry_ledgers
+        };
+        multisig_transfer::set_policy(
+            &env,
+            token,
+            threshold_amount,
+            required_signatures,
+            board,
+            expiry,
+        )
+    }
+
+    pub fn get_multisig_policy(env: Env) -> Option<MultiSigTransferPolicy> {
+        multisig_transfer::policy(&env)
+    }
+
+    /// Asked by the asset token before every ordinary transfer.
+    pub fn requires_board_approval(env: Env, token: Address, amount: i128) -> bool {
+        multisig_transfer::requires_board_approval(&env, &token, amount)
+    }
+
+    /// Request a transfer above the threshold. Signed by `from`. Returns the
+    /// pending transfer id.
+    pub fn request_transfer(env: Env, from: Address, to: Address, amount: i128) -> u64 {
+        Self::require_not_paused(&env);
+        multisig_transfer::request(&env, from, to, amount)
+    }
+
+    /// Approve a pending transfer as a board member. Returns `true` when this
+    /// signature reached the threshold and the transfer was executed.
+    pub fn co_sign(env: Env, signer: Address, transfer_id: u64) -> bool {
+        Self::require_not_paused(&env);
+        multisig_transfer::co_sign(&env, signer, transfer_id)
+    }
+
+    /// A pending transfer, or `None` once it executed or expired.
+    pub fn get_pending_transfer(env: Env, transfer_id: u64) -> Option<PendingTransfer> {
+        multisig_transfer::pending(&env, transfer_id)
+    }
+
     pub fn version(_env: Env) -> u64 {
         1
     }
@@ -789,5 +865,7 @@ pub mod zk_balance_verifier;
 pub mod zk_range_proof;
 pub mod zk_verifier;
 
+#[cfg(test)]
+mod multisig_transfer_test;
 #[cfg(test)]
 mod mutation_test;

@@ -248,10 +248,24 @@ pub struct AppState {
     /// Differential privacy for aggregate endpoints (issue #26). Disabled
     /// until `main` installs the configured engine.
     pub privacy: Arc<crate::analytics::differential_privacy::PrivacyEngine>,
+    /// Board-approved transfers awaiting signatures, from compliance-contract
+    /// events (issue #478).
+    pub multisig: Arc<crate::services::multisig::PendingTransferBook>,
+    /// Relays board members' signed `co_sign` transactions (issue #478).
+    pub tx_submitter: Arc<dyn crate::services::multisig::TransactionSubmitter>,
+    /// SendPacket/RecvPacket pairing, timeouts and drain detection (issue #475).
+    pub bridge: Arc<crate::services::bridge_monitor::BridgeMonitor>,
+    /// SEC EDGAR Form 4 source for cap-table reconciliation (issue #476).
+    pub edgar: Arc<dyn crate::services::edgar::EdgarSource>,
+    /// Receives reconciliation discrepancies above 1 % of supply (issue #476).
+    pub compliance_webhooks: Arc<dyn crate::services::edgar::ComplianceAlerts>,
+    /// Signs exported cap-table reports (issue #476).
+    pub report_signer: Arc<crate::services::edgar::ReportSigner>,
 }
 
 impl AppState {
     pub fn new(config: Config, metrics: PrometheusHandle) -> Self {
+        let rpc_urls = config.rpc_urls.clone();
         AppState {
             inner: Arc::new(ArcSwap::from(Arc::new(Snapshot::default()))),
             config: Arc::new(config),
@@ -264,6 +278,12 @@ impl AppState {
             node_role: tokio::sync::watch::channel(NodeRole::Leader).1,
             mmr: Arc::default(),
             privacy: Arc::new(crate::analytics::differential_privacy::PrivacyEngine::disabled()),
+            multisig: Arc::default(),
+            tx_submitter: Arc::new(crate::services::multisig::RpcSubmitter::new(rpc_urls)),
+            bridge: Arc::default(),
+            edgar: Arc::new(crate::services::edgar::UnconfiguredEdgar),
+            compliance_webhooks: Arc::new(crate::services::edgar::NoAlerts),
+            report_signer: Arc::new(crate::services::edgar::ReportSigner::ephemeral()),
         }
     }
 
@@ -465,6 +485,9 @@ pub(crate) fn scval_to_json(v: &xdr::ScVal) -> Result<serde_json::Value, IndexEr
         }
         xdr::ScVal::Symbol(s) => Value::String(s.to_string()),
         xdr::ScVal::String(s) => Value::String(s.to_string()),
+        // Issue #475: bridge events carry message hashes and chain names as
+        // bytes; lowercase hex keeps them comparable across chains.
+        xdr::ScVal::Bytes(b) => Value::String(hex::encode(b.as_slice())),
         xdr::ScVal::Address(a) => Value::String(address_to_string(a)?),
         xdr::ScVal::Vec(Some(items)) => {
             let mut arr = Vec::with_capacity(items.len());
@@ -939,6 +962,11 @@ impl Indexer {
             .collect();
         self.state.anomalies.observe_events(&fresh);
         self.state.velocity.observe(&fresh, chrono::Utc::now());
+        self.state
+            .multisig
+            .observe_events(&fresh, &self.state.audit)
+            .await;
+        self.state.bridge.observe_events(&fresh, latest_ledger);
         self.state.stream_processor.ingest_events(&events, &assets).await;
 
         self.checkpoint(latest_ledger, &holders_map).await;
