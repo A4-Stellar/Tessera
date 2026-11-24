@@ -1,3 +1,4 @@
+pub mod dev;
 mod error;
 mod generator;
 mod options;
@@ -11,8 +12,8 @@ use clap::{Parser, Subcommand};
 pub use error::CliError;
 pub use generator::{generate_project, validate_project_name, ProjectConfig};
 pub use options::{
-    resolve_choices, AssetType, ComplianceModel, DividendStrategy, InitArgs, ProjectChoices,
-    SandboxArgs, SandboxCommand, SandboxStartArgs, SandboxStopArgs,
+    resolve_choices, AssetType, ComplianceModel, DevArgs, DividendStrategy, InitArgs,
+    ProjectChoices, SandboxArgs, SandboxCommand, SandboxStartArgs, SandboxStopArgs,
 };
 
 #[derive(Debug, Parser)]
@@ -32,6 +33,8 @@ pub enum Command {
     Init(InitArgs),
     /// Start and stop the isolated regulatory sandbox (issue #468).
     Sandbox(SandboxArgs),
+    /// Start the local development environment.
+    Dev(DevArgs),
 }
 
 pub fn run() -> Result<(), CliError> {
@@ -54,6 +57,7 @@ pub fn run_cli<C: BufRead, W: Write>(
             SandboxCommand::Start(start_args) => sandbox::start(&start_args, output),
             SandboxCommand::Stop(stop_args) => sandbox::stop(&stop_args, output),
         },
+        Command::Dev(args) => dev::run_dev(args),
     }
 }
 
@@ -105,6 +109,7 @@ mod tests {
     }
 
     #[test]
+<<<<<<< HEAD
     fn parses_sandbox_start_command() {
         let cli = Cli::try_parse_from([
             "tessera",
@@ -133,5 +138,29 @@ mod tests {
         assert_eq!(start.seed, Some(7));
         assert!(start.print_only);
         assert!(start.wait);
+=======
+    fn parses_dev_command_with_custom_flags() {
+        let cli = Cli::try_parse_from([
+            "tessera-cli",
+            "dev",
+            "--api-port",
+            "8081",
+            "--rpc-url",
+            "http://localhost:8000",
+            "--docs-port",
+            "3001",
+            "--no-docker",
+            "--skip-docs",
+            "--once",
+        ])
+        .expect("dev command should parse");
+        let Command::Dev(args) = cli.command;
+        assert_eq!(args.api_port, 8081);
+        assert_eq!(args.rpc_url, "http://localhost:8000");
+        assert_eq!(args.docs_port, 3001);
+        assert!(args.no_docker);
+        assert!(args.skip_docs);
+        assert!(args.once);
+>>>>>>> upstream/main
     }
 }

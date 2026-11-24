@@ -11,6 +11,13 @@
 #![no_std]
 
 pub mod circuit_breaker;
+pub mod storage_schema;
+pub mod upgrade_test;
+pub mod abi;
+pub use storage_schema::{
+    SchemaCompatibilityError, StorageSchemaRecord, StorageSchemaRegistry,
+};
+pub use upgrade_test::UpgradeTestHarness;
 // `post_quantum` measures cost via `Env::budget()`, which only exists when
 // soroban-sdk's `testutils` feature is on. No contract uses it yet, so it is
 // only compiled for tests (or with this crate's `testutils` feature);

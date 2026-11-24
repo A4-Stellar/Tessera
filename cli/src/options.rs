@@ -230,6 +230,37 @@ pub struct InitArgs {
     pub output_dir: Option<std::path::PathBuf>,
 }
 
+#[derive(Clone, Debug, clap::Args, PartialEq, Eq)]
+pub struct DevArgs {
+    /// Port for the API server (defaults to 8080)
+    #[arg(long, default_value = "8080")]
+    pub api_port: u16,
+
+    /// RPC URL for Stellar Quickstart (defaults to http://localhost:8000)
+    #[arg(long, default_value = "http://localhost:8000")]
+    pub rpc_url: String,
+
+    /// Port for the documentation site (defaults to 3000)
+    #[arg(long, default_value = "3000")]
+    pub docs_port: u16,
+
+    /// Skip starting Stellar Quickstart in Docker
+    #[arg(long)]
+    pub no_docker: bool,
+
+    /// Skip opening the documentation site in browser
+    #[arg(long)]
+    pub skip_docs: bool,
+
+    /// Watch directory for contract changes (defaults to contracts/)
+    #[arg(long)]
+    pub contracts_dir: Option<std::path::PathBuf>,
+
+    /// Once flag: compile, deploy, and exit without entering watch loop
+    #[arg(long)]
+    pub once: bool,
+}
+
 const ASSET_OPTIONS: [(&str, &str); 4] = [
     ("1", "Real Estate"),
     ("2", "Invoice"),

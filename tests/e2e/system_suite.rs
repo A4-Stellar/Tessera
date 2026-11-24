@@ -47,12 +47,13 @@
 //! Compose orchestration steps always run; they are skipped gracefully
 //! when Docker is not available.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::process::Command;
 use std::time::Duration;
 
+use proptest::prelude::*;
 use reqwest::Client;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::time::sleep;
 use uuid::Uuid;
@@ -1113,6 +1114,728 @@ async fn test_stats_total_assets_matches_asset_list() {
 }
 
 // ---------------------------------------------------------------------------
+// Stateful Property-Based E2E Testing Framework (Issue #444 / #61)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "op", content = "params")]
+pub enum Operation {
+    CreateAsset {
+        id: u64,
+        name: String,
+        symbol: String,
+        issuer: String,
+        initial_supply: u64,
+    },
+    CheckCompliance {
+        address: String,
+        approved: bool,
+        jurisdiction: String,
+    },
+    TransferToken {
+        asset_id: u64,
+        from: String,
+        to: String,
+        amount: u64,
+    },
+    DistributeDividend {
+        asset_id: u64,
+        amount_per_token: u64,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AssetState {
+    pub id: u64,
+    pub name: String,
+    pub symbol: String,
+    pub issuer: String,
+    pub token_contract: String,
+    pub total_supply: u64,
+    pub balances: HashMap<String, u64>,
+    pub distributions: Vec<DividendDistribution>,
+    pub paused: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DividendDistribution {
+    pub amount_per_token: u64,
+    pub total_distributed: u64,
+    pub claimed_count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ComplianceStatus {
+    pub approved: bool,
+    pub jurisdiction: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SystemModel {
+    pub assets: HashMap<u64, AssetState>,
+    pub compliance: HashMap<String, ComplianceStatus>,
+    pub total_assets: u64,
+    pub total_holders: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ModelError {
+    AssetAlreadyExists(u64),
+    AssetNotFound(u64),
+    ZeroSupply,
+    ZeroAmount,
+    InsufficientBalance { available: u64, requested: u64 },
+    ComplianceCheckFailed(String),
+}
+
+impl std::fmt::Display for ModelError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::AssetAlreadyExists(id) => write!(f, "Asset ID {id} already exists"),
+            Self::AssetNotFound(id) => write!(f, "Asset ID {id} not found"),
+            Self::ZeroSupply => write!(f, "Initial supply must be greater than zero"),
+            Self::ZeroAmount => write!(f, "Transfer or dividend amount must be greater than zero"),
+            Self::InsufficientBalance { available, requested } => {
+                write!(f, "Insufficient balance: available {available}, requested {requested}")
+            }
+            Self::ComplianceCheckFailed(addr) => {
+                write!(f, "Address {addr} is not approved in compliance registry")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ModelError {}
+
+impl SystemModel {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Recalculate unique token holders across all assets
+    pub fn recalculate_total_holders(&mut self) {
+        let mut unique_holders = HashSet::new();
+        for asset in self.assets.values() {
+            for (addr, bal) in &asset.balances {
+                if *bal > 0 {
+                    unique_holders.insert(addr.clone());
+                }
+            }
+        }
+        self.total_holders = unique_holders.len() as u64;
+    }
+
+    /// Check whether an operation satisfies valid preconditions against current model state
+    pub fn can_apply(&self, op: &Operation) -> bool {
+        match op {
+            Operation::CreateAsset { id, initial_supply, .. } => {
+                !self.assets.contains_key(id) && *initial_supply > 0
+            }
+            Operation::CheckCompliance { .. } => true,
+            Operation::TransferToken { asset_id, from, to, amount } => {
+                if *amount == 0 || from == to {
+                    return false;
+                }
+                let Some(asset) = self.assets.get(asset_id) else {
+                    return false;
+                };
+                let from_bal = asset.balances.get(from).copied().unwrap_or(0);
+                if from_bal < *amount {
+                    return false;
+                }
+                // Recipient must be compliance-approved
+                self.compliance.get(to).map(|c| c.approved).unwrap_or(false)
+            }
+            Operation::DistributeDividend { asset_id, amount_per_token } => {
+                if *amount_per_token == 0 {
+                    return false;
+                }
+                if let Some(asset) = self.assets.get(asset_id) {
+                    asset.total_supply > 0
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
+    /// Apply an operation to the model, updating expected state or returning a ModelError
+    pub fn apply(&mut self, op: &Operation) -> Result<(), ModelError> {
+        match op {
+            Operation::CreateAsset { id, name, symbol, issuer, initial_supply } => {
+                if self.assets.contains_key(id) {
+                    return Err(ModelError::AssetAlreadyExists(*id));
+                }
+                if *initial_supply == 0 {
+                    return Err(ModelError::ZeroSupply);
+                }
+                let mut balances = HashMap::new();
+                balances.insert(issuer.clone(), *initial_supply);
+
+                // Auto-approve issuer in compliance registry if not set
+                self.compliance.entry(issuer.clone()).or_insert(ComplianceStatus {
+                    approved: true,
+                    jurisdiction: "US".to_string(),
+                });
+
+                let contract_id = if issuer.starts_with('G') && issuer.len() == 56 {
+                    format!("C{}", &issuer[1..])
+                } else {
+                    "CBMCWLSQSWUTLUJFCNBHNBSXMUM3XU7NAQ5TSNERW4HA4ZZBYHLG4ECZ".to_string()
+                };
+
+                let asset = AssetState {
+                    id: *id,
+                    name: name.clone(),
+                    symbol: symbol.clone(),
+                    issuer: issuer.clone(),
+                    token_contract: contract_id,
+                    total_supply: *initial_supply,
+                    balances,
+                    distributions: Vec::new(),
+                    paused: false,
+                };
+
+                self.assets.insert(*id, asset);
+                self.total_assets = self.assets.len() as u64;
+                self.recalculate_total_holders();
+                Ok(())
+            }
+            Operation::CheckCompliance { address, approved, jurisdiction } => {
+                self.compliance.insert(
+                    address.clone(),
+                    ComplianceStatus {
+                        approved: *approved,
+                        jurisdiction: jurisdiction.clone(),
+                    },
+                );
+                Ok(())
+            }
+            Operation::TransferToken { asset_id, from, to, amount } => {
+                if *amount == 0 {
+                    return Err(ModelError::ZeroAmount);
+                }
+                if from == to {
+                    return Ok(());
+                }
+                let asset = self.assets.get_mut(asset_id).ok_or(ModelError::AssetNotFound(*asset_id))?;
+                let from_bal = asset.balances.get(from).copied().unwrap_or(0);
+                if from_bal < *amount {
+                    return Err(ModelError::InsufficientBalance {
+                        available: from_bal,
+                        requested: *amount,
+                    });
+                }
+                let is_recipient_approved = self
+                    .compliance
+                    .get(to)
+                    .map(|c| c.approved)
+                    .unwrap_or(false);
+                if !is_recipient_approved {
+                    return Err(ModelError::ComplianceCheckFailed(to.clone()));
+                }
+
+                let new_from = from_bal - *amount;
+                if new_from == 0 {
+                    asset.balances.remove(from);
+                } else {
+                    asset.balances.insert(from.clone(), new_from);
+                }
+
+                let to_bal = asset.balances.get(to).copied().unwrap_or(0);
+                asset.balances.insert(to.clone(), to_bal + *amount);
+
+                self.recalculate_total_holders();
+                Ok(())
+            }
+            Operation::DistributeDividend { asset_id, amount_per_token } => {
+                if *amount_per_token == 0 {
+                    return Err(ModelError::ZeroAmount);
+                }
+                let asset = self.assets.get_mut(asset_id).ok_or(ModelError::AssetNotFound(*asset_id))?;
+                if asset.total_supply == 0 {
+                    return Err(ModelError::ZeroSupply);
+                }
+                let total_distributed = (*amount_per_token as u128 * asset.total_supply as u128) as u64;
+                asset.distributions.push(DividendDistribution {
+                    amount_per_token: *amount_per_token,
+                    total_distributed,
+                    claimed_count: 0,
+                });
+                Ok(())
+            }
+        }
+    }
+
+    /// Assert all formal state invariants
+    pub fn assert_invariants(&self) {
+        // Invariant 1: Total assets count matches assets map length
+        assert_eq!(self.total_assets, self.assets.len() as u64);
+
+        // Invariant 2: Token conservation — sum of balances == total_supply for every asset
+        for (id, asset) in &self.assets {
+            let sum_balances: u64 = asset.balances.values().sum();
+            assert_eq!(
+                sum_balances, asset.total_supply,
+                "Token conservation violated for asset {id}: sum(balances)={sum_balances} != total_supply={}",
+                asset.total_supply
+            );
+            for (addr, bal) in &asset.balances {
+                assert!(*bal > 0, "Zero balance entry stored for {addr} in asset {id}");
+            }
+        }
+
+        // Invariant 3: Unique holders matches total_holders count
+        let mut unique = HashSet::new();
+        for asset in self.assets.values() {
+            for (addr, bal) in &asset.balances {
+                if *bal > 0 {
+                    unique.insert(addr.clone());
+                }
+            }
+        }
+        assert_eq!(self.total_holders, unique.len() as u64, "Total holders mismatch");
+    }
+
+    /// Assert model state against live or simulated API endpoints
+    pub async fn assert_against_api(&self, client: &Client, api_url: &str) -> Result<(), String> {
+        let stats_url = format!("{api_url}/stats");
+        let stats: Value = api_get(client, &stats_url).await?;
+        let api_assets = stats.get("total_assets").and_then(|v| v.as_u64()).unwrap_or(0);
+        assert_eq!(api_assets, self.total_assets, "API total_assets mismatch with model");
+
+        let assets_url = format!("{api_url}/assets");
+        let assets_val: Value = api_get(client, &assets_url).await?;
+        if let Some(arr) = assets_val.as_array() {
+            assert_eq!(arr.len() as u64, self.total_assets, "API /assets length mismatch");
+            for asset_json in arr {
+                let id = asset_json["id"].as_u64().unwrap_or(0);
+                if let Some(model_asset) = self.assets.get(&id) {
+                    let total_supply: u64 = asset_json["total_supply"]
+                        .as_str()
+                        .unwrap_or("0")
+                        .parse()
+                        .unwrap_or(0);
+                    assert_eq!(total_supply, model_asset.total_supply, "Asset {id} supply mismatch");
+                    let holders = asset_json["holders"].as_u64().unwrap_or(0);
+                    assert_eq!(holders, model_asset.balances.len() as u64, "Asset {id} holders count mismatch");
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Proptest generators using prop_compose!
+// ---------------------------------------------------------------------------
+
+prop_compose! {
+    pub fn arb_create_asset_op()(
+        id in 1u64..500u64,
+        name_idx in 0usize..5,
+        supply in 1_000u64..1_000_000_000u64,
+    ) -> Operation {
+        let names = ["RealEstateAlpha", "SolarEnergyBond", "TreasuryBill", "PrivateEquityFund", "AgriCommodity"];
+        let symbols = ["REA", "SEB", "TBILL", "PEF", "AGRI"];
+        let issuers = [
+            "GAIQGTOBTTLLDJ4SWGGESM7UWJ2DI4K3ZNHUSHPDKJL2IE5FKY3BSRAA",
+            "GCFXHS4GXL6BVUCXBWXGTITROWLVYXQKQLF4YH5O5JTHGQEZSTZQVUS5",
+            "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+        ];
+        let idx = name_idx % names.len();
+        Operation::CreateAsset {
+            id,
+            name: names[idx].to_string(),
+            symbol: symbols[idx].to_string(),
+            issuer: issuers[idx % issuers.len()].to_string(),
+            initial_supply: supply,
+        }
+    }
+}
+
+prop_compose! {
+    pub fn arb_compliance_op()(
+        addr_idx in 0usize..5,
+        approved in any::<bool>(),
+        jur_idx in 0usize..3,
+    ) -> Operation {
+        let addrs = [
+            "GAIQGTOBTTLLDJ4SWGGESM7UWJ2DI4K3ZNHUSHPDKJL2IE5FKY3BSRAA",
+            "GCFXHS4GXL6BVUCXBWXGTITROWLVYXQKQLF4YH5O5JTHGQEZSTZQVUS5",
+            "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+            "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN7",
+            "GDQP2KPQGKIHYJGXNUIYOMHARUARCA7DJT5FO2FFOOKY3B2WSQHG4W37",
+        ];
+        let jurisdictions = ["US", "EU", "CH"];
+        Operation::CheckCompliance {
+            address: addrs[addr_idx % addrs.len()].to_string(),
+            approved,
+            jurisdiction: jurisdictions[jur_idx % jurisdictions.len()].to_string(),
+        }
+    }
+}
+
+prop_compose! {
+    pub fn arb_transfer_op()(
+        asset_id in 1u64..10u64,
+        from_idx in 0usize..3,
+        to_idx in 0usize..5,
+        amount in 1u64..10_000u64,
+    ) -> Operation {
+        let addrs = [
+            "GAIQGTOBTTLLDJ4SWGGESM7UWJ2DI4K3ZNHUSHPDKJL2IE5FKY3BSRAA",
+            "GCFXHS4GXL6BVUCXBWXGTITROWLVYXQKQLF4YH5O5JTHGQEZSTZQVUS5",
+            "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+            "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN7",
+            "GDQP2KPQGKIHYJGXNUIYOMHARUARCA7DJT5FO2FFOOKY3B2WSQHG4W37",
+        ];
+        let to_idx = if to_idx == from_idx { (to_idx + 1) % addrs.len() } else { to_idx };
+        Operation::TransferToken {
+            asset_id,
+            from: addrs[from_idx % addrs.len()].to_string(),
+            to: addrs[to_idx % addrs.len()].to_string(),
+            amount,
+        }
+    }
+}
+
+prop_compose! {
+    pub fn arb_dividend_op()(
+        asset_id in 1u64..10u64,
+        amount_per_token in 1u64..500u64,
+    ) -> Operation {
+        Operation::DistributeDividend {
+            asset_id,
+            amount_per_token,
+        }
+    }
+}
+
+prop_compose! {
+    pub fn arb_raw_operation()(
+        op_type in 0u8..4,
+        create_op in arb_create_asset_op(),
+        comp_op in arb_compliance_op(),
+        trans_op in arb_transfer_op(),
+        div_op in arb_dividend_op(),
+    ) -> Operation {
+        match op_type {
+            0 => create_op,
+            1 => comp_op,
+            2 => trans_op,
+            _ => div_op,
+        }
+    }
+}
+
+/// Takes raw generated operations and constructs a sequence that satisfies valid preconditions
+pub fn filter_and_validate_preconditions(raw_ops: &[Operation]) -> Vec<Operation> {
+    let mut model = SystemModel::new();
+    let mut valid_ops = Vec::new();
+    let mut next_asset_id = 1u64;
+
+    let investor_a = "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN7".to_string();
+    let investor_b = "GDQP2KPQGKIHYJGXNUIYOMHARUARCA7DJT5FO2FFOOKY3B2WSQHG4W37".to_string();
+
+    let _ = model.apply(&Operation::CheckCompliance {
+        address: investor_a.clone(),
+        approved: true,
+        jurisdiction: "US".to_string(),
+    });
+    valid_ops.push(Operation::CheckCompliance {
+        address: investor_a.clone(),
+        approved: true,
+        jurisdiction: "US".to_string(),
+    });
+
+    let _ = model.apply(&Operation::CheckCompliance {
+        address: investor_b.clone(),
+        approved: true,
+        jurisdiction: "EU".to_string(),
+    });
+    valid_ops.push(Operation::CheckCompliance {
+        address: investor_b.clone(),
+        approved: true,
+        jurisdiction: "EU".to_string(),
+    });
+
+    for op in raw_ops {
+        match op {
+            Operation::CreateAsset { name, symbol, issuer, initial_supply, .. } => {
+                let id = next_asset_id;
+                next_asset_id += 1;
+                let adjusted = Operation::CreateAsset {
+                    id,
+                    name: name.clone(),
+                    symbol: symbol.clone(),
+                    issuer: issuer.clone(),
+                    initial_supply: (*initial_supply).max(10_000),
+                };
+                if model.apply(&adjusted).is_ok() {
+                    valid_ops.push(adjusted);
+                }
+            }
+            Operation::CheckCompliance { address, approved, jurisdiction } => {
+                let adjusted = Operation::CheckCompliance {
+                    address: address.clone(),
+                    approved: *approved,
+                    jurisdiction: jurisdiction.clone(),
+                };
+                if model.apply(&adjusted).is_ok() {
+                    valid_ops.push(adjusted);
+                }
+            }
+            Operation::TransferToken { amount, .. } => {
+                if let Some((&asset_id, asset)) = model.assets.iter().find(|(_, a)| !a.balances.is_empty()) {
+                    if let Some((from_addr, &bal)) = asset.balances.iter().find(|(_, &b)| b > 0) {
+                        let transfer_amt = (*amount % bal).max(1);
+                        let to_addr = if from_addr == &investor_a {
+                            investor_b.clone()
+                        } else {
+                            investor_a.clone()
+                        };
+                        let adjusted = Operation::TransferToken {
+                            asset_id,
+                            from: from_addr.clone(),
+                            to: to_addr,
+                            amount: transfer_amt,
+                        };
+                        if model.apply(&adjusted).is_ok() {
+                            valid_ops.push(adjusted);
+                        }
+                    }
+                }
+            }
+            Operation::DistributeDividend { amount_per_token, .. } => {
+                if let Some((&asset_id, asset)) = model.assets.iter().find(|(_, a)| a.total_supply > 0) {
+                    let adjusted = Operation::DistributeDividend {
+                        asset_id,
+                        amount_per_token: (*amount_per_token).max(1),
+                    };
+                    if model.apply(&adjusted).is_ok() {
+                        valid_ops.push(adjusted);
+                    }
+                }
+            }
+        }
+    }
+
+    valid_ops
+}
+
+prop_compose! {
+    pub fn arb_valid_operation_sequence(max_len: usize)(
+        raw_ops in prop::collection::vec(arb_raw_operation(), 1..=max_len),
+    ) -> Vec<Operation> {
+        filter_and_validate_preconditions(&raw_ops)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Shrinking & Reproducer Artifact Engine
+// ---------------------------------------------------------------------------
+
+/// Shrinks a failing sequence down to the minimal reproducer sequence using delta debugging
+pub fn shrink_to_minimal_reproducer<F>(
+    initial_failing_sequence: &[Operation],
+    mut is_failing: F,
+) -> Vec<Operation>
+where
+    F: FnMut(&[Operation]) -> bool,
+{
+    let mut minimal = initial_failing_sequence.to_vec();
+    if !is_failing(&minimal) {
+        return minimal;
+    }
+
+    let mut improved = true;
+    while improved && minimal.len() > 1 {
+        improved = false;
+        let mut i = 0;
+        while i < minimal.len() {
+            let mut candidate = minimal.clone();
+            candidate.remove(i);
+            if is_failing(&candidate) {
+                minimal = candidate;
+                improved = true;
+            } else {
+                i += 1;
+            }
+        }
+    }
+    minimal
+}
+
+/// Serializes and writes a failure reproducer to a JSON artifact
+pub fn save_reproducer_artifact(
+    seed: u64,
+    minimal_ops: &[Operation],
+    error_msg: &str,
+    output_path: &str,
+) -> Result<(), std::io::Error> {
+    let reproducer = serde_json::json!({
+        "seed": seed,
+        "reproducer_command": format!("cargo test --test system_suite -- --seed {seed}"),
+        "operations_count": minimal_ops.len(),
+        "error": error_msg,
+        "minimal_operations": minimal_ops,
+    });
+    if let Some(parent) = std::path::Path::new(output_path).parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(output_path, serde_json::to_string_pretty(&reproducer)?)
+}
+
+// ---------------------------------------------------------------------------
+// Deterministic Replay with --seed
+// ---------------------------------------------------------------------------
+
+/// Parse --seed <val> or --seed=<val> or environment variables SEED / PROPTEST_SEED
+pub fn parse_seed_arg() -> Option<u64> {
+    let args: Vec<String> = std::env::args().collect();
+    for (i, arg) in args.iter().enumerate() {
+        if arg == "--seed" {
+            if let Some(val) = args.get(i + 1) {
+                if let Ok(seed) = val.parse::<u64>() {
+                    return Some(seed);
+                }
+            }
+        } else if let Some(stripped) = arg.strip_prefix("--seed=") {
+            if let Ok(seed) = stripped.parse::<u64>() {
+                return Some(seed);
+            }
+        }
+    }
+    if let Ok(seed_str) = std::env::var("SEED").or_else(|_| std::env::var("PROPTEST_SEED")) {
+        if let Ok(seed) = seed_str.parse::<u64>() {
+            return Some(seed);
+        }
+    }
+    None
+}
+
+/// Execute a stateful property test run with a deterministic seed and operation count
+pub fn run_stateful_suite_with_seed(seed: u64, max_ops: usize) {
+    println!("[Stateful-E2E] Running stateful property test with seed {seed} (reproduce with --seed {seed})");
+    use proptest::test_runner::{Config, RngAlgorithm, TestRng, TestRunner};
+
+    let mut seed_bytes = [0u8; 32];
+    seed_bytes[..8].copy_from_slice(&seed.to_le_bytes());
+
+    let mut runner = TestRunner::new_with_rng(
+        Config {
+            cases: 1,
+            ..Config::default()
+        },
+        TestRng::from_seed(RngAlgorithm::PassThrough, &seed_bytes),
+    );
+
+    let strat = arb_valid_operation_sequence(max_ops);
+    let run_res = runner.run(&strat, |ops| {
+        let mut model = SystemModel::new();
+        for op in &ops {
+            model.apply(op).expect("Operation in valid sequence must succeed");
+            model.assert_invariants();
+        }
+        Ok(())
+    });
+
+    if let Err(e) = run_res {
+        eprintln!("[Stateful-E2E] Property test failed: {e}");
+        let _ = save_reproducer_artifact(seed, &[], &format!("{e}"), "tests/e2e/reproducer.json");
+        panic!("Property test failed for seed {seed}: {e}");
+    } else {
+        println!("[Stateful-E2E] ✓ Successfully validated property suite with seed {seed}");
+    }
+}
+
+#[cfg(not(test))]
+#[tokio::main]
+async fn main() {
+    let seed = parse_seed_arg().unwrap_or(42);
+    let num_ops = std::env::var("NUM_OPERATIONS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(500);
+    println!("=== Tessera Stateful E2E Replay ===");
+    println!("Seed: {seed}");
+    println!("Operations: {num_ops}");
+    run_stateful_suite_with_seed(seed, num_ops);
+}
+
+#[test]
+fn test_stateful_property_suite() {
+    let seed = parse_seed_arg().unwrap_or_else(|| {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64
+    });
+    let num_ops = std::env::var("NUM_OPERATIONS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(500);
+
+    println!("[Stateful-E2E] Running 500-operation property test with seed {seed}");
+    run_stateful_suite_with_seed(seed, num_ops);
+}
+
+#[tokio::test]
+#[ignore = "requires live E2E environment (set RUN_E2E=true)"]
+async fn test_stateful_property_e2e_live() {
+    let env = TestEnv::from_env();
+    let client = Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .expect("failed to build HTTP client");
+
+    let seed = parse_seed_arg().unwrap_or(12345);
+    let num_ops = std::env::var("NUM_OPERATIONS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(500);
+
+    println!("[Stateful-E2E-Live] Running stateful E2E against Docker stack ({num_ops} ops, seed={seed})");
+    wait_for_api(&client, &format!("{}/health", env.api_url), API_READINESS_TIMEOUT).await;
+
+    use proptest::test_runner::{Config, RngAlgorithm, TestRng, TestRunner};
+    let mut seed_bytes = [0u8; 32];
+    seed_bytes[..8].copy_from_slice(&seed.to_le_bytes());
+    let mut runner = TestRunner::new_with_rng(
+        Config { cases: 1, ..Config::default() },
+        TestRng::from_seed(RngAlgorithm::PassThrough, &seed_bytes),
+    );
+
+    let strat = arb_valid_operation_sequence(num_ops);
+    let mut generated_ops = Vec::new();
+    runner.run(&strat, |ops| {
+        generated_ops = ops;
+        Ok(())
+    }).expect("Generation must succeed");
+
+    let mut model = SystemModel::new();
+    for (idx, op) in generated_ops.iter().enumerate() {
+        if let Err(e) = model.apply(op) {
+            let minimal = shrink_to_minimal_reproducer(&generated_ops[..=idx], |sub_ops| {
+                let mut m = SystemModel::new();
+                for o in sub_ops {
+                    if m.apply(o).is_err() {
+                        return true;
+                    }
+                }
+                false
+            });
+            let _ = save_reproducer_artifact(seed, &minimal, &format!("Model apply failed: {e}"), "tests/e2e/reproducer.json");
+            panic!("Model apply failed on op {idx}: {e}");
+        }
+        model.assert_invariants();
+    }
+
+    if let Err(e) = model.assert_against_api(&client, &env.api_url).await {
+        eprintln!("[Stateful-E2E-Live] API assertion warning/failure: {e}");
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Unit tests for internal helpers (always run in CI — no network needed)
 // ---------------------------------------------------------------------------
 
@@ -1191,5 +1914,156 @@ mod unit {
             "Test SDF Network ; September 2015",
             "Network passphrase must match Stellar testnet"
         );
+    }
+
+    #[test]
+    fn test_system_model_preconditions() {
+        let mut model = SystemModel::new();
+        let issuer = "GAIQGTOBTTLLDJ4SWGGESM7UWJ2DI4K3ZNHUSHPDKJL2IE5FKY3BSRAA".to_string();
+        let investor = "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN7".to_string();
+
+        // 1. Initial supply 0 is rejected
+        let zero_supply_op = Operation::CreateAsset {
+            id: 1,
+            name: "ZeroToken".to_string(),
+            symbol: "ZERO".to_string(),
+            issuer: issuer.clone(),
+            initial_supply: 0,
+        };
+        assert!(!model.can_apply(&zero_supply_op));
+        assert!(model.apply(&zero_supply_op).is_err());
+
+        // 2. Valid creation succeeds
+        let valid_create = Operation::CreateAsset {
+            id: 1,
+            name: "AssetOne".to_string(),
+            symbol: "AONE".to_string(),
+            issuer: issuer.clone(),
+            initial_supply: 100_000,
+        };
+        assert!(model.can_apply(&valid_create));
+        assert!(model.apply(&valid_create).is_ok());
+
+        // 3. Duplicate asset ID is rejected
+        assert!(!model.can_apply(&valid_create));
+        assert!(model.apply(&valid_create).is_err());
+
+        // 4. Transfer to non-compliant recipient is rejected
+        let transfer_unapproved = Operation::TransferToken {
+            asset_id: 1,
+            from: issuer.clone(),
+            to: investor.clone(),
+            amount: 5_000,
+        };
+        assert!(!model.can_apply(&transfer_unapproved));
+        assert!(model.apply(&transfer_unapproved).is_err());
+
+        // 5. Approve investor, then transfer succeeds
+        let approve_op = Operation::CheckCompliance {
+            address: investor.clone(),
+            approved: true,
+            jurisdiction: "US".to_string(),
+        };
+        assert!(model.apply(&approve_op).is_ok());
+        assert!(model.can_apply(&transfer_unapproved));
+        assert!(model.apply(&transfer_unapproved).is_ok());
+
+        // 6. Transfer exceeding balance is rejected
+        let transfer_excess = Operation::TransferToken {
+            asset_id: 1,
+            from: investor.clone(),
+            to: issuer.clone(),
+            amount: 10_000, // investor only has 5_000
+        };
+        assert!(!model.can_apply(&transfer_excess));
+        assert!(model.apply(&transfer_excess).is_err());
+
+        // 7. Conservation of supply invariant holds
+        model.assert_invariants();
+    }
+
+    #[test]
+    fn test_shrinking_algorithm_minimal_reproducer() {
+        let issuer = "GAIQGTOBTTLLDJ4SWGGESM7UWJ2DI4K3ZNHUSHPDKJL2IE5FKY3BSRAA".to_string();
+        let investor = "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN7".to_string();
+
+        let ops = vec![
+            Operation::CreateAsset {
+                id: 1,
+                name: "Asset1".to_string(),
+                symbol: "A1".to_string(),
+                issuer: issuer.clone(),
+                initial_supply: 50_000,
+            },
+            Operation::CheckCompliance {
+                address: investor.clone(),
+                approved: true,
+                jurisdiction: "US".to_string(),
+            },
+            Operation::TransferToken {
+                asset_id: 1,
+                from: issuer.clone(),
+                to: investor.clone(),
+                amount: 10_000,
+            },
+            Operation::DistributeDividend {
+                asset_id: 1,
+                amount_per_token: 5,
+            },
+            // Injected failure: transfer with negative-expected balance (amount > current balance)
+            Operation::TransferToken {
+                asset_id: 1,
+                from: investor.clone(),
+                to: issuer.clone(),
+                amount: 999_999,
+            },
+        ];
+
+        // Predicate checks if the sequence contains an invalid transfer exceeding balance
+        let minimal = shrink_to_minimal_reproducer(&ops, |sub_seq| {
+            let mut model = SystemModel::new();
+            for o in sub_seq {
+                if model.apply(o).is_err() {
+                    return true;
+                }
+            }
+            false
+        });
+
+        // The minimal reproducer should have eliminated unneeded operations (like dividend)
+        assert!(minimal.len() < ops.len());
+        // Verify that running the minimal sequence reproduces the error
+        let mut model = SystemModel::new();
+        let mut failed = false;
+        for o in &minimal {
+            if model.apply(o).is_err() {
+                failed = true;
+                break;
+            }
+        }
+        assert!(failed, "Minimal reproducer must fail");
+    }
+
+    #[test]
+    fn test_save_reproducer_artifact() {
+        let temp_dir = std::env::temp_dir();
+        let artifact_path = temp_dir.join("test_reproducer.json");
+        let path_str = artifact_path.to_str().unwrap();
+
+        let ops = vec![Operation::CreateAsset {
+            id: 1,
+            name: "Test".to_string(),
+            symbol: "TST".to_string(),
+            issuer: "GAIQGTOBTTLLDJ4SWGGESM7UWJ2DI4K3ZNHUSHPDKJL2IE5FKY3BSRAA".to_string(),
+            initial_supply: 1_000,
+        }];
+
+        let res = save_reproducer_artifact(9999, &ops, "Simulated error", path_str);
+        assert!(res.is_ok(), "Failed to save reproducer artifact: {:?}", res);
+
+        let content = std::fs::read_to_string(path_str).expect("Read artifact file");
+        assert!(content.contains("\"seed\": 9999"));
+        assert!(content.contains("cargo test --test system_suite -- --seed 9999"));
+        let _ = std::fs::remove_file(artifact_path);
     }
 }

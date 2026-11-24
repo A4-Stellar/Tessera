@@ -1,0 +1,192 @@
+{
+  "contract": "amm",
+  "moduleDoc": "Tessera concentrated-liquidity AMM (issue #361).\r\n\nThis contract replaces the previous constant-product pool with a Uniswap\r\nv3-style tick-indexed model adapted to Soroban storage:\r\n\n- Each initialised tick is a `PersistentStorage` entry keyed by its `i32`\r\n  tick index, holding gross and net liquidity.\r\n- A position is a liquidity range `[tick_lower, tick_upper)`. When a\r\n  position-NFT contract is configured, `add_liquidity` mints one NFT per\r\n  position through a cross-contract call to `mint_position`.\r\n- `swap` walks initialised ticks in the direction of the trade, crossing\r\n  each one, and takes a `max_ticks_crossed` bound. Exceeding it reverts the\r\n  whole swap instead of silently returning a worse price.\r\n- Within any single tick range the virtual reserves satisfy\r\n  `x * y = L^2`, so the constant-product invariant holds while the price\r\n  stays in that range (see [`math`]).\r\n\nFees are charged in the input token on every step and accumulated in\r\nQ64.64 per unit of liquidity, so positions collect pro-rata via\r\n`collect_fees`.",
+  "generated_at": "2026-11-23T12:28:42.972Z",
+  "methods": [
+    {
+      "name": "initialize",
+      "doc": "Configure the pool. `initial_tick` must be a multiple of `tick_spacing`; the opening sqrt price is derived from it.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "token_a",
+          "type": "Address"
+        },
+        {
+          "name": "token_b",
+          "type": "Address"
+        },
+        {
+          "name": "compliance_contract",
+          "type": "Address"
+        },
+        {
+          "name": "fee_bps",
+          "type": "u32"
+        },
+        {
+          "name": "tick_spacing",
+          "type": "i32"
+        },
+        {
+          "name": "max_ticks_crossed",
+          "type": "u32"
+        },
+        {
+          "name": "position_nft",
+          "type": "Option<Address>"
+        },
+        {
+          "name": "initial_tick",
+          "type": "i32"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "set_position_nft",
+      "doc": "Set the position-NFT contract. Positions are minted there as NFTs on every `add_liquidity` call.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "position_nft",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "add_liquidity",
+      "doc": "Add liquidity to `[tick_lower, tick_upper)` and mint a position.  Only the amounts actually required at the current price are pulled from `to`; any remainder stays in their wallet. Returns the position id and the liquidity minted.",
+      "inputs": [
+        {
+          "name": "to",
+          "type": "Address"
+        },
+        {
+          "name": "tick_lower",
+          "type": "i32"
+        },
+        {
+          "name": "tick_upper",
+          "type": "i32"
+        },
+        {
+          "name": "amount_a",
+          "type": "i128"
+        },
+        {
+          "name": "amount_b",
+          "type": "i128"
+        }
+      ],
+      "output": "(u64, i128)"
+    },
+    {
+      "name": "remove_liquidity",
+      "doc": "Burn `liquidity` from a position and return both tokens to its owner. Fees accrued so far are paid in the same call.",
+      "inputs": [
+        {
+          "name": "owner",
+          "type": "Address"
+        },
+        {
+          "name": "position_id",
+          "type": "u64"
+        },
+        {
+          "name": "liquidity",
+          "type": "i128"
+        }
+      ],
+      "output": "(i128, i128)"
+    },
+    {
+      "name": "collect_fees",
+      "doc": "Withdraw accrued fees without touching the liquidity.",
+      "inputs": [
+        {
+          "name": "owner",
+          "type": "Address"
+        },
+        {
+          "name": "position_id",
+          "type": "u64"
+        }
+      ],
+      "output": "(i128, i128)"
+    },
+    {
+      "name": "swap",
+      "doc": "Swap along the tick curve.  `amount_specified > 0` is the exact input amount; a negative value requests that much output. `sqrt_price_limit` bounds the price the trade may reach; `max_ticks_crossed` bounds how many initialised ticks the loop may cross before the call reverts with `TooManyTicksCrossed`.",
+      "inputs": [
+        {
+          "name": "to",
+          "type": "Address"
+        },
+        {
+          "name": "zero_for_one",
+          "type": "bool"
+        },
+        {
+          "name": "amount_specified",
+          "type": "i128"
+        },
+        {
+          "name": "sqrt_price_limit",
+          "type": "u128"
+        },
+        {
+          "name": "max_ticks_crossed",
+          "type": "u32"
+        }
+      ],
+      "output": "SwapResult"
+    },
+    {
+      "name": "pool_state",
+      "doc": "Invokes `pool_state` on amm.",
+      "inputs": [],
+      "output": "PoolState"
+    },
+    {
+      "name": "get_position",
+      "doc": "Invokes `get_position` on amm.",
+      "inputs": [
+        {
+          "name": "position_id",
+          "type": "u64"
+        }
+      ],
+      "output": "Position"
+    },
+    {
+      "name": "tick_info",
+      "doc": "Invokes `tick_info` on amm.",
+      "inputs": [
+        {
+          "name": "tick",
+          "type": "i32"
+        }
+      ],
+      "output": "TickInfo"
+    },
+    {
+      "name": "position_amounts",
+      "doc": "The tick range a position with `liquidity` covers at the current price.",
+      "inputs": [
+        {
+          "name": "position_id",
+          "type": "u64"
+        }
+      ],
+      "output": "(i128, i128)"
+    }
+  ]
+}

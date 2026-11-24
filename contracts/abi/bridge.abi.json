@@ -1,0 +1,113 @@
+{
+  "contract": "bridge",
+  "moduleDoc": "Cross-chain bridge message verification.\r\n\nRewritten by the fuzzing work. The signature path had a critical\r\nauthentication bypass and a reachable panic, both of which the fuzz target\r\nfor this contract now asserts against.",
+  "generated_at": "2026-11-23T12:28:42.980Z",
+  "methods": [
+    {
+      "name": "initialize",
+      "doc": "Invokes `initialize` on bridge.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "register_validator",
+      "doc": "Register a validator public key that may sign inbound messages.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "key",
+          "type": "BytesN<32>"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "revoke_validator",
+      "doc": "Invokes `revoke_validator` on bridge.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "key",
+          "type": "BytesN<32>"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "is_validator",
+      "doc": "Invokes `is_validator` on bridge.",
+      "inputs": [
+        {
+          "name": "key",
+          "type": "BytesN<32>"
+        }
+      ],
+      "output": "bool"
+    },
+    {
+      "name": "lock_and_mint_request",
+      "doc": "Record a lock-and-mint request and advance the caller's nonce.  The token lock/mint itself remains a stub, as it was; the request is now persisted so the nonce is meaningful and the request is auditable.",
+      "inputs": [
+        {
+          "name": "caller",
+          "type": "Address"
+        },
+        {
+          "name": "amount",
+          "type": "i128"
+        },
+        {
+          "name": "destination_chain",
+          "type": "Bytes"
+        },
+        {
+          "name": "destination_address",
+          "type": "Bytes"
+        }
+      ],
+      "output": "u64"
+    },
+    {
+      "name": "burn_and_unlock_request",
+      "doc": "Accept an inbound burn-and-unlock message, once it carries [`MIN_SIGNATURES`] valid signatures from distinct registered validators.  Two defects were fixed here:  * **Signature verification was discarded.** The loop called   `ed25519_verify` and then incremented `valid_signatures`   unconditionally, so *any* two 64-byte blobs — including two copies of   all zeroes — were accepted as a valid two-of-N multisig. The result is   now checked, the key must be a registered validator, and the same   validator cannot sign twice to reach the threshold. * **`public_keys.get(i).unwrap()` trapped** whenever `signatures` was   longer than `public_keys`, which the fuzzer reaches with a single   mismatched-length call. Lengths are now compared up front and reported   as [`Error::LengthMismatch`].",
+      "inputs": [
+        {
+          "name": "caller",
+          "type": "Address"
+        },
+        {
+          "name": "amount",
+          "type": "i128"
+        },
+        {
+          "name": "message_hash",
+          "type": "BytesN<32>"
+        },
+        {
+          "name": "signatures",
+          "type": "Vec<BytesN<64>>"
+        },
+        {
+          "name": "public_keys",
+          "type": "Vec<BytesN<32>>"
+        },
+        {
+          "name": "ttl",
+          "type": "u64"
+        }
+      ],
+      "output": "()"
+    }
+  ]
+}

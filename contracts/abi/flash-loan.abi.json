@@ -1,0 +1,365 @@
+{
+  "contract": "flash-loan",
+  "moduleDoc": "Cross-Asset Flash Loan Verification Engine for Compliance-Gated Tokens.\r\n\nEnables uncollateralized single-transaction flash loans for tokenized RWAs\r\nwhile enforcing:\r\n1. **Dual-Step Compliance Verification**: Verifies that `receiver_contract`\r\n   satisfies the on-chain compliance allowlist (`is_allowed`) BOTH prior to\r\n   loan disbursement and upon callback return (preventing mid-loan\r\n   compliance revocation or unauthorized flash receiver state transitions).\r\n2. **Reentrancy Protection**: Enforces a strict non-reentrant execution lock\r\n   covering all cross-contract call sites so nested calls cannot manipulate balances.\r\n3. **Atomic Payback + Premium Fee Enforcement**: Verifies that the vault's\r\n   token balance after `on_flash_loan` is at least `pre_balance + fee`\r\n   (default `9` bps = `0.09%`), reverting the entire Soroban transaction\r\n   frame if principal + premium are not repaid in full.\r\n4. **Multi-Hop Atomic Swaps**: Arbitrage path allowing borrowing asset A,\r\n   routing A -> B -> C across two AMM pools, repaying in asset C, with oracle\r\n   spot price verification ensuring non-negative net value after slippage.\r\n5. **Fee Tier System & Redistribution**: 0.09% base fee, 0.05% for governance\r\n   token holders, 0% waived for whitelisted liquidators. Fees are distributed:\r\n   60% LP reserve, 30% governance treasury, 10% protocol insurance.",
+  "generated_at": "2026-11-23T12:28:43.001Z",
+  "methods": [
+    {
+      "name": "initialize",
+      "doc": "Initialize the flash loan engine with its admin, compliance registry contract, and protocol fee treasury.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "compliance_contract",
+          "type": "Address"
+        },
+        {
+          "name": "treasury",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "set_insurance_pool",
+      "doc": "Set protocol insurance pool address for fee redistribution.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "insurance_pool",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "set_governance_token",
+      "doc": "Set governance token contract address for discounted fee tier verification.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "gov_token",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "set_liquidator_whitelist",
+      "doc": "Whitelist or remove liquidator address for fee waiver.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "liquidator",
+          "type": "Address"
+        },
+        {
+          "name": "allowed",
+          "type": "bool"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "set_fee_bps",
+      "doc": "Update the flash-loan premium fee in basis points (e.g., `9` = 0.09%).",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "fee_bps",
+          "type": "u32"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "get_borrower_fee_bps",
+      "doc": "Determine dynamic fee basis points for a borrower address based on fee tiers: - Whitelisted liquidator: 0 bps (0.00%) - Governance token holder: 5 bps (0.05%) - Standard: base fee (default 9 bps = 0.09%)",
+      "inputs": [
+        {
+          "name": "borrower",
+          "type": "Address"
+        }
+      ],
+      "output": "u32"
+    },
+    {
+      "name": "flash_loan",
+      "doc": "Execute an atomic, compliance-gated flash loan of `amount` units of `token_address` to `receiver_contract`.",
+      "inputs": [
+        {
+          "name": "receiver_contract",
+          "type": "Address"
+        },
+        {
+          "name": "token_address",
+          "type": "Address"
+        },
+        {
+          "name": "amount",
+          "type": "i128"
+        },
+        {
+          "name": "data",
+          "type": "Bytes"
+        }
+      ],
+      "output": "i128"
+    },
+    {
+      "name": "flash_loan_multi_hop_arbitrage",
+      "doc": "Multi-hop atomic swap flash loan arbitrage path: 1. Borrower borrows Asset A. 2. Swaps A -> B on `amm_pool_ab`. 3. Swaps B -> C on `amm_pool_bc`. 4. Verifies net arbitrage value is non-negative using oracle spot prices. 5. Repays loan in Asset C (or equivalent value) plus tier fee.",
+      "inputs": [
+        {
+          "name": "borrower",
+          "type": "Address"
+        },
+        {
+          "name": "asset_a",
+          "type": "Address"
+        },
+        {
+          "name": "asset_b",
+          "type": "Address"
+        },
+        {
+          "name": "asset_c",
+          "type": "Address"
+        },
+        {
+          "name": "amm_pool_ab",
+          "type": "Address"
+        },
+        {
+          "name": "amm_pool_bc",
+          "type": "Address"
+        },
+        {
+          "name": "oracle",
+          "type": "Address"
+        },
+        {
+          "name": "amount_a",
+          "type": "i128"
+        },
+        {
+          "name": "min_amount_c",
+          "type": "i128"
+        }
+      ],
+      "output": "i128"
+    },
+    {
+      "name": "calculate_fee_with_bps",
+      "doc": "Compute the flash loan fee for `amount` using a specific fee basis points rate.",
+      "inputs": [
+        {
+          "name": "amount",
+          "type": "i128"
+        },
+        {
+          "name": "fee_bps",
+          "type": "u32"
+        }
+      ],
+      "output": "i128"
+    },
+    {
+      "name": "calculate_fee",
+      "doc": "Compute the flash loan fee for `amount` (default 0.09% = 9 bps).",
+      "inputs": [
+        {
+          "name": "amount",
+          "type": "i128"
+        }
+      ],
+      "output": "i128"
+    },
+    {
+      "name": "fee_bps",
+      "doc": "Current flash loan fee in basis points.",
+      "inputs": [],
+      "output": "u32"
+    },
+    {
+      "name": "total_fees_collected",
+      "doc": "Total flash loan fees collected for a given `token_address`.",
+      "inputs": [
+        {
+          "name": "token_address",
+          "type": "Address"
+        }
+      ],
+      "output": "i128"
+    },
+    {
+      "name": "mint",
+      "doc": "Invokes `mint` on flash-loan.",
+      "inputs": [
+        {
+          "name": "to",
+          "type": "Address"
+        },
+        {
+          "name": "amount",
+          "type": "i128"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "transfer",
+      "doc": "Invokes `transfer` on flash-loan.",
+      "inputs": [
+        {
+          "name": "from",
+          "type": "Address"
+        },
+        {
+          "name": "to",
+          "type": "Address"
+        },
+        {
+          "name": "amount",
+          "type": "i128"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "balance",
+      "doc": "Invokes `balance` on flash-loan.",
+      "inputs": [
+        {
+          "name": "id",
+          "type": "Address"
+        }
+      ],
+      "output": "i128"
+    },
+    {
+      "name": "set_allowed",
+      "doc": "Invokes `set_allowed` on flash-loan.",
+      "inputs": [
+        {
+          "name": "address",
+          "type": "Address"
+        },
+        {
+          "name": "allowed",
+          "type": "bool"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "is_allowed",
+      "doc": "Invokes `is_allowed` on flash-loan.",
+      "inputs": [
+        {
+          "name": "address",
+          "type": "Address"
+        }
+      ],
+      "output": "bool"
+    },
+    {
+      "name": "set_mode",
+      "doc": "Invokes `set_mode` on flash-loan.",
+      "inputs": [
+        {
+          "name": "mode",
+          "type": "ReceiverMode"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "on_flash_loan",
+      "doc": "Invokes `on_flash_loan` on flash-loan.",
+      "inputs": [
+        {
+          "name": "_initiator",
+          "type": "Address"
+        },
+        {
+          "name": "token_address",
+          "type": "Address"
+        },
+        {
+          "name": "amount",
+          "type": "i128"
+        },
+        {
+          "name": "fee",
+          "type": "i128"
+        },
+        {
+          "name": "data",
+          "type": "Bytes"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "swap",
+      "doc": "Invokes `swap` on flash-loan.",
+      "inputs": [
+        {
+          "name": "_env",
+          "type": "Env"
+        },
+        {
+          "name": "_to",
+          "type": "Address"
+        },
+        {
+          "name": "_zero_for_one",
+          "type": "bool"
+        },
+        {
+          "name": "amount_specified",
+          "type": "i128"
+        },
+        {
+          "name": "_sqrt_price_limit",
+          "type": "u128"
+        },
+        {
+          "name": "_max_ticks_crossed",
+          "type": "u32"
+        }
+      ],
+      "output": "i128"
+    },
+    {
+      "name": "get_price",
+      "doc": "Invokes `get_price` on flash-loan.",
+      "inputs": [
+        {
+          "name": "_env",
+          "type": "Env"
+        },
+        {
+          "name": "_asset",
+          "type": "Address"
+        }
+      ],
+      "output": "i128"
+    }
+  ]
+}

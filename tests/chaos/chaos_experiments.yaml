@@ -223,3 +223,102 @@ spec:
           name: recovery-verification
           image: curlimages/curl:latest
           command: ["curl", "-f", "http://tessera-api.tessera-system.svc:8080/stats"]
+
+---
+# Issue #445 (1): Network Chaos — tc netem delay 200ms 50ms & iptables DROP
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: network-chaos-netem-iptables-drop
+  namespace: tessera-chaos
+spec:
+  action: delay
+  mode: all
+  selector:
+    labelSelectors:
+      app.kubernetes.io/name: tessera-api
+  delay:
+    latency: '200ms'
+    jitter: '50ms'
+  direction: to
+  target:
+    mode: all
+    selector:
+      labelSelectors:
+        app.kubernetes.io/name: redis
+  duration: '5m'
+
+---
+# Issue #445 (2): Storage Chaos — Postgres WAL Corruption & Replica Failover
+apiVersion: chaos-mesh.org/v1alpha1
+kind: IOChaos
+metadata:
+  name: storage-chaos-postgres-wal-corruption
+  namespace: tessera-chaos
+spec:
+  action: corrupt
+  mode: one
+  selector:
+    labelSelectors:
+      app.kubernetes.io/name: postgresql-primary
+  volumePath: /var/lib/postgresql/data/pg_wal
+  path: '/var/lib/postgresql/data/pg_wal/*'
+  percent: '1'
+  duration: '3m'
+
+---
+# Issue #445 (3): Contract Chaos — Malformed Soroban XDR & DLQ Isolation
+apiVersion: chaos-mesh.org/v1alpha1
+kind: HTTPChaos
+metadata:
+  name: contract-chaos-malformed-soroban-xdr
+  namespace: tessera-chaos
+spec:
+  mode: all
+  selector:
+    labelSelectors:
+      app.kubernetes.io/name: tessera-api
+  target: Request
+  path: '/v1/events*'
+  patch:
+    body:
+      type: JSON
+      value: '{"body": "AAAA_INVALID_CORRUPTED_XDR_ENVELOPE=="}'
+  duration: '3m'
+
+---
+# Issue #445 (4): Slow Consumer Chaos — Pulsar Consumer Pause & Zero Data Loss DLQ
+apiVersion: chaos-mesh.org/v1alpha1
+kind: StressChaos
+metadata:
+  name: slow-consumer-pulsar-dlq
+  namespace: tessera-chaos
+spec:
+  mode: one
+  selector:
+    labelSelectors:
+      app.kubernetes.io/name: pulsar-consumer
+  stressors:
+    cpu:
+      workers: 2
+      load: 100
+  duration: '4m'
+
+---
+# Issue #445 (5): Chaos Monkey — Random Pod Kill & RTO Verification (<= 5.0s)
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: chaos-monkey-random-pod-kill-rto
+  namespace: tessera-chaos
+spec:
+  action: pod-kill
+  mode: fixed-percent
+  value: '50'
+  selector:
+    labelSelectors:
+      app.kubernetes.io/name: tessera-api
+  gracePeriod: 0
+  duration: '5m'
+  scheduler:
+    cron: '@every 2m'

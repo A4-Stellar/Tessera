@@ -1,0 +1,6 @@
+{
+  "contract": "governance",
+  "moduleDoc": "Tessera corporate governance contract (issue #92): board members approve\r\nhigh-privilege operations (contract upgrades, minting, fee changes) as\r\nm-of-n resolutions that execute automatically at threshold.",
+  "generated_at": "2026-11-23T12:28:43.003Z",
+  "methods": []
+}

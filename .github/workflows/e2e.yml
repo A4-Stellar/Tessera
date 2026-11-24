@@ -51,6 +51,22 @@ jobs:
         env:
           RUST_LOG: debug
 
+      - name: Run stateful property tests (500 operations)
+        run: cargo test --test system_suite -- test_stateful_property_suite --test-threads=1
+        env:
+          NUM_OPERATIONS: "500"
+          RUST_LOG: info
+
+      - name: Upload unit property failure reproducer
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-unit-property-reproducer
+          path: |
+            tests/e2e/reproducer.json
+            tests/e2e/target/reproducer.json
+          if-no-files-found: ignore
+
   e2e-full:
     name: E2E Full Workflow (Docker)
     runs-on: ubuntu-latest
@@ -75,12 +91,22 @@ jobs:
       - name: Run full E2E suite
         working-directory: tests/e2e
         run: >-
-          RUN_E2E=true E2E_MANAGE_DOCKER=false
+          RUN_E2E=true E2E_MANAGE_DOCKER=false NUM_OPERATIONS=500
           cargo test --test system_suite -- --test-threads=1 --include-ignored
         env:
           TESSERA_API_URL: http://localhost:8080
           SOROBAN_RPC_URL: http://localhost:8000/soroban/rpc
           RUST_LOG: debug
+
+      - name: Upload full E2E failure reproducer
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-full-failure-reproducer
+          path: |
+            tests/e2e/reproducer.json
+            tests/e2e/target/reproducer.json
+          if-no-files-found: ignore
 
       - name: Collect API logs on failure
         if: failure()

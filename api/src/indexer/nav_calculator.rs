@@ -301,3 +301,152 @@ mod nav_aggregation_tests {
         assert!(!nav_deviation_exceeds_alert(1_000, 960));
     }
 }
+
+// ── FX hedge mark-to-market integration (issue #221) ───────────────────────
+
+/// Read-only view of one on-chain FX hedge position for NAV aggregation.
+///
+/// Callers populate `current_spot` from the live price feed (the same source
+/// that drives `FxHedgePool::update_delta` on-chain). Price fields use the
+/// 10_000-scaled FX convention (10_850 = 1.0850); `hedge_size` is in the
+/// vault's raw base units, matching the contract's `HedgePositionV2`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FxHedgePositionView {
+    pub id: u64,
+    pub base_asset: String,
+    pub quote_currency: String,
+    pub notional: i128,
+    pub hedge_size: i128,
+    pub delta_bps: i128,
+    pub entry_spot: i128,
+    pub current_spot: i128,
+}
+
+/// `10^NAV_SCALE` (10_000_000), the fixed-point factor shared with
+/// [`aggregate_nav`] and the Stellar 7-decimal amount convention.
+const FX_NAV_SCALE_FACTOR: i128 = 10_000_000;
+
+/// Mark-to-market of a single FX hedge, returned in [`NAV_SCALE`] fixed point.
+///
+/// `mtm = hedge_size * (current_spot - entry_spot) / entry_spot * 10^NAV_SCALE`
+///
+/// This mirrors `FxHedgePool::close_hedge`'s settlement formula: a long hedge
+/// gains when the FX spot rises above its entry. All intermediates use checked
+/// i128 arithmetic and saturate to `i128::MIN/MAX` on overflow instead of
+/// wrapping. A non-positive entry spot yields zero (no meaningful MTM).
+pub fn fx_hedge_mark_to_market(pos: &FxHedgePositionView) -> i128 {
+    if pos.entry_spot <= 0 {
+        return 0;
+    }
+
+    let negative = (pos.hedge_size < 0) ^ (pos.current_spot < pos.entry_spot);
+    let saturate = || {
+        if negative {
+            i128::MIN
+        } else {
+            i128::MAX
+        }
+    };
+
+    let spot_delta = match pos.current_spot.checked_sub(pos.entry_spot) {
+        Some(d) => d,
+        None => return saturate(),
+    };
+    let product = match pos.hedge_size.checked_mul(spot_delta) {
+        Some(p) => p,
+        None => return saturate(),
+    };
+    let scaled = match product.checked_mul(FX_NAV_SCALE_FACTOR) {
+        Some(s) => s,
+        None => return saturate(),
+    };
+    scaled.checked_div(pos.entry_spot).unwrap_or_else(saturate)
+}
+
+/// Total NAV including FX hedge mark-to-market.
+///
+/// `base_nav` is the NAV from unhedged assets (already in [`NAV_SCALE`] fixed
+/// point); each hedge's MTM is added using live `current_spot` values supplied
+/// by the caller. Addition saturates on overflow so one bad position cannot
+/// wrap the reported NAV.
+pub fn calculate_total_nav(base_nav: i128, hedges: &[FxHedgePositionView]) -> i128 {
+    hedges
+        .iter()
+        .fold(base_nav, |total, hedge| {
+            total.saturating_add(fx_hedge_mark_to_market(hedge))
+        })
+}
+
+#[cfg(test)]
+mod fx_hedge_nav_tests {
+    use super::*;
+
+    fn hedge(id: u64, hedge_size: i128, entry_spot: i128, current_spot: i128) -> FxHedgePositionView {
+        FxHedgePositionView {
+            id,
+            base_asset: "EUR".to_string(),
+            quote_currency: "USD".to_string(),
+            notional: hedge_size * 10_000 / 9_000,
+            hedge_size,
+            delta_bps: 9_000,
+            entry_spot,
+            current_spot,
+        }
+    }
+
+    #[test]
+    fn fx_hedge_mtm_is_positive_on_gains_and_negative_on_losses() {
+        let gain = hedge(1, 1_000_000, 10_000, 11_000);
+        // 1e6 * 1000 / 10000 = 100_000 raw units -> 100_000 * 1e7 = 1e12.
+        assert_eq!(fx_hedge_mark_to_market(&gain), 1_000_000_000_000);
+
+        let loss = hedge(2, 1_000_000, 10_000, 9_000);
+        assert_eq!(fx_hedge_mark_to_market(&loss), -1_000_000_000_000);
+
+        let flat = hedge(3, 1_000_000, 10_000, 10_000);
+        assert_eq!(fx_hedge_mark_to_market(&flat), 0);
+    }
+
+    #[test]
+    fn zero_or_negative_entry_spot_is_guarded() {
+        assert_eq!(fx_hedge_mark_to_market(&hedge(1, 1_000_000, 0, 11_000)), 0);
+        assert_eq!(fx_hedge_mark_to_market(&hedge(2, 1_000_000, -100, 11_000)), 0);
+    }
+
+    #[test]
+    fn total_nav_sums_base_and_all_hedge_mtms_with_saturation() {
+        let hedges = [
+            hedge(1, 1_000_000, 10_000, 11_000), // +1e12
+            hedge(2, 500_000, 10_000, 9_000),    // -5e11
+        ];
+        let base_nav = 100_000_000_000;
+        assert_eq!(calculate_total_nav(base_nav, &hedges), 600_000_000_000);
+        assert_eq!(calculate_total_nav(base_nav, &[]), base_nav);
+
+        // Overflow in one MTM saturates instead of wrapping the total.
+        let overflowing = FxHedgePositionView {
+            hedge_size: i128::MAX,
+            ..hedge(3, 1, 1, 1_000_001)
+        };
+        assert_eq!(calculate_total_nav(base_nav, &[overflowing]), i128::MAX);
+    }
+
+    #[test]
+    fn thirty_percent_move_mtm_offsets_more_than_sixty_percent_of_base_loss() {
+        // Base NAV 100_000.0000000 units; a 30% adverse FX move costs 30_000 units.
+        let base_nav = 1_000_000_000_000i128;
+        let base_after_move = 700_000_000_000i128;
+        let base_loss = base_nav - base_after_move; // 300_000_000_000
+
+        // Delta ~0.9 hedge: 100_000 notional -> 90_000 hedge_size.
+        let hedge_position = hedge(1, 90_000, 10_000, 13_000);
+        let mtm = fx_hedge_mark_to_market(&hedge_position);
+        assert_eq!(mtm, 270_000_000_000);
+
+        assert!(
+            mtm * 100 > 60 * base_loss,
+            "MTM {mtm} must offset >60% of base loss {base_loss}"
+        );
+        assert_eq!(calculate_total_nav(base_after_move, &[hedge_position]), 970_000_000_000);
+    }
+}

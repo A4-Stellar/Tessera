@@ -1,0 +1,166 @@
+export const metadata = {
+  title: "FX Risk & Delta Hedging",
+  description: "FX risk sources, the integer Black-Scholes delta-hedge model, keeper mechanics, stress results and the operational runbook for the fx-hedge contract.",
+  canonical: "/docs/fx-risk",
+};
+
+# FX Risk & Delta Hedging
+
+The `fx-hedge` contract protects international real-estate investors whose
+dividends arrive in a foreign currency (EUR, GBP, JPY, …). Its V2 engine opens
+delta-hedged FX forward positions, reprices them as the spot moves, lets
+keepers rebalance them for a fee, and settles realised PnL against the vaults
+contract.
+
+<CalloutBox variant="note">
+The V1 yield-based hedge API (`setup_hedge`, `ingest_oracle_rate`,
+`execute_rebalance`) is preserved unchanged. V2 adds a separate position store
+and is enabled by calling `initialize_v2`.
+</CalloutBox>
+
+## FX risk sources
+
+| Source | Description | Managed by |
+|--------|-------------|------------|
+| Spot translation | A dividend received in EUR is worth fewer USD when EUR weakens. | Hedge delta (`hedge_size`) |
+| Volatility | Implied vol changes the probability of finishing in the money and therefore the correct delta. | `update_delta` / `rebalance_hedge` |
+| Time decay | With discrete Stellar ledgers, remaining option time shrinks in steps; theta is approximated by recomputing delta from the ledger ratio. | `remaining_time_bps` |
+| Gap / jump risk | Weekend gaps and intervention moves exceed what a diffusive model predicts. | Collateral margin + stress limits |
+| Basis / carry | The model assumes a zero risk-free rate (no interest-rate differential), so forward points and carry are ignored. | Conservative notional caps |
+| Oracle staleness | A stale spot or vol feed misprices the hedge. | Feed monitoring (see runbook) |
+
+## Delta-hedging model
+
+For a position with spot `S`, strike `K`, annualised implied volatility
+`σ` and remaining time `T` (both in basis points), the contract computes the
+Black-Scholes call delta:
+
+```text
+d1   = (ln(S/K) + 0.5 * σ² * T) / (σ * sqrt(T))
+delta = N(d1)                      // standard normal CDF
+hedge_size = notional * delta / 10_000
+```
+
+All prices use the repo's 10_000-scaled convention (`10_850` = 1.0850 USD per
+EUR); volatility, time and delta are basis points (`10_000` = 100%).
+
+`black_scholes_delta` is a **pure, env-free i128 fixed-point function** (scale
+`10^9`), so the API and simulators can reuse the exact on-chain number:
+
+- `ln` via range reduction to `[1, 2]` plus the `z = (x−1)/(x+1)` power series;
+- `sqrt` via integer Newton iteration;
+- `N(x)` via Abramowitz & Stegun 7.1.26 (max error ~7.5e-8, far below 1 bp);
+- degenerate inputs (`σ ≤ 0` or `T ≤ 0`) collapse to the deep-ITM limit;
+- intermediate overflow panics with `MathOverflow` rather than wrapping.
+
+Delta is monotone increasing in spot and clamped to `[0, 10_000]`. At the money
+with moderate vol/time it is ~5000 bps (a small positive drift pushes it just
+above 5000).
+
+### Settlement PnL
+
+On close, realised PnL follows the same deterministic formula used by the API's
+mark-to-market (`fx_hedge_mark_to_market`):
+
+```text
+pnl = (spot − entry_spot) * hedge_size / entry_spot
+```
+
+A portfolio **short** the FX exposure is hedged with a **long** delta position:
+a 30% adverse move is offset by roughly `0.30 × delta` of notional.
+
+## Black-Scholes limitations for FX
+
+- **Volatility smile / skew.** FX vols are strike- and tenor-dependent; a single
+  `get_implied_vol` number cannot capture the smile. Size positions
+  conservatively and monitor realized-vs-implied vol.
+- **Jumps and gaps.** FX markets gap on macro events; a diffusion model
+  understates tail loss. The 10% collateral margin and the stress limit below
+  are the primary mitigations.
+- **Discrete ledgers.** Time is measured in ledger sequence numbers (~5s each),
+  not continuous calendar time, and `T` is quantised to bps. Theta is therefore
+  approximated by re-deriving delta at each ledger rather than by a closed-form
+  theta term.
+- **Zero rates / no carry.** Interest-rate differentials (forward points) are
+  excluded; the model prices a spot call, not a full FX forward.
+- **Fixed-point precision.** 1e9 internal scale gives sub-bp accuracy, but very
+  extreme spot/strike ratios are range-reduced and lose sub-FP-unit precision.
+
+## Collateral and keeper fees
+
+| Parameter | Value / rule |
+|-----------|--------------|
+| Initial margin | `collateral = notional / 10` (10%), locked via `Vaults::lock_collateral` at open |
+| Rebalance adjustment | `adjust = target_hedge_size − current_hedge_size`; positive locks more collateral, negative releases it |
+| Keeper fee | `max(1, abs(adjust) * keeper_fee_bps / 10_000)`, debited from collateral through `Vaults::settle_pnl(position_id, −fee)` |
+| Close | PnL settled via `settle_pnl`, then all remaining collateral is released |
+| Authorization | `owner.require_auth()` on open; `keeper.require_auth()` on rebalance; owner **or** admin on close |
+
+Anyone may call `update_delta` (permissionless) and `rebalance_hedge` (for a
+fee). `NotKeeper` is reserved for a future designated-keeper allow-list; today
+no caller can be rejected on that basis.
+
+### Required vaults interface
+
+The configured `vaults` contract must implement this exact interface (it is
+declared as `VaultsClient` in the contract):
+
+```rust
+fn lock_collateral(env: Env, owner: Address, position_id: u64, amount: i128);
+fn release_collateral(env: Env, position_id: u64, amount: i128);
+fn settle_pnl(env: Env, position_id: u64, pnl: i128);
+```
+
+A failed call aborts the whole transaction with `VaultCallFailed` (or
+`NotInitialized` if no vaults address was configured).
+
+## Oracle configuration
+
+The oracle address passed to `initialize` / `initialize_v2` must expose:
+
+```rust
+fn get_implied_vol(env: Env, base: Symbol, quote: Symbol) -> i128; // bps, e.g. 1500 = 15%
+fn get_price(env: Env, base: Symbol, quote: Symbol) -> i128;        // 10_000-scaled, e.g. 10850 = 1.0850
+```
+
+Both calls are made with `(base, quote)` as arguments. A missing method or
+invalid result aborts with `InvalidRate`. Keep the feeds fresh — a stale spot
+means a stale delta and an under-hedged book.
+
+## Stress test
+
+`contracts/fx-hedge/tests/stress_test.rs` opens a real position, reprices it to
+a delta of ~0.90, then applies a 30% adverse spot move:
+
+| Metric | Value |
+|--------|-------|
+| Unhedged drawdown `D_unhedged` | `E × 0.30` |
+| Hedge PnL | `0.30 × delta × E` ≈ `0.27 E` (90% of notional) |
+| Hedged drawdown `D_hedged` | ≈ `0.03 E` |
+| Drawdown reduction | **~90% (> 60% requirement)**; assertion: `D_hedged ≤ 0.4 × D_unhedged` |
+
+The test also exercises the pure delta math without any cross-contract setup.
+Run it with:
+
+```bash
+cargo test -p tessera-fx-hedge --manifest-path contracts/Cargo.toml
+```
+
+## Monitoring & operational runbook
+
+1. **Feed health.** Alert if `get_price` / `get_implied_vol` are stale or revert.
+   `update_delta` is permissionless — keep a keeper bot calling it each ledger.
+2. **Delta drift.** Alert when `abs(target_delta − current_delta_bps) > 500`
+   bps for any open position; run `rebalance_hedge` before the drift widens.
+3. **Collateral ratio.** Alert when `collateral / notional < 8%` after fees; top
+   up by locking collateral through the vaults contract.
+4. **NAV deviation.** The API's `calculate_total_nav` adds hedge mark-to-market
+   to base NAV. Alert when `nav_deviation_exceeds_alert` fires (5% default) — a
+   common cause is a stale `current_spot` supplied to `FxHedgePositionView`.
+5. **Close discipline.** Close or roll positions before `entry_ledger +
+   duration_ledgers`; as `T → 0` the delta converges to the intrinsic 0/1 limit
+   and the hedge stops behaving like an option.
+6. **Incident response.** If the oracle reports a bad print, pause keeper
+   rebalancing, let the feed recover, then call `update_delta` with the corrected
+   spot before reopening automation. All rebalance/close actions are atomic and
+   revert on failed vault calls.

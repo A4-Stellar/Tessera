@@ -62,6 +62,13 @@ contracts/fuzz/proptests/target/
 *.profraw
 *.profdata
 
+# Content-addressed WASM build cache (scripts/ci/check-wasm-cache.sh).
+# The local cache, hit-rate history and per-run metrics are generated artifacts;
+# the reproducibility scratch target dirs are clean rebuilds used to verify that
+# two independent runners produce byte-identical .wasm files (issue #47).
+.wasm-cache-metrics.json
+contracts/target-repro-*/
+
 # TLA+ / TLC (contracts/compliance/verification)
 #
 # TLC writes its on-disk state queue and fingerprint sets to `states/` in the

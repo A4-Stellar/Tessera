@@ -58,6 +58,8 @@ pulsar = { version = "6.9", features = ["tokio", "lz4", "snap", "zstd", "compres
 # Issue #469: compressed EigenDA blobs and disperser payload encoding.
 zstd = "0.13"
 base64 = "0.22"
+mpc-signer = { path = "../services/mpc-signer" }
+ed25519-dalek = { version = "2", default-features = false }
 
 [dev-dependencies]
 insta = { version = "1", features = ["json"] }

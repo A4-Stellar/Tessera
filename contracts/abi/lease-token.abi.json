@@ -1,0 +1,162 @@
+{
+  "contract": "lease-token",
+  "moduleDoc": "On-Chain Real Estate Lease Tokenization & Automated Rental Sweep Vault.\r\n\nRepresents commercial property leases as tokenized cash-flow streams that\r\nautomatically sweep incoming tenant stablecoin payments into fractional\r\ninvestor payout contracts following a strict senior-debt-first waterfall:\r\n1. **Senior Debt Tranche Priority**: Incoming rent first satisfies any\r\n   outstanding `senior_interest_due` owed to the senior debt tranche payout\r\n   contract.\r\n2. **Fractional Equity Sweep**: Any residual rent above the senior debt\r\n   interest obligation is automatically swept to the fractional equity\r\n   payout contract in the same atomic transaction.\r\n3. **Standardized Audit Events**: Emits `RentSwept(lease_id, amount, tenant_address)`\r\n   on every automated rental sweep.",
+  "generated_at": "2026-11-23T12:28:43.007Z",
+  "methods": [
+    {
+      "name": "initialize",
+      "doc": "Initialize the lease tokenization & rental sweep vault.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "create_lease",
+      "doc": "Register a new tokenized commercial lease with senior debt priority interest obligations and fractional equity sweep routing.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "tenant",
+          "type": "Address"
+        },
+        {
+          "name": "stablecoin",
+          "type": "Address"
+        },
+        {
+          "name": "senior_tranche_recipient",
+          "type": "Address"
+        },
+        {
+          "name": "equity_tranche_recipient",
+          "type": "Address"
+        },
+        {
+          "name": "monthly_rent",
+          "type": "i128"
+        },
+        {
+          "name": "senior_interest_due",
+          "type": "i128"
+        }
+      ],
+      "output": "u64"
+    },
+    {
+      "name": "accrue_senior_interest",
+      "doc": "Record additional periodic priority interest accrued on the senior debt tranche.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "lease_id",
+          "type": "u64"
+        },
+        {
+          "name": "additional_interest",
+          "type": "i128"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "pay_rent",
+      "doc": "Receive a stablecoin rental payment from `tenant_address` and automatically sweep proceeds to the senior debt tranche (up to `senior_interest_due`) followed by the fractional equity payout contract.  Emits `RentSwept(lease_id, amount, tenant_address)`.",
+      "inputs": [
+        {
+          "name": "lease_id",
+          "type": "u64"
+        },
+        {
+          "name": "tenant_address",
+          "type": "Address"
+        },
+        {
+          "name": "amount",
+          "type": "i128"
+        }
+      ],
+      "output": "SweepResult"
+    },
+    {
+      "name": "close_lease",
+      "doc": "Deactivate a lease agreement.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "lease_id",
+          "type": "u64"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "get_lease",
+      "doc": "Retrieve the full `LeaseAgreement` state for `lease_id`.",
+      "inputs": [
+        {
+          "name": "lease_id",
+          "type": "u64"
+        }
+      ],
+      "output": "LeaseAgreement"
+    },
+    {
+      "name": "mint",
+      "doc": "Invokes `mint` on lease-token.",
+      "inputs": [
+        {
+          "name": "to",
+          "type": "Address"
+        },
+        {
+          "name": "amount",
+          "type": "i128"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "balance",
+      "doc": "Invokes `balance` on lease-token.",
+      "inputs": [
+        {
+          "name": "id",
+          "type": "Address"
+        }
+      ],
+      "output": "i128"
+    },
+    {
+      "name": "transfer",
+      "doc": "Invokes `transfer` on lease-token.",
+      "inputs": [
+        {
+          "name": "from",
+          "type": "Address"
+        },
+        {
+          "name": "to",
+          "type": "Address"
+        },
+        {
+          "name": "amount",
+          "type": "i128"
+        }
+      ],
+      "output": "()"
+    }
+  ]
+}

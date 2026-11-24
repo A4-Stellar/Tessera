@@ -1,4 +1,4 @@
-﻿
+
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.0.31903.59
@@ -7,7 +7,11 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{827E0CD3-B72
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Tessera.SDK", "src\Tessera.SDK\Tessera.SDK.csproj", "{FC7888C6-27FD-4C37-8D57-135A8BB51632}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Tessera.SDK.Generators", "src\Tessera.SDK.Generators\Tessera.SDK.Generators.csproj", "{A7B441F3-E8B6-4F23-9524-7FCE815A4290}"
+EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Tessera.SDK.Tests", "tests\Tessera.SDK.Tests\Tessera.SDK.Tests.csproj", "{90AD255D-5704-458B-9847-7EBF739A244E}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Tessera.SDK.Generators.Tests", "tests\Tessera.SDK.Generators.Tests\Tessera.SDK.Generators.Tests.csproj", "{B5A21D5E-9F5C-4B9E-86D7-90C05EBDC1E1}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -43,12 +47,22 @@ Global
 		{90AD255D-5704-458B-9847-7EBF739A244E}.Release|x64.Build.0 = Release|Any CPU
 		{90AD255D-5704-458B-9847-7EBF739A244E}.Release|x86.ActiveCfg = Release|Any CPU
 		{90AD255D-5704-458B-9847-7EBF739A244E}.Release|x86.Build.0 = Release|Any CPU
+		{A7B441F3-E8B6-4F23-9524-7FCE815A4290}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A7B441F3-E8B6-4F23-9524-7FCE815A4290}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A7B441F3-E8B6-4F23-9524-7FCE815A4290}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A7B441F3-E8B6-4F23-9524-7FCE815A4290}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B5A21D5E-9F5C-4B9E-86D7-90C05EBDC1E1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B5A21D5E-9F5C-4B9E-86D7-90C05EBDC1E1}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B5A21D5E-9F5C-4B9E-86D7-90C05EBDC1E1}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B5A21D5E-9F5C-4B9E-86D7-90C05EBDC1E1}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{FC7888C6-27FD-4C37-8D57-135A8BB51632} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
+		{A7B441F3-E8B6-4F23-9524-7FCE815A4290} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{90AD255D-5704-458B-9847-7EBF739A244E} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
+		{B5A21D5E-9F5C-4B9E-86D7-90C05EBDC1E1} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 	EndGlobalSection
 EndGlobal

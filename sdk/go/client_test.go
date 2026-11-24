@@ -1,6 +1,7 @@
 package tessera
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -13,6 +14,19 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
+	"github.com/apache/arrow-go/v18/arrow/flight"
+	"github.com/apache/arrow-go/v18/arrow/ipc"
+	"github.com/apache/arrow-go/v18/arrow/memory"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
 func TestClient_GetStats_Success(t *testing.T) {
@@ -277,6 +291,8 @@ func TestClient_WebSocket_MockServer(t *testing.T) {
 
 	port := listener.Addr().(*net.TCPAddr).Port
 	wsURL := fmt.Sprintf("ws://127.0.0.1:%d/v1/ws", port)
+	doneChan := make(chan struct{})
+	defer close(doneChan)
 
 	// Mock WebSocket server handling handshake and sending one event
 	go func() {
@@ -309,14 +325,17 @@ func TestClient_WebSocket_MockServer(t *testing.T) {
 		)
 		_, _ = conn.Write([]byte(resp))
 
+		// Ensure client finishes reading handshake response before writing the frame
+		time.Sleep(50 * time.Millisecond)
+
 		// Send an Event frame: opcode 0x81 (FIN + Text)
 		eventPayload := []byte(`{"id":100,"contract":"C123","event_type":"Transfer","ledger":42,"data":{"amount":"500"}}`)
 		frame := []byte{0x81, byte(len(eventPayload))}
 		frame = append(frame, eventPayload...)
 		_, _ = conn.Write(frame)
 
-		// Wait briefly then close
-		time.Sleep(100 * time.Millisecond)
+		// Wait until test context is done before closing
+		<-doneChan
 	}()
 
 	client, err := NewClient(WithWebSocketURL(wsURL))
@@ -384,4 +403,300 @@ func trimSpace(s string) string {
 		end--
 	}
 	return s[start:end]
+}
+
+// MockFlightServer provides an in-memory gRPC Arrow Flight server for unit tests.
+type MockFlightServer struct {
+	flight.BaseFlightServer
+	schema           *arrow.Schema
+	records          []arrow.Record
+	unavailableCount atomic.Int32
+	receivedAuth     atomic.Value
+	receivedTrace    atomic.Value
+	lastTicket       atomic.Value
+}
+
+func (s *MockFlightServer) DoGet(ticket *flight.Ticket, stream flight.FlightService_DoGetServer) error {
+	md, ok := metadata.FromIncomingContext(stream.Context())
+	if ok {
+		auths := md.Get("authorization")
+		if len(auths) > 0 {
+			s.receivedAuth.Store(auths[0])
+		}
+		traces := md.Get("traceparent")
+		if len(traces) > 0 {
+			s.receivedTrace.Store(traces[0])
+		}
+	}
+	s.lastTicket.Store(string(ticket.Ticket))
+
+	if n := s.unavailableCount.Load(); n > 0 {
+		s.unavailableCount.Add(-1)
+		return status.Error(codes.Unavailable, "server temporarily unavailable")
+	}
+
+	wtr := flight.NewRecordWriter(stream, ipc.WithSchema(s.schema))
+	defer wtr.Close()
+
+	for _, rec := range s.records {
+		if err := wtr.Write(rec); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func startMockFlightServer(t *testing.T, srv *MockFlightServer) (string, func()) {
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
+	}
+	grpcServer := grpc.NewServer()
+	flight.RegisterFlightServiceServer(grpcServer, srv)
+	go func() {
+		_ = grpcServer.Serve(lis)
+	}()
+	cleanup := func() {
+		grpcServer.Stop()
+		_ = lis.Close()
+	}
+	return lis.Addr().String(), cleanup
+}
+
+func createTestSchemaAndRecords(t *testing.T) (*arrow.Schema, []arrow.Record) {
+	schema := arrow.NewSchema([]arrow.Field{
+		{Name: "asset_id", Type: arrow.PrimitiveTypes.Uint64},
+		{Name: "asset_name", Type: arrow.BinaryTypes.String},
+		{Name: "symbol", Type: arrow.BinaryTypes.String},
+		{Name: "ledger", Type: arrow.PrimitiveTypes.Uint32},
+		{Name: "address", Type: arrow.BinaryTypes.String},
+		{Name: "balance", Type: arrow.BinaryTypes.String},
+		{Name: "share_percent", Type: arrow.PrimitiveTypes.Float64},
+	}, nil)
+
+	var records []arrow.Record
+	for i := 0; i < 3; i++ {
+		b := array.NewRecordBuilder(memory.DefaultAllocator, schema)
+		b.Field(0).(*array.Uint64Builder).Append(uint64(i + 1))
+		b.Field(1).(*array.StringBuilder).Append(fmt.Sprintf("Asset %d", i+1))
+		b.Field(2).(*array.StringBuilder).Append(fmt.Sprintf("AST%d", i+1))
+		b.Field(3).(*array.Uint32Builder).Append(uint32(1000 + i))
+		b.Field(4).(*array.StringBuilder).Append(fmt.Sprintf("GADDRESS%d", i+1))
+		b.Field(5).(*array.StringBuilder).Append("5000000000")
+		b.Field(6).(*array.Float64Builder).Append(33.33)
+		rec := b.NewRecord()
+		records = append(records, rec)
+		b.Release()
+	}
+
+	return schema, records
+}
+
+func TestFlightClient_DoGet_Streaming(t *testing.T) {
+	schema, records := createTestSchemaAndRecords(t)
+	defer func() {
+		for _, r := range records {
+			r.Release()
+		}
+	}()
+
+	mockSrv := &MockFlightServer{
+		schema:  schema,
+		records: records,
+	}
+	addr, cleanup := startMockFlightServer(t, mockSrv)
+	defer cleanup()
+
+	fc, err := NewFlightClient(addr)
+	if err != nil {
+		t.Fatalf("failed to create flight client: %v", err)
+	}
+	defer fc.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	stream, err := fc.ExportAssetArrow(ctx, 42)
+	if err != nil {
+		t.Fatalf("ExportAssetArrow failed: %v", err)
+	}
+	defer stream.Close()
+
+	if string(stream.Schema().Field(0).Name) != "asset_id" {
+		t.Errorf("unexpected schema field: %s", stream.Schema().Field(0).Name)
+	}
+
+	count := 0
+	for stream.Next() {
+		rec := stream.Record()
+		if rec == nil {
+			t.Fatal("expected non-nil record")
+		}
+		if rec.NumRows() != 1 {
+			t.Errorf("expected 1 row per record, got %d", rec.NumRows())
+		}
+		count++
+	}
+
+	if err := stream.Err(); err != nil {
+		t.Fatalf("stream encountered error: %v", err)
+	}
+	if count != 3 {
+		t.Errorf("expected 3 record batches, got %d", count)
+	}
+	if mockSrv.lastTicket.Load() != "/v1/assets/42/export?format=arrow" {
+		t.Errorf("expected ticket /v1/assets/42/export?format=arrow, got %v", mockSrv.lastTicket.Load())
+	}
+}
+
+func TestFlightClient_BatchReader_IOReader(t *testing.T) {
+	schema, records := createTestSchemaAndRecords(t)
+	defer func() {
+		for _, r := range records {
+			r.Release()
+		}
+	}()
+
+	mockSrv := &MockFlightServer{
+		schema:  schema,
+		records: records,
+	}
+	addr, cleanup := startMockFlightServer(t, mockSrv)
+	defer cleanup()
+
+	fc, err := NewFlightClient(addr)
+	if err != nil {
+		t.Fatalf("failed to create flight client: %v", err)
+	}
+	defer fc.Close()
+
+	ctx := context.Background()
+	stream, err := fc.ExportAssetArrow(ctx, 100)
+	if err != nil {
+		t.Fatalf("ExportAssetArrow failed: %v", err)
+	}
+	defer stream.Close()
+
+	reader := stream.NewBatchReader()
+	defer reader.Close()
+
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("io.ReadAll on BatchReader failed: %v", err)
+	}
+	if len(data) == 0 {
+		t.Fatal("expected non-empty data from BatchReader")
+	}
+
+	// Verify the streamed bytes can be read back as valid Arrow IPC record batches
+	ipcReader, err := ipc.NewReader(bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("failed to initialize IPC reader: %v", err)
+	}
+	defer ipcReader.Release()
+
+	readBatches := 0
+	for ipcReader.Next() {
+		rec := ipcReader.Record()
+		if rec.NumRows() != 1 {
+			t.Errorf("expected 1 row, got %d", rec.NumRows())
+		}
+		readBatches++
+	}
+	if readBatches != 3 {
+		t.Errorf("expected 3 batches read back, got %d", readBatches)
+	}
+}
+
+func TestFlightClient_Interceptors_AuthAndTrace(t *testing.T) {
+	schema, records := createTestSchemaAndRecords(t)
+	defer func() {
+		for _, r := range records {
+			r.Release()
+		}
+	}()
+
+	mockSrv := &MockFlightServer{
+		schema:  schema,
+		records: records,
+	}
+	addr, cleanup := startMockFlightServer(t, mockSrv)
+	defer cleanup()
+
+	// Setup OpenTelemetry propagator
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+
+	token := "secret-jwt-flight-token"
+	fc, err := NewFlightClient(addr, WithFlightAuthToken(token))
+	if err != nil {
+		t.Fatalf("failed to create flight client: %v", err)
+	}
+	defer fc.Close()
+
+	// Create trace context
+	traceID, _ := trace.TraceIDFromHex("4bf92f3577b34da6a3ce929d0e0e4736")
+	spanID, _ := trace.SpanIDFromHex("00f067aa0ba902b7")
+	spanCtx := trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID:    traceID,
+		SpanID:     spanID,
+		TraceFlags: trace.FlagsSampled,
+	})
+	ctx := trace.ContextWithSpanContext(context.Background(), spanCtx)
+
+	stream, err := fc.ExportAssetArrow(ctx, 1)
+	if err != nil {
+		t.Fatalf("ExportAssetArrow failed: %v", err)
+	}
+	_ = stream.Close()
+
+	gotAuth, _ := mockSrv.receivedAuth.Load().(string)
+	if gotAuth != "Bearer "+token {
+		t.Errorf("expected auth header Bearer %s, got %q", token, gotAuth)
+	}
+
+	gotTrace, _ := mockSrv.receivedTrace.Load().(string)
+	if !strings.Contains(gotTrace, "4bf92f3577b34da6a3ce929d0e0e4736") {
+		t.Errorf("expected traceparent with trace ID, got %q", gotTrace)
+	}
+}
+
+func TestFlightClient_RetryOnUnavailable(t *testing.T) {
+	schema, records := createTestSchemaAndRecords(t)
+	defer func() {
+		for _, r := range records {
+			r.Release()
+		}
+	}()
+
+	mockSrv := &MockFlightServer{
+		schema:  schema,
+		records: records,
+	}
+	// Fail the first 2 calls with codes.Unavailable
+	mockSrv.unavailableCount.Store(2)
+
+	addr, cleanup := startMockFlightServer(t, mockSrv)
+	defer cleanup()
+
+	fc, err := NewFlightClient(
+		addr,
+		WithFlightRetry(3, 10*time.Millisecond, 50*time.Millisecond),
+	)
+	if err != nil {
+		t.Fatalf("failed to create flight client: %v", err)
+	}
+	defer fc.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	stream, err := fc.ExportAssetArrow(ctx, 1)
+	if err != nil {
+		t.Fatalf("ExportAssetArrow should have succeeded after retry, got: %v", err)
+	}
+	defer stream.Close()
+
+	if !stream.Next() {
+		t.Fatal("expected batch after retrying unavailable")
+	}
 }

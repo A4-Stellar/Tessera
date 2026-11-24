@@ -1,0 +1,52 @@
+name: Weekly Chaos Engineering Resilience Suite
+
+on:
+  schedule:
+    # Run weekly every Monday at 02:00 UTC
+    - cron: "0 2 * * 1"
+  workflow_dispatch:
+    inputs:
+      target_url:
+        description: "Target API base URL for chaos fault injection"
+        required: false
+        default: "http://localhost:8080"
+
+permissions:
+  contents: read
+
+jobs:
+  chaos-engineering-suite:
+    name: Controlled Fault Injection (Network, Storage, Contract)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install pyyaml
+
+      - name: Execute Chaos Engineering Fault Injection Runner
+        run: |
+          python tests/chaos/chaos_runner.py \
+            --target-url "${{ github.event.inputs.target_url || 'http://localhost:8080' }}" \
+            --manifest tests/chaos/chaos_experiments.yaml \
+            --output-json tests/chaos/resilience_report.json \
+            --output-md tests/chaos/resilience_report.md \
+            --min-score 85.0
+
+      - name: Upload Chaos Resilience Report Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chaos-resilience-report
+          path: |
+            tests/chaos/resilience_report.json
+            tests/chaos/resilience_report.md

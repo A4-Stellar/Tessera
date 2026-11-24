@@ -1,0 +1,6 @@
+{
+  "contract": "emergency-liquidation",
+  "moduleDoc": "Separate deployment artifact for the emergency vault. The implementation\r\nremains beside the escrow logic; its constructor must not become the\r\nconstructor of the existing buyer/seller escrow WASM.",
+  "generated_at": "2026-11-23T12:28:42.999Z",
+  "methods": []
+}

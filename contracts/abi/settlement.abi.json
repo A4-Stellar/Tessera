@@ -1,0 +1,287 @@
+{
+  "contract": "settlement",
+  "moduleDoc": "Atomic multilateral batch settlement engine (issue #316).\r\n\nBilateral pairs in tokenized secondary markets are often illiquid. A\r\nmultilateral cross-trade lets N participants settle a ring of trades —\r\nA pays B in a real-estate token, B pays C in a bond token, C pays A in\r\nUSDC — as one indivisible unit, so nobody delivers their leg without\r\nreceiving theirs.\r\n\nThe settlement contract never takes custody. Each leg is a direct\r\n`token.transfer(from, to, amount)` invoked by this contract on the\r\nsender's behalf, so every sender must authorize the batch (their auth\r\nentry covers this contract's root invocation and the token transfer\r\nsub-invocations it makes). All validation — graph shape, conservation,\r\nbalances, compliance — runs before the first transfer, and the transfers\r\nthemselves run inside the same Soroban invocation: any panic anywhere\r\n(failed auth, an underfunded sender, a token refusing a transfer) aborts\r\nthe transaction and rolls back every leg already applied.\r\n\nTokens must be registered by the admin before they can appear in a batch,\r\neither as *regulated* (bound to the compliance contract whose\r\n`is_allowed(address) -> bool` gates every leg in that token) or explicitly\r\nas *unregulated* (e.g. a USDC Stellar Asset Contract used as the cash leg).\r\nAn unregistered token fails closed.\r\n\nAlongside the batch engine the contract also exposes T+0 DVP instructions\r\n(issue #390): counterparties sign a `SettlementInstruction`, either may call\r\n`settle` on its settlement ledger for atomic delivery-versus-payment,\r\n`net_settle` clears many instructions through the minimum number of net\r\ntransfers, and the settlement guarantee fund compensates a counterparty when\r\na pre-flight check shows the other side cannot perform.",
+  "generated_at": "2026-11-23T12:28:43.017Z",
+  "methods": [
+    {
+      "name": "initialize",
+      "doc": "Invokes `initialize` on settlement.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "register_asset",
+      "doc": "Register `token` as tradeable in batches. `compliance` is the compliance contract that gates the token; `None` registers it as an unregulated settlement asset (a cash leg such as USDC).",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "token",
+          "type": "Address"
+        },
+        {
+          "name": "compliance",
+          "type": "Option<Address>"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "deregister_asset",
+      "doc": "Invokes `deregister_asset` on settlement.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "token",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "get_asset_policy",
+      "doc": "Invokes `get_asset_policy` on settlement.",
+      "inputs": [
+        {
+          "name": "token",
+          "type": "Address"
+        }
+      ],
+      "output": "Option<AssetPolicy>"
+    },
+    {
+      "name": "execute_multilateral_settlement",
+      "doc": "Validate and atomically execute a multilateral cross-trade.  Returns the batch id. See [`batch_settler`] for the full rule set; every rule is checked before the first transfer, and any failure — including one raised by a token during execution — reverts every leg.",
+      "inputs": [
+        {
+          "name": "trade_legs",
+          "type": "Vec<TradeLeg>"
+        }
+      ],
+      "output": "u64"
+    },
+    {
+      "name": "validate_settlement",
+      "doc": "Run every pre-execution check on `trade_legs` without moving funds or requiring auth. Panics with the same error the real settlement would.",
+      "inputs": [
+        {
+          "name": "trade_legs",
+          "type": "Vec<TradeLeg>"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "batch_count",
+      "doc": "Invokes `batch_count` on settlement.",
+      "inputs": [],
+      "output": "u64"
+    },
+    {
+      "name": "pause",
+      "doc": "Invokes `pause` on settlement.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "unpause",
+      "doc": "Invokes `unpause` on settlement.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "upgrade",
+      "doc": "Invokes `upgrade` on settlement.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "new_wasm_hash",
+          "type": "BytesN<32>"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "create_instruction",
+      "doc": "Create a bilateral DVP instruction. Both counterparties must authorize the exact terms; either may settle it once `settlement_ledger` is reached.",
+      "inputs": [
+        {
+          "name": "buyer",
+          "type": "Address"
+        },
+        {
+          "name": "seller",
+          "type": "Address"
+        },
+        {
+          "name": "asset",
+          "type": "Address"
+        },
+        {
+          "name": "amount",
+          "type": "i128"
+        },
+        {
+          "name": "payment_asset",
+          "type": "Address"
+        },
+        {
+          "name": "payment_amount",
+          "type": "i128"
+        },
+        {
+          "name": "settlement_ledger",
+          "type": "u32"
+        }
+      ],
+      "output": "u32"
+    },
+    {
+      "name": "get_instruction",
+      "doc": "Invokes `get_instruction` on settlement.",
+      "inputs": [
+        {
+          "name": "instruction_id",
+          "type": "u32"
+        }
+      ],
+      "output": "SettlementInstruction"
+    },
+    {
+      "name": "settle",
+      "doc": "Atomically deliver `asset` to the buyer and `payment_asset` to the seller. Either party may call this; both must authorize the transfers.",
+      "inputs": [
+        {
+          "name": "instruction_id",
+          "type": "u32"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "net_settle",
+      "doc": "Clear a set of pending instructions against each other. Returns the number of transfers executed — the minimum for the net positions.",
+      "inputs": [
+        {
+          "name": "instruction_ids",
+          "type": "Vec<u32>"
+        }
+      ],
+      "output": "u32"
+    },
+    {
+      "name": "last_net_transfer_count",
+      "doc": "Invokes `last_net_transfer_count` on settlement.",
+      "inputs": [],
+      "output": "u32"
+    },
+    {
+      "name": "instruction_count",
+      "doc": "Invokes `instruction_count` on settlement.",
+      "inputs": [],
+      "output": "u32"
+    },
+    {
+      "name": "configure_guarantee",
+      "doc": "Set the per-token maximum guarantee payout (`0` disables coverage).",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "token",
+          "type": "Address"
+        },
+        {
+          "name": "max_amount",
+          "type": "i128"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "deposit_guarantee",
+      "doc": "Deposit coverage collateral. Anyone may deposit; only the admin may withdraw, and only pending failures may pay out.",
+      "inputs": [
+        {
+          "name": "depositor",
+          "type": "Address"
+        },
+        {
+          "name": "token",
+          "type": "Address"
+        },
+        {
+          "name": "amount",
+          "type": "i128"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "withdraw_guarantee",
+      "doc": "Invokes `withdraw_guarantee` on settlement.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "token",
+          "type": "Address"
+        },
+        {
+          "name": "amount",
+          "type": "i128"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "guarantee_balance",
+      "doc": "Invokes `guarantee_balance` on settlement.",
+      "inputs": [
+        {
+          "name": "token",
+          "type": "Address"
+        }
+      ],
+      "output": "i128"
+    },
+    {
+      "name": "guarantee_cap",
+      "doc": "Invokes `guarantee_cap` on settlement.",
+      "inputs": [
+        {
+          "name": "token",
+          "type": "Address"
+        }
+      ],
+      "output": "i128"
+    }
+  ]
+}

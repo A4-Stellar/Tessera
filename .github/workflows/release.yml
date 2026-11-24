@@ -8,6 +8,7 @@ on:
 permissions:
   contents: write
   packages: write
+  id-token: write
 
 jobs:
   # Job 1: Generate Release Notes via git-cliff
@@ -168,6 +169,39 @@ jobs:
           cat *.sha256 > SHA256SUMS.txt
           rm -f *.sha256
 
+      # -----------------------------------------------------------------------
+      # Supply Chain Security: Cosign OIDC Signing, SLSA Provenance, SPDX SBOM
+      # Issue #47 / #428
+      # -----------------------------------------------------------------------
+      - name: Install Cosign (Sigstore)
+        uses: sigstore/cosign-installer@v3.8.0
+
+      - name: Sign Release Artifacts with Cosign (Keyless OIDC)
+        run: |
+          cd dist
+          for file in *.tar.gz *.zip SHA256SUMS.txt; do
+            if [ -f "$file" ]; then
+              echo "Signing $file with Sigstore OIDC..."
+              cosign sign-blob --yes \
+                --output-signature "$file.sig" \
+                --output-certificate "$file.pem" \
+                "$file"
+            fi
+          done
+
+      - name: Generate SPDX Software Bill of Materials (SBOM)
+        uses: anchore/sbom-action@v0.17.9
+        with:
+          path: ./api
+          format: spdx-json
+          output-file: dist/tessera-api.spdx.json
+
+      - name: Generate SLSA v1.0 Provenance Attestation Subject
+        id: hash
+        run: |
+          cd dist
+          echo "hashes=$(sha256sum * | base64 -w 0)" >> "$GITHUB_OUTPUT"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -175,6 +209,9 @@ jobs:
           files: |
             dist/*
             dist/SHA256SUMS.txt
+            dist/*.sig
+            dist/*.pem
+            dist/*.spdx.json
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: false

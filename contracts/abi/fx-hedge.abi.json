@@ -1,0 +1,120 @@
+{
+  "contract": "fx-hedge",
+  "moduleDoc": "Multi-Currency Dynamic FX Hedging Pool (Issue #221).\r\n\nProtects international real estate investors receiving dividends in volatile currencies\r\nby auto-executing FX forward hedges using DEX liquidity pools:\r\n- Ingests FX rate oracle feeds (e.g., EUR/USD, GBP/USD, JPY/USD).\r\n- Calculates required FX forward hedge ratios based on projected annual dividend yields.\r\n- Executes automated rebalancing swaps when currency fluctuations exceed variance limits.",
+  "generated_at": "2026-11-23T12:28:43.002Z",
+  "methods": [
+    {
+      "name": "initialize",
+      "doc": "Initialize the FX hedging pool with an admin and an authorized oracle address.",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "oracle",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "set_oracle",
+      "doc": "Set or update the authorized oracle feed provider.",
+      "inputs": [
+        {
+          "name": "caller",
+          "type": "Address"
+        },
+        {
+          "name": "new_oracle",
+          "type": "Address"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "ingest_oracle_rate",
+      "doc": "Ingest FX rate oracle feeds (e.g., EUR/USD, GBP/USD, JPY/USD). Rates scaled by 10,000 (e.g. 10850 = 1.0850).",
+      "inputs": [
+        {
+          "name": "caller",
+          "type": "Address"
+        },
+        {
+          "name": "currency_pair",
+          "type": "Symbol"
+        },
+        {
+          "name": "rate",
+          "type": "i128"
+        }
+      ],
+      "output": "()"
+    },
+    {
+      "name": "setup_hedge",
+      "doc": "Register or configure a currency forward hedge for an international real estate asset. Calculates the initial required forward hedge ratio based on projected annual dividend yield.",
+      "inputs": [
+        {
+          "name": "caller",
+          "type": "Address"
+        },
+        {
+          "name": "currency_pair",
+          "type": "Symbol"
+        },
+        {
+          "name": "projected_annual_yield",
+          "type": "i128"
+        },
+        {
+          "name": "variance_limit_bps",
+          "type": "i128"
+        },
+        {
+          "name": "initial_rate",
+          "type": "i128"
+        }
+      ],
+      "output": "HedgePosition"
+    },
+    {
+      "name": "calculate_hedge_ratio",
+      "doc": "Calculate required FX forward hedge ratio (in basis points) based on projected annual dividend yields. Model: Higher dividend yields require scaled coverage to insulate cashflow against downside FX swings. - Yield <= 5% (500 bps) -> 80% coverage (8000 bps) - Yield between 5% and 10% -> 90% coverage (9000 bps) - Yield > 10% -> 100% coverage (10000 bps)",
+      "inputs": [
+        {
+          "name": "projected_annual_yield",
+          "type": "i128"
+        }
+      ],
+      "output": "i128"
+    },
+    {
+      "name": "execute_rebalance",
+      "doc": "Execute automated rebalancing swaps when currency fluctuations exceed variance limits. Returns the rebalanced swap amount and new hedged position.",
+      "inputs": [
+        {
+          "name": "caller",
+          "type": "Address"
+        },
+        {
+          "name": "currency_pair",
+          "type": "Symbol"
+        }
+      ],
+      "output": "(i128, HedgePosition)"
+    },
+    {
+      "name": "get_hedge_position",
+      "doc": "Read hedge position for a given pair.",
+      "inputs": [
+        {
+          "name": "currency_pair",
+          "type": "Symbol"
+        }
+      ],
+      "output": "Option<HedgePosition>"
+    }
+  ]
+}
