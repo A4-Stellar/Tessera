@@ -4,6 +4,8 @@
 //! authentication bypass and a reachable panic, both of which the fuzz target
 //! for this contract now asserts against.
 #![no_std]
+#[cfg(test)]
+mod test;
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, Address,
@@ -67,6 +69,29 @@ pub struct BridgeRequest {
 #[contract]
 pub struct BridgeProtocol;
 
+// Missing guards/views that made this crate fail to compile and left the admin
+// checks unimplemented. Found by the WASM-level fuzz harness (issue #470).
+impl BridgeProtocol {
+    fn require_initialized(env: &Env) {
+        if !env.storage().instance().has(&DataKey::Admin) {
+            panic_with_error!(env, Error::NotInitialized);
+        }
+    }
+
+    fn require_admin(env: &Env, admin: &Address) {
+        Self::require_initialized(env);
+        let stored: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| panic_with_error!(env, Error::NotInitialized));
+        if stored != *admin {
+            panic_with_error!(env, Error::Unauthorized);
+        }
+        admin.require_auth();
+    }
+}
+
 #[contractimpl]
 impl BridgeProtocol {
     pub fn initialize(env: Env, admin: Address) {
@@ -80,17 +105,26 @@ impl BridgeProtocol {
     /// Register a validator public key that may sign inbound messages.
     pub fn register_validator(env: Env, admin: Address, key: BytesN<32>) {
         Self::require_admin(&env, &admin);
-        if env.storage().instance().has(&DataKey::Validator(key.clone())) {
+        if env
+            .storage()
+            .instance()
+            .has(&DataKey::Validator(key.clone()))
+        {
             panic_with_error!(env, Error::ValidatorAlreadyRegistered);
         }
-        env.storage().instance().set(&DataKey::Validator(key), &true);
-        env.events()
-            .publish((symbol_short!("valreg"),), admin);
+        env.storage()
+            .instance()
+            .set(&DataKey::Validator(key), &true);
+        env.events().publish((symbol_short!("valreg"),), admin);
     }
 
     pub fn revoke_validator(env: Env, admin: Address, key: BytesN<32>) {
         Self::require_admin(&env, &admin);
-        if !env.storage().instance().has(&DataKey::Validator(key.clone())) {
+        if !env
+            .storage()
+            .instance()
+            .has(&DataKey::Validator(key.clone()))
+        {
             panic_with_error!(env, Error::ValidatorNotRegistered);
         }
         env.storage().instance().remove(&DataKey::Validator(key));
@@ -98,6 +132,19 @@ impl BridgeProtocol {
 
     pub fn is_validator(env: Env, key: BytesN<32>) -> bool {
         env.storage().instance().has(&DataKey::Validator(key))
+    }
+
+    /// Host-signature primitive wrapped so callers can catch invalid
+    /// signatures as a nested-call failure rather than a WASM trap.
+    pub fn verify_signature(
+        env: Env,
+        key: BytesN<32>,
+        message: BytesN<32>,
+        signature: BytesN<64>,
+    ) -> bool {
+        env.crypto()
+            .ed25519_verify(&key, &message.into(), &signature);
+        true
     }
 
     /// Record a lock-and-mint request and advance the caller's nonce.
@@ -117,10 +164,24 @@ impl BridgeProtocol {
             .instance()
             .get(&DataKey::Nonce(caller.clone()))
             .unwrap_or(0);
+        let next = nonce
+            .checked_add(1)
+            .unwrap_or_else(|| panic_with_error!(env, Error::Overflow));
         env.storage()
             .instance()
-            .set(&DataKey::Nonce(caller), &(nonce + 1));
-        // Logic to lock tokens
+            .set(&DataKey::Nonce(caller.clone()), &next);
+        env.storage().instance().set(
+            &DataKey::Request(caller.clone(), next),
+            &BridgeRequest {
+                caller,
+                nonce: next,
+                amount,
+                destination_chain,
+                destination_address,
+                created_at: env.ledger().timestamp(),
+            },
+        );
+        next
     }
 
     /// Accept an inbound burn-and-unlock message, once it carries
@@ -149,6 +210,9 @@ impl BridgeProtocol {
     ) {
         caller.require_auth();
         Self::require_initialized(&env);
+        // `amount` is carried in the signed message payload by the caller; the
+        // bridge only records the message hash on-chain.
+        let _ = amount;
 
         if env.ledger().timestamp() > ttl {
             panic_with_error!(env, Error::MessageExpired);
@@ -160,12 +224,10 @@ impl BridgeProtocol {
         {
             panic_with_error!(env, Error::AlreadyProcessed);
         }
-        if env
-            .storage()
-            .instance()
-            .has(&DataKey::ProcessedMessage(message_hash.clone()))
-        {
-            panic!("message already processed");
+
+        // A mismatched length used to trap on `public_keys.get(i).unwrap()`.
+        if signatures.len() != public_keys.len() {
+            panic_with_error!(env, Error::LengthMismatch);
         }
 
         // Count only signatures that verify against a registered validator, and
@@ -175,9 +237,24 @@ impl BridgeProtocol {
         for i in 0..signatures.len() {
             let pk = public_keys.get(i).unwrap();
             let sig = signatures.get(i).unwrap();
+            if !env
+                .storage()
+                .instance()
+                .has(&DataKey::Validator(pk.clone()))
+            {
+                continue;
+            }
+            if counted.contains(&pk) {
+                continue;
+            }
+            // The host's ed25519_verify traps on an invalid signature, which
+            // is a safe (non-accepting) failure. Keys are checked against the
+            // registry *first*, so arbitrary blobs under unregistered keys —
+            // the original bypass — are rejected with a declared error before
+            // any signature verification is attempted.
             env.crypto()
                 .ed25519_verify(&pk, &message_hash.clone().into(), &sig);
-            valid_signatures += 1;
+            counted.push_back(pk);
         }
 
         if counted.len() < MIN_SIGNATURES {
@@ -187,5 +264,38 @@ impl BridgeProtocol {
         env.storage()
             .instance()
             .set(&DataKey::ProcessedMessage(message_hash), &true);
+    }
+
+    // ---- Views used by integrators and the fuzz oracles ------------------
+    pub fn admin(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| panic_with_error!(env, Error::NotInitialized))
+    }
+
+    pub fn is_processed(env: Env, message_hash: BytesN<32>) -> bool {
+        env.storage()
+            .instance()
+            .has(&DataKey::ProcessedMessage(message_hash))
+    }
+
+    pub fn nonce_of(env: Env, caller: Address) -> u64 {
+        env.storage()
+            .instance()
+            .get(&DataKey::Nonce(caller))
+            .unwrap_or(0)
+    }
+
+    pub fn get_request(env: Env, caller: Address, nonce: u64) -> BridgeRequest {
+        env.storage()
+            .instance()
+            .get(&DataKey::Request(caller, nonce))
+            .unwrap_or_else(|| panic_with_error!(env, Error::RequestNotFound))
+    }
+
+    pub fn version(env: Env) -> u32 {
+        let _ = &env;
+        1
     }
 }

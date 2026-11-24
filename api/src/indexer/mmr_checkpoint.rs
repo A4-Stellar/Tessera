@@ -377,6 +377,30 @@ pub struct Checkpoint {
     pub leaf_index: u64,
 }
 
+/// EigenDA anchor bound to one MMR root (issue #469).
+///
+/// The commitment hash covers the MMR root, the EigenDA batch header hash and
+/// the blob index, so a light client that trusts a DA sample can verify that
+/// the checkpoint it was served is the one that was made available.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct DaAnchor {
+    pub mmr_root: String,
+    pub batch_header_hash: String,
+    pub blob_index: u64,
+    pub commitment: String,
+}
+
+/// Compute the DA anchor for an MMR root without mutating checkpoint state.
+pub fn da_anchor(mmr_root: Hash, batch_header_hash: &str, blob_index: u64) -> DaAnchor {
+    let commitment = super::eigenda::da_commitment_hash(&mmr_root, batch_header_hash, blob_index);
+    DaAnchor {
+        mmr_root: hex::encode(mmr_root),
+        batch_header_hash: batch_header_hash.to_owned(),
+        blob_index,
+        commitment: hex::encode(commitment),
+    }
+}
+
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum CheckpointError {
     #[error("ledger {0} is not after the last checkpointed ledger {1}")]
@@ -390,6 +414,8 @@ pub struct MmrCheckpoints {
     by_ledger: BTreeMap<u32, Checkpoint>,
     states: VecDeque<(u32, StateTree)>,
     retention: usize,
+    /// DA anchors keyed by MMR leaf index, populated after confirmation.
+    da_anchors: BTreeMap<u64, DaAnchor>,
 }
 
 impl Default for MmrCheckpoints {
@@ -410,6 +436,7 @@ impl MmrCheckpoints {
             by_ledger: BTreeMap::new(),
             states: VecDeque::new(),
             retention,
+            da_anchors: BTreeMap::new(),
         }
     }
 
@@ -456,6 +483,22 @@ impl MmrCheckpoints {
 
     pub fn root(&self) -> Hash {
         self.mmr.root()
+    }
+
+    /// Bind this checkpoint's current MMR root to a confirmed EigenDA blob.
+    pub fn attach_da(
+        &mut self,
+        leaf_index: u64,
+        batch_header_hash: &str,
+        blob_index: u64,
+    ) -> DaAnchor {
+        let anchor = da_anchor(self.mmr.root(), batch_header_hash, blob_index);
+        self.da_anchors.insert(leaf_index, anchor.clone());
+        anchor
+    }
+
+    pub fn da_anchor_for(&self, leaf_index: u64) -> Option<&DaAnchor> {
+        self.da_anchors.get(&leaf_index)
     }
 
     pub fn latest(&self) -> Option<&Checkpoint> {
@@ -531,6 +574,29 @@ mod tests {
 
     fn leaf(i: u32) -> Hash {
         mmr_leaf_hash(i, &[i as u8; 32], &[0xAB; 32])
+    }
+
+    #[test]
+    fn da_anchor_binds_root_header_and_index() {
+        let mut checkpoints = MmrCheckpoints::new(4);
+        let cp = checkpoints
+            .record(
+                10,
+                [1u8; 32],
+                StateTree::from_holders(std::iter::empty::<(u64, &[crate::models::Holder])>()),
+            )
+            .unwrap()
+            .unwrap();
+        let root = checkpoints.root();
+        let anchor = checkpoints.attach_da(cp.leaf_index, "0xdeadbeef", 2);
+        assert_eq!(anchor.mmr_root, hex::encode(root));
+        assert_eq!(anchor.blob_index, 2);
+        assert_eq!(checkpoints.da_anchor_for(cp.leaf_index), Some(&anchor));
+        assert!(checkpoints.da_anchor_for(cp.leaf_index + 1).is_none());
+        assert_ne!(
+            anchor.commitment,
+            da_anchor(root, "0xdeadbeef", 3).commitment
+        );
     }
 
     #[test]

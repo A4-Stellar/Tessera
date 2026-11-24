@@ -15,5 +15,8 @@ path = "src/lib.rs"
 name = "tessera-cli"
 path = "src/main.rs"
 
+# `tessera sandbox start` one-command UX (also available as `tessera-cli`).
+# `src/bin/tessera.rs` is auto-discovered by Cargo.
+
 [dependencies]
 clap = { version = "4", features = ["derive"] }

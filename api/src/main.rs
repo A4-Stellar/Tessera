@@ -29,12 +29,12 @@ mod indexer;
 mod middleware;
 mod models;
 mod routes;
+pub mod rsocket;
 mod security;
 mod services;
 pub mod storage;
 pub mod tracing;
 mod ws;
-pub mod rsocket;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -154,14 +154,47 @@ async fn main() {
         Ok(Some(router)) => {
             let router = Arc::new(router);
             router.spawn_health_monitor(shutdown_rx.clone());
-            if let Err(error) = sqlx::raw_sql(include_str!(
-                "db/migrations/0004_tenant_rate_limits.sql"
-            ))
-                .execute(router.primary())
-                .await
+            if let Err(error) =
+                sqlx::raw_sql(include_str!("db/migrations/0004_tenant_rate_limits.sql"))
+                    .execute(router.primary())
+                    .await
             {
                 tracing::error!(%error, "tenant rate-limit schema initialization failed");
                 std::process::exit(1);
+            }
+            // Issue #468: sandbox tables + FORCE ROW LEVEL SECURITY.
+            if let Err(error) =
+                sqlx::raw_sql(include_str!("db/migrations/0005_sandbox_tenant_rls.sql"))
+                    .execute(router.primary())
+                    .await
+            {
+                tracing::error!(%error, "sandbox RLS schema initialization failed");
+                std::process::exit(1);
+            }
+            // Issue #469: EigenDA DA-proof records.
+            if let Err(error) =
+                sqlx::raw_sql(include_str!("db/migrations/0006_eigenda_da_proofs.sql"))
+                    .execute(router.primary())
+                    .await
+            {
+                tracing::error!(%error, "EigenDA schema initialization failed");
+                std::process::exit(1);
+            }
+            // Issue #469: wire EigenDA when a disperser URL is configured.
+            if std::env::var("EIGENDA_DISPERSER_URL").is_ok() {
+                match indexer::eigenda::HttpDisperser::from_env() {
+                    Ok(disperser) => {
+                        state.da_disperser = Some(Arc::new(disperser));
+                        state.da_store = Some(Arc::new(indexer::eigenda::PgProofStore::new(
+                            router.primary().clone(),
+                        )));
+                        tracing::info!("EigenDA commitments enabled");
+                    }
+                    Err(error) => {
+                        tracing::error!(%error, "EigenDA configuration invalid");
+                        std::process::exit(1);
+                    }
+                }
             }
             // Issue #163: quarantine table behind `POST /v1/admin/dlq/retry`.
             state.dlq = indexer::dlq::DeadLetterQueue::open(router.primary().clone()).await;
@@ -208,6 +241,28 @@ async fn main() {
         Err(e) => {
             tracing::error!(error = %e, "database config validation failed; exiting");
             std::process::exit(1);
+        }
+    }
+
+    // Issue #468: in sandbox mode expose a separate pool for RLS-scoped
+    // reset/status endpoints. The role must not be BYPASSRLS/SUPERUSER, or the
+    // tenant policies in 0005 would be silently bypassed.
+    if std::env::var("RWA_SANDBOX_MODE")
+        .ok()
+        .is_some_and(|value| value == "true" || value == "1")
+    {
+        let url = std::env::var("RWA_SANDBOX_DATABASE_URL")
+            .or_else(|_| std::env::var("RWA_DATABASE_URL"))
+            .unwrap_or_default();
+        match sqlx::postgres::PgPoolOptions::new().connect_lazy(&url) {
+            Ok(pool) => {
+                tracing::info!("sandbox mode enabled; RLS-scoped reset endpoints active");
+                state.sandbox_db = Some(Arc::new(pool));
+            }
+            Err(error) => {
+                tracing::error!(%error, "invalid sandbox database URL");
+                std::process::exit(1);
+            }
         }
     }
 
@@ -288,5 +343,5 @@ fn init_tracing() {
         .with(fmt::layer().with_writer(middleware::pii_scrubber::ScrubbingMakeWriter))
         .init();
 }
-pub mod graphql;
 pub mod events;
+pub mod graphql;

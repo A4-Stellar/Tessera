@@ -124,6 +124,14 @@ test = false
 doc = false
 bench = false
 
+# WASM-level harness: mock host/storage oracle + contract-WASM execution.
+[[bin]]
+name = "wasm_host"
+path = "fuzz_targets/wasm_host.rs"
+test = false
+doc = false
+bench = false
+
 # The single most important knob for an arithmetic-overflow fuzzer: overflow
 # must *panic*, which is what makes it observable as a WASM trap. cargo-fuzz
 # also passes `-C debug-assertions` via RUSTFLAGS, but pinning it here means

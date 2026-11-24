@@ -1,0 +1,158 @@
+# Regulatory sandbox stack — an isolated extension of the E2E stack in
+# docker-compose.yml (same images, same healthchecks, separate project/ports,
+# plus datagen, seeder and contract deployment).
+#
+# Usage (one command via the CLI: `tessera sandbox start`):
+#   docker compose -f tests/e2e/docker-compose.sandbox.yml up -d --wait
+#
+# Every sandbox request carries X-Sandbox-Tenant-ID. Postgres RLS (migration
+# 0005) makes cross-tenant reads and writes structurally impossible.
+name: tessera-sandbox
+
+networks:
+  tessera-sandbox:
+    driver: bridge
+
+volumes:
+  pg_sandbox_data:
+  stellar_sandbox_data:
+  sandbox_data:
+
+services:
+  # Stellar quickstart: Horizon on :8001, Soroban RPC at /soroban/rpc.
+  stellar-node:
+    image: stellar/quickstart:testing
+    platform: linux/amd64
+    environment:
+      NETWORK: local
+      ENABLE_SOROBAN_RPC: "true"
+      PROTOCOL_VERSION: "21"
+    ports:
+      - "8001:8000"
+    networks:
+      - tessera-sandbox
+    volumes:
+      - stellar_sandbox_data:/opt/stellar
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          curl -sf http://localhost:8000/friendbot 2>/dev/null | grep -q '"fee_charged"'
+          || curl -sf http://localhost:8000 | grep -q '"horizon_version"'
+      interval: 10s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: tessera
+      POSTGRES_PASSWORD: tessera_sandbox_pass
+      POSTGRES_DB: tessera_sandbox
+    ports:
+      - "5434:5432"
+    networks:
+      - tessera-sandbox
+    volumes:
+      - pg_sandbox_data:/var/lib/postgresql/data
+      # Idempotent migrations 0001-0006 run on first boot of the empty volume.
+      - ../../api/src/db/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tessera -d tessera_sandbox"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # Builds deterministic synthetic data with realistic distributions.
+  datagen:
+    build:
+      context: ../../services/sandbox-datagen
+      dockerfile: Dockerfile
+    command:
+      - --assets=${SANDBOX_ASSETS:-10000}
+      - --holders=${SANDBOX_HOLDERS:-100000}
+      - --tenant=${SANDBOX_TENANT:-sandbox-default}
+      - --seed=${SANDBOX_SEED:-6107500000000000000}
+      - --out=/data
+    networks:
+      - tessera-sandbox
+    volumes:
+      - sandbox_data:/data
+
+  # Loads the CSVs into the template tables once datagen has finished.
+  seeder:
+    image: postgres:16-alpine
+    depends_on:
+      postgres:
+        condition: service_healthy
+      datagen:
+        condition: service_completed_successfully
+    environment:
+      PGPASSWORD: tessera_sandbox_pass
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        psql -h postgres -U tessera -d tessera_sandbox -v ON_ERROR_STOP=1 \
+          -f /data/seed.sql
+    networks:
+      - tessera-sandbox
+    volumes:
+      - sandbox_data:/data:ro
+
+  # Deploys every contract to the local quickstart network and writes the
+  # resulting ids to /data/contracts.env for tessera-api.
+  contract-deployer:
+    image: stellar/soroban-tools:latest
+    depends_on:
+      stellar-node:
+        condition: service_healthy
+    environment:
+      SOROBAN_RPC_URL: http://stellar-node:8000/soroban/rpc
+      NETWORK_PASSPHRASE: "Standalone Network ; February 2017"
+    entrypoint: ["/bin/sh", "/scripts/deploy-contracts.sh"]
+    networks:
+      - tessera-sandbox
+    volumes:
+      - sandbox_data:/data
+      - ../../contracts:/contracts:ro
+      - ./scripts/deploy-contracts.sh:/scripts/deploy-contracts.sh:ro
+
+  tessera-api:
+    build:
+      context: ../../api
+      dockerfile: Dockerfile
+    environment:
+      PORT: "8080"
+      DATABASE_URL: postgres://tessera:tessera_sandbox_pass@postgres:5432/tessera_sandbox
+      RWA_DATABASE_URL: postgres://tessera:tessera_sandbox_pass@postgres:5432/tessera_sandbox
+      RWA_SANDBOX_DATABASE_URL: postgres://tessera:tessera_sandbox_pass@postgres:5432/tessera_sandbox
+      RWA_SANDBOX_MODE: "true"
+      # Relaxed sandbox bucket (issue #468): 1000 req/s, 1000 burst.
+      RWA_RATE_LIMIT_PER_SECOND: "1000"
+      RWA_RATE_LIMIT_BURST: "1000"
+      SOROBAN_RPC_URL: http://stellar-node:8000/soroban/rpc
+      NETWORK_PASSPHRASE: "Standalone Network ; February 2017"
+      RUST_LOG: tessera_api=info,tower_http=warn
+    ports:
+      - "8081:8080"
+    networks:
+      - tessera-sandbox
+    depends_on:
+      postgres:
+        condition: service_healthy
+      seeder:
+        condition: service_completed_successfully
+      contract-deployer:
+        condition: service_completed_successfully
+      stellar-node:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health | grep -q 'ok\\|healthy'"]
+      interval: 10s
+      timeout: 10s
+      retries: 15
+      start_period: 30s
+    restart: on-failure

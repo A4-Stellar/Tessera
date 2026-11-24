@@ -397,3 +397,62 @@ fn prompt_choice<T>(
 fn prompt_io(error: io::Error) -> CliError {
     CliError::PromptIo { source: error }
 }
+
+// ---------------------------------------------------------------------------
+// `tessera sandbox ...` (issue #468, extends the `init` command from #67)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, clap::Args)]
+pub struct SandboxArgs {
+    #[command(subcommand)]
+    pub command: SandboxCommand,
+}
+
+#[derive(Debug, Clone, clap::Subcommand)]
+pub enum SandboxCommand {
+    /// Start the isolated sandbox stack and seed the tenant database.
+    Start(SandboxStartArgs),
+    /// Tear down the sandbox stack (optionally removing its volumes).
+    Stop(SandboxStopArgs),
+}
+
+#[derive(Debug, Clone, clap::Args)]
+pub struct SandboxStartArgs {
+    /// Where to write the embedded compose file. Defaults to the OS temp dir.
+    #[arg(long, value_name = "PATH")]
+    pub compose_file: Option<std::path::PathBuf>,
+    /// Tenant id used for the initial seed (X-Sandbox-Tenant-ID).
+    #[arg(long, default_value = "sandbox-default")]
+    pub tenant: String,
+    /// Number of synthetic assets to generate.
+    #[arg(long, default_value_t = 10_000)]
+    pub assets: usize,
+    /// Number of synthetic holders to generate.
+    #[arg(long, default_value_t = 100_000)]
+    pub holders: usize,
+    /// Deterministic datagen seed.
+    #[arg(long)]
+    pub seed: Option<u64>,
+    /// Print the compose file path and the command instead of running Docker.
+    #[arg(long)]
+    pub print_only: bool,
+    /// Block until every service reports healthy (default: true).
+    #[arg(
+        long,
+        default_value_t = true,
+        action = clap::ArgAction::SetFalse
+    )]
+    pub wait: bool,
+}
+
+#[derive(Debug, Clone, clap::Args)]
+pub struct SandboxStopArgs {
+    #[arg(long, value_name = "PATH")]
+    pub compose_file: Option<std::path::PathBuf>,
+    /// Also delete the Postgres/quickstart volumes.
+    #[arg(long)]
+    pub volumes: bool,
+    /// Print the command instead of running Docker.
+    #[arg(long)]
+    pub print_only: bool,
+}

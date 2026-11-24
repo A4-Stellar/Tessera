@@ -9,12 +9,6 @@
 //! See `crate::indexer::mmr_checkpoint` for the hashing rules, and
 //! `sdk/typescript/src/mmr.ts` for the client-side verifier.
 
-use axum::{
-    extract::{Path, Query, State},
-    http::StatusCode,
-    response::{IntoResponse, Response},
-    Json,
-};
 use ark_bls12_381::{
     g1::Config as BlsG1Config, Fq as BlsFq, Fr as BlsFr, G1Affine as BlsG1Affine,
     G1Projective as BlsG1Projective,
@@ -22,11 +16,17 @@ use ark_bls12_381::{
 use ark_bn254::{Bn254, Fq, Fq2, Fr, G1Affine, G2Affine};
 use ark_ec::{
     hashing::{curve_maps::wb::WBMap, map_to_curve_hasher::MapToCurveBasedHasher, HashToCurve},
-    AffineRepr, CurveGroup,
+    AffineRepr,
 };
 use ark_ff::{field_hashers::DefaultFieldHasher, BigInteger, Field, One, PrimeField, Zero};
 use ark_groth16::{Groth16, Proof, VerifyingKey};
 use ark_snark::SNARK;
+use axum::{
+    extract::{Path, Query, State},
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    Json,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -134,11 +134,8 @@ const RANGE_TRANSCRIPT_DOMAIN: &[u8] = b"tessera.confidential-token.rangeproof.v
 const RANGE_HASH_TO_G1_DST: &[u8] =
     b"TESSERA-CONFIDENTIAL-TOKEN-V1_BLS12381G1_XMD:SHA-256_SSWU_RO_";
 
-type BlsHashToCurve = MapToCurveBasedHasher<
-    BlsG1Projective,
-    DefaultFieldHasher<Sha256, 128>,
-    WBMap<BlsG1Config>,
->;
+type BlsHashToCurve =
+    MapToCurveBasedHasher<BlsG1Projective, DefaultFieldHasher<Sha256, 128>, WBMap<BlsG1Config>>;
 
 /// Verify an asset proof. Router wiring is intentionally left to the caller.
 pub async fn verify(
@@ -230,7 +227,9 @@ pub async fn verify(
 
 fn allow_proof_request() -> bool {
     let last = LAST_PROOF_REQUEST.get_or_init(|| Mutex::new(None));
-    let mut last = last.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut last = last
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let now = Instant::now();
     if last.is_some_and(|previous| now.duration_since(previous) < PROOF_REQUEST_INTERVAL) {
         return false;
@@ -285,9 +284,7 @@ pub(super) fn verify_native_range(
     let commitment_bytes: [u8; 96] = hex::decode(&inputs.commitment)
         .ok()
         .and_then(|bytes| bytes.try_into().ok())
-        .ok_or_else(|| {
-            ApiError::BadRequest("commitment must be a 96-byte point in hex".into())
-        })?;
+        .ok_or_else(|| ApiError::BadRequest("commitment must be a 96-byte point in hex".into()))?;
     let commitment = bls_point_from_bytes(&commitment_bytes)
         .ok_or_else(|| ApiError::BadRequest("invalid BLS12-381 commitment point".into()))?;
     let context = hex::decode(&inputs.context)
@@ -389,9 +386,9 @@ pub(super) fn verify_native_range(
     let two = BlsFr::from(2u64);
     let zz = z.square();
     let zzz = zz * z;
-    let y_inverse = y.inverse().ok_or_else(|| {
-        ApiError::BadRequest("zero Fiat-Shamir challenge in range proof".into())
-    })?;
+    let y_inverse = y
+        .inverse()
+        .ok_or_else(|| ApiError::BadRequest("zero Fiat-Shamir challenge in range proof".into()))?;
     let minus_z = -z;
     let mut g_scalars = Vec::with_capacity(RANGE_BITS as usize);
     let mut h_scalars = Vec::with_capacity(RANGE_BITS as usize);
@@ -443,10 +440,7 @@ pub(super) fn verify_native_range(
         add_term(r, *u_inverse2);
     }
     add_term(&blinding_base, -(e_blinding + c * t_x_blinding));
-    add_term(
-        &value_base,
-        w * (t_x - ipp_a * ipp_b) + c * (delta - t_x),
-    );
+    add_term(&value_base, w * (t_x - ipp_a * ipp_b) + c * (delta - t_x));
 
     Ok(check.is_zero())
 }
@@ -537,12 +531,12 @@ fn bls_point_from_bytes(bytes: &[u8; 96]) -> Option<BlsG1Affine> {
 
 fn bls_fq_from_bytes(bytes: &[u8]) -> Option<BlsFq> {
     let value = BlsFq::from_be_bytes_mod_order(bytes);
-    (field_bytes::<48>(&value) == bytes).then_some(value)
+    (field_bytes::<48, BlsFq>(&value).as_slice() == bytes).then_some(value)
 }
 
 fn bls_scalar_from_bytes(bytes: &[u8; 32]) -> Option<BlsFr> {
     let value = BlsFr::from_be_bytes_mod_order(bytes);
-    (field_bytes::<32>(&value) == bytes).then_some(value)
+    (field_bytes::<32, BlsFr>(&value) == *bytes).then_some(value)
 }
 
 fn field_bytes<const N: usize, F: PrimeField>(value: &F) -> [u8; N] {
@@ -552,13 +546,9 @@ fn field_bytes<const N: usize, F: PrimeField>(value: &F) -> [u8; N] {
     out
 }
 
-fn derive_bls_point(
-    hasher: &BlsHashToCurve,
-    message: &[u8],
-) -> Result<BlsG1Affine, ApiError> {
+fn derive_bls_point(hasher: &BlsHashToCurve, message: &[u8]) -> Result<BlsG1Affine, ApiError> {
     hasher
         .hash(message)
-        .map(|point| point.into_affine())
         .map_err(|_| ApiError::Unavailable("BLS12-381 hash-to-curve failed".into()))
 }
 
@@ -602,10 +592,7 @@ impl RangeTranscript {
 
 impl AggregatorVerifyingKey {
     fn to_arkworks(&self) -> Option<(VerifyingKey<Bn254>, usize)> {
-        if self.slots == 0
-            || self.slots > MAX_AGGREGATOR_SLOTS
-            || self.ic.len() != 2
-        {
+        if self.slots == 0 || self.slots > MAX_AGGREGATOR_SLOTS || self.ic.len() != 2 {
             return None;
         }
         Some((
@@ -635,10 +622,7 @@ impl AggregatorProof {
     }
 }
 
-fn compliance_commitment(
-    inputs: &CompliancePublicInputs,
-    slots: usize,
-) -> Result<Fr, ApiError> {
+fn compliance_commitment(inputs: &CompliancePublicInputs, slots: usize) -> Result<Fr, ApiError> {
     if inputs.subjects.len() > slots {
         return Err(ApiError::BadRequest(
             "more subjects than the verification key's circuit slots".into(),
@@ -820,10 +804,10 @@ mod tests {
     };
     use tower::ServiceExt;
 
+    use super::{verify, ProofType, VerifyProofRequest};
     use crate::indexer::mmr_checkpoint::{StateEntry, StateTree};
     use crate::indexer::Snapshot;
     use crate::routes::{router, test_support::state_with};
-    use super::{verify, ProofType, VerifyProofRequest};
 
     async fn get_json(app: axum::Router, uri: &str) -> (StatusCode, serde_json::Value) {
         let res = app

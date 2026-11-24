@@ -1,6 +1,7 @@
 mod error;
 mod generator;
 mod options;
+mod sandbox;
 
 use std::io::{BufRead, Write};
 use std::path::Path;
@@ -11,6 +12,7 @@ pub use error::CliError;
 pub use generator::{generate_project, validate_project_name, ProjectConfig};
 pub use options::{
     resolve_choices, AssetType, ComplianceModel, DividendStrategy, InitArgs, ProjectChoices,
+    SandboxArgs, SandboxCommand, SandboxStartArgs, SandboxStopArgs,
 };
 
 #[derive(Debug, Parser)]
@@ -28,6 +30,8 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     Init(InitArgs),
+    /// Start and stop the isolated regulatory sandbox (issue #468).
+    Sandbox(SandboxArgs),
 }
 
 pub fn run() -> Result<(), CliError> {
@@ -46,6 +50,10 @@ pub fn run_cli<C: BufRead, W: Write>(
 ) -> Result<(), CliError> {
     match cli.command {
         Command::Init(args) => run_init(args, input, output),
+        Command::Sandbox(args) => match args.command {
+            SandboxCommand::Start(start_args) => sandbox::start(&start_args, output),
+            SandboxCommand::Stop(stop_args) => sandbox::stop(&stop_args, output),
+        },
     }
 }
 
@@ -86,11 +94,44 @@ mod tests {
             "--non-interactive",
         ])
         .expect("command should parse");
-        let Command::Init(args) = cli.command;
+        let Command::Init(args) = cli.command else {
+            panic!("expected init command");
+        };
         assert_eq!(args.name, "my-rwa-asset");
         assert_eq!(args.asset_type.as_deref(), Some("real-estate"));
         assert_eq!(args.compliance_model.as_deref(), Some("kyc"));
         assert_eq!(args.dividend_strategy.as_deref(), Some("proportional"));
         assert!(args.non_interactive);
+    }
+
+    #[test]
+    fn parses_sandbox_start_command() {
+        let cli = Cli::try_parse_from([
+            "tessera",
+            "sandbox",
+            "start",
+            "--tenant",
+            "acme-1",
+            "--assets",
+            "100",
+            "--holders",
+            "200",
+            "--seed",
+            "7",
+            "--print-only",
+        ])
+        .expect("sandbox start should parse");
+        let Command::Sandbox(args) = cli.command else {
+            panic!("expected sandbox command");
+        };
+        let SandboxCommand::Start(start) = args.command else {
+            panic!("expected sandbox start");
+        };
+        assert_eq!(start.tenant, "acme-1");
+        assert_eq!(start.assets, 100);
+        assert_eq!(start.holders, 200);
+        assert_eq!(start.seed, Some(7));
+        assert!(start.print_only);
+        assert!(start.wait);
     }
 }

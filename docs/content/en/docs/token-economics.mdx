@@ -1,0 +1,21 @@
+export const metadata = {
+  title: "Token Economics Simulator",
+  description: "Model institutional, retail and arbitrage behaviour with an agent-based simulation backed by Rust WebAssembly.",
+  canonical: "/docs/token-economics",
+};
+
+# Token Economics Simulator
+
+An agent-based model of institutional dip buyers, momentum-following retail
+holders and arbitrageurs trading between the AMM and the oracle price. The
+simulation runs in a Web Worker; a Rust WebAssembly module is the canonical
+engine and a TypeScript reference engine is used when the binary is absent.
+
+<div data-testid="token-economics-doc-note">
+
+Scenario parameters and the PRNG seed are exported as JSON and validated on
+re-import, so results are reproducible and numerically stable.
+
+</div>
+
+<TokenEconomicsSimulator />

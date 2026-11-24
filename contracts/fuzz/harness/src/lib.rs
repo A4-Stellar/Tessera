@@ -58,7 +58,15 @@
 #![forbid(unsafe_code)]
 #![deny(missing_debug_implementations)]
 
+pub mod abi_mutator;
+pub mod storage_oracle;
 pub mod xdr_mutator;
+
+pub use abi_mutator::{
+    AbiField, AbiKind, AbiSchema, StructureAwareMutator, ASSET_TOKEN_MINT, COMMON_SCHEMAS,
+    DIVIDEND_CLAIM,
+};
+pub use storage_oracle::{MockHost, StorageKey, StorageOracle, UnsetRead};
 pub use xdr_mutator::StructuredXdrMutator;
 
 use core::fmt::Debug;
@@ -294,7 +302,8 @@ impl<'a> Input<'a> {
     /// includes non-ASCII bytes so `String` length/encoding edges get hit.
     #[must_use]
     pub fn ascii(&mut self, max: usize) -> String {
-        const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_/ \x00\x7f\xff";
+        const ALPHABET: &[u8] =
+            b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_/ \x00\x7f\xff";
         let len = self.below(max + 1);
         let mut out = String::with_capacity(len);
         for _ in 0..len {
