@@ -95,19 +95,10 @@ impl RegionReplicaNode {
 
     /// Generates the SQL command to create the logical subscription on this replica.
     pub fn generate_subscription_sql(&self, primary_conn_info: &str) -> Option<String> {
-        self.generate_citus_subscription_sql(primary_conn_info, "citus_cross_region_slot")
-    }
-
-    /// Generates the SQL command to create the logical subscription on this replica using a Citus logical replication slot.
-    pub fn generate_citus_subscription_sql(
-        &self,
-        primary_conn_info: &str,
-        slot_name: &str,
-    ) -> Option<String> {
         self.subscription_name.as_ref().map(|sub| {
             format!(
-                "CREATE SUBSCRIPTION {} CONNECTION '{}' PUBLICATION {} WITH (copy_data = true, create_slot = false, slot_name = '{}', enabled = true);",
-                sub, primary_conn_info, self.publication_name, slot_name
+                "CREATE SUBSCRIPTION {} CONNECTION '{}' PUBLICATION {} WITH (copy_data = true, create_slot = true, enabled = true);",
+                sub, primary_conn_info, self.publication_name
             )
         })
     }

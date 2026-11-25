@@ -284,7 +284,6 @@ groups:
         for: 2m
         labels:
           severity: page
-          priority: P1
           slo: availability
           burn_rate: "14.4"
           window: 1h
@@ -295,7 +294,7 @@ groups:
             the sustainable rate over 1h (confirmed over 5m). At this
             rate 2% of the 30-day budget is consumed within the window.
           runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/docs/runbooks/api-error-budget.md
-      - alert: TesseraApiErrorBudgetSlowBurn
+      - alert: TesseraApiErrorBudgetFastBurn
         expr: |
           tessera:error_budget:burn_rate6h{slo="availability"} > 6
           and
@@ -303,7 +302,6 @@ groups:
         for: 2m
         labels:
           severity: page
-          priority: P2
           slo: availability
           burn_rate: "6"
           window: 6h
@@ -322,7 +320,6 @@ groups:
         for: 2m
         labels:
           severity: ticket
-          priority: P3
           slo: availability
           burn_rate: "3"
           window: 1d
@@ -341,7 +338,6 @@ groups:
         for: 2m
         labels:
           severity: ticket
-          priority: P3
           slo: availability
           burn_rate: "1"
           window: 3d
@@ -357,7 +353,6 @@ groups:
         for: 15m
         labels:
           severity: ticket
-          priority: P3
           slo: availability
         annotations:
           summary: "Tessera API availability (99.9%) error budget below 25%"
@@ -370,7 +365,6 @@ groups:
         for: 5m
         labels:
           severity: page
-          priority: P1
           slo: availability
         annotations:
           summary: "Tessera API availability (99.9%) error budget exhausted"
@@ -384,7 +378,6 @@ groups:
         for: 2m
         labels:
           severity: page
-          priority: P1
           slo: latency
           burn_rate: "14.4"
           window: 1h
@@ -395,7 +388,7 @@ groups:
             the sustainable rate over 1h (confirmed over 5m). At this
             rate 2% of the 30-day budget is consumed within the window.
           runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/docs/runbooks/api-error-budget.md
-      - alert: TesseraApiErrorBudgetSlowBurn
+      - alert: TesseraApiErrorBudgetFastBurn
         expr: |
           tessera:error_budget:burn_rate6h{slo="latency"} > 6
           and
@@ -403,7 +396,6 @@ groups:
         for: 2m
         labels:
           severity: page
-          priority: P2
           slo: latency
           burn_rate: "6"
           window: 6h
@@ -422,7 +414,6 @@ groups:
         for: 2m
         labels:
           severity: ticket
-          priority: P3
           slo: latency
           burn_rate: "3"
           window: 1d
@@ -441,7 +432,6 @@ groups:
         for: 2m
         labels:
           severity: ticket
-          priority: P3
           slo: latency
           burn_rate: "1"
           window: 3d
@@ -457,7 +447,6 @@ groups:
         for: 15m
         labels:
           severity: ticket
-          priority: P3
           slo: latency
         annotations:
           summary: "Tessera API latency (p99 < 100 ms) error budget below 25%"
@@ -470,12 +459,11 @@ groups:
         for: 5m
         labels:
           severity: page
-          priority: P1
           slo: latency
         annotations:
           summary: "Tessera API latency (p99 < 100 ms) error budget exhausted"
           description: The 30-day latency SLO is currently breached.
-          runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/docs/runbooks/api-error-budget.md
+          runbook_url: https://github.com/A4-Stellar/Tessera/blob/main/infrastructure/monitoring/README.md#runbook
 
   # Shadow indexing: the independent snapshot disagrees with the primary one.
   # A divergence means a silent XDR parsing bug, a missed event, or a bad RPC
@@ -488,7 +476,6 @@ groups:
         for: 0m
         labels:
           severity: page
-          priority: P1
           component: indexer
         annotations:
           summary: "Shadow indexer diverged from primary on-chain state"
@@ -502,7 +489,6 @@ groups:
         for: 5m
         labels:
           severity: ticket
-          priority: P3
           component: indexer
         annotations:
           summary: "Shadow indexer is more than 50 ledgers behind the primary"

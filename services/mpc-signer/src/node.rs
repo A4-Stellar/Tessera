@@ -54,8 +54,4 @@ impl MpcNode {
     pub fn master_public_key_bytes(&self) -> [u8; 32] {
         self.key_share.master_public_key.compress().to_bytes()
     }
-
-    pub fn key_share(&self) -> &KeyShare {
-        &self.key_share
-    }
 }

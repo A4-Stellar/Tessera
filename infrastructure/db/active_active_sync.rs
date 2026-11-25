@@ -405,35 +405,24 @@ impl ActiveActiveSyncCoordinator {
 
     /// Generates DDL queries to initialize bi-directional logical replication.
     pub fn generate_bi_directional_ddl(&self) -> (String, String) {
-        self.generate_citus_bi_directional_ddl("citus_active_slot_gcp", "citus_active_slot_aws")
-    }
-
-    /// Generates Citus-aware DDL with explicit logical replication slots for distributed tables.
-    pub fn generate_citus_bi_directional_ddl(
-        &self,
-        gcp_slot_name: &str,
-        aws_slot_name: &str,
-    ) -> (String, String) {
         let aws_ddl = format!(
-            "-- AWS RDS Node ({}) with Citus logical replication slot\n\
-             SELECT * FROM pg_create_logical_replication_slot('{}', 'pgoutput');\n\
+            "-- AWS RDS Node ({})\n\
              CREATE PUBLICATION tessera_active_pub FOR ALL TABLES WITH (publish = 'insert, update, delete');\n\
              CREATE SUBSCRIPTION tessera_from_gcp \n\
                CONNECTION 'host={} port={} dbname={} user=tessera_rep'\n\
                PUBLICATION tessera_active_pub \n\
-               WITH (origin = none, copy_data = false, create_slot = false, slot_name = '{}', synchronous_commit = off);",
-            self.aws_node.id, aws_slot_name, self.gcp_node.endpoint, self.gcp_node.port, self.gcp_node.database, gcp_slot_name
+               WITH (origin = none, copy_data = false, create_slot = false, synchronous_commit = off);",
+            self.aws_node.id, self.gcp_node.endpoint, self.gcp_node.port, self.gcp_node.database
         );
 
         let gcp_ddl = format!(
-            "-- GCP Cloud SQL Node ({}) with Citus logical replication slot\n\
-             SELECT * FROM pg_create_logical_replication_slot('{}', 'pgoutput');\n\
+            "-- GCP Cloud SQL Node ({})\n\
              CREATE PUBLICATION tessera_active_pub FOR ALL TABLES WITH (publish = 'insert, update, delete');\n\
              CREATE SUBSCRIPTION tessera_from_aws \n\
                CONNECTION 'host={} port={} dbname={} user=tessera_rep'\n\
                PUBLICATION tessera_active_pub \n\
-               WITH (origin = none, copy_data = false, create_slot = false, slot_name = '{}', synchronous_commit = off);",
-            self.gcp_node.id, gcp_slot_name, self.aws_node.endpoint, self.aws_node.port, self.aws_node.database, aws_slot_name
+               WITH (origin = none, copy_data = false, create_slot = false, synchronous_commit = off);",
+            self.gcp_node.id, self.aws_node.endpoint, self.aws_node.port, self.aws_node.database
         );
 
         (aws_ddl, gcp_ddl)
@@ -556,14 +545,10 @@ mod tests {
         let (aws_ddl, gcp_ddl) = coord.generate_bi_directional_ddl();
         assert!(aws_ddl.contains("CREATE PUBLICATION tessera_active_pub"));
         assert!(aws_ddl.contains("CREATE SUBSCRIPTION tessera_from_gcp"));
-        assert!(aws_ddl.contains("pg_create_logical_replication_slot"));
-        assert!(aws_ddl.contains("slot_name = 'citus_active_slot_gcp'"));
         assert!(aws_ddl.contains("origin = none"));
 
         assert!(gcp_ddl.contains("CREATE PUBLICATION tessera_active_pub"));
         assert!(gcp_ddl.contains("CREATE SUBSCRIPTION tessera_from_aws"));
-        assert!(gcp_ddl.contains("pg_create_logical_replication_slot"));
-        assert!(gcp_ddl.contains("slot_name = 'citus_active_slot_aws'"));
         assert!(gcp_ddl.contains("origin = none"));
     }
 

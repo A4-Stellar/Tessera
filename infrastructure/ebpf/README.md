@@ -43,37 +43,9 @@ For a load test, generate cleartext h2 traffic through the pod veth (`h2load
 with `strace -ttt -T -f -e trace=read,write` samples; both are measured at the
 socket boundary and should agree within the 2 % measurement tolerance.
 
-## Network-Level XDP DDoS Mitigation & GeoIP Blocker (Issue #44 / #425)
-
-`xdp_ddos_mitigator.c` + `xdp_ddos_loader.py` provide kernel line-rate defense-in-depth against volumetric DDoS:
-
-1. **SYN Flood Rate Limiting**:
-   - Uses a 1,000,000-entry BPF `LRU_HASH` map (`syn_rate_limit`) with a token bucket algorithm.
-   - Drops SYN packets when an IP's token bucket is exhausted, passing legitimate connections.
-2. **GeoIP Embargo Enforcement**:
-   - Parses MaxMind GeoIP subnet datasets into BPF lookup tables to reject incoming packets from embargoed jurisdictions (`CU`, `IR`, `KP`, `SY`, `RU`).
-3. **gRPC Control Plane**:
-   - Exposes dynamic block/unblock RPCs (`BlockIp`, `UnblockIp`, `ListBlocked`, `GetStats`) allowing backend services to mitigate threats in real time.
-4. **Telemetry & Prometheus**:
-   - Drop events are streamed via `perf_event_array` (`drop_events`) and exposed as `tessera_xdp_dropped_packets_total{reason}` and `tessera_xdp_passed_packets_total{protocol}`.
-5. **Native Cloud Driver Execution**:
-   - Runs in `XDP_DRV` native driver mode on cloud NICs for line-rate forwarding.
-
-### Run it
-
-```bash
-sudo ./xdp_ddos_loader.py --interface eth0 --mode drv --control-port 50051 --metrics-port 9104
-```
-
-### 10 Gbps SYN Flood Load Test
-
-```bash
-python3 infrastructure/ebpf/load_test_syn_flood.py
-```
-
 ## Running Tests
 
 ```bash
-python3 -m unittest infrastructure/ebpf/test_socket_profiler.py
-python3 -m unittest infrastructure/ebpf/test_xdp_ddos.py
+python -m unittest infrastructure.ebpf.test_socket_profiler
+python infrastructure/ebpf/test_http2_profiler.py
 ```

@@ -20,15 +20,6 @@ route:
   group_interval: 5m
   repeat_interval: 4h
   routes:
-    # Issue #471: Multi-window burn rate PagerDuty routing:
-    # Fast burn -> P1 (immediate page)
-    - matchers: [priority="P1"]
-      receiver: pagerduty-p1-immediate
-      repeat_interval: 30m
-    # Slow burn -> P2 (business hours)
-    - matchers: [priority="P2"]
-      receiver: pagerduty-p2-business-hours
-      repeat_interval: 2h
     - matchers: [severity="page"]
       receiver: pagerduty-and-slack
       repeat_interval: 1h
@@ -47,45 +38,6 @@ inhibit_rules:
     equal: [slo]
 
 receivers:
-  - name: pagerduty-p1-immediate
-    pagerduty_configs:
-      - routing_key_file: /etc/alertmanager/secrets/pagerduty_routing_key
-        send_resolved: true
-        severity: critical
-        description: '[P1 IMMEDIATE PAGE] {{ .CommonAnnotations.summary }}'
-        details:
-          priority: 'P1'
-          slo: '{{ .CommonLabels.slo }}'
-          burn_rate: '{{ .CommonLabels.burn_rate }}'
-          window: '{{ .CommonLabels.window }}'
-          runbook: '{{ .CommonAnnotations.runbook_url }}'
-    slack_configs: &slack
-      - api_url_file: /etc/alertmanager/secrets/slack_webhook_url
-        channel: '#tessera-alerts'
-        send_resolved: true
-        title: '[{{ .Status | toUpper }}][P1] {{ .CommonAnnotations.summary }}'
-        text: >-
-          {{ range .Alerts }}*{{ .Labels.priority }}* / *{{ .Labels.severity }}* — {{ .Annotations.description }}
-          {{ end }}
-    webhook_configs: &discord
-      - url_file: /etc/alertmanager/secrets/discord_webhook_url
-        send_resolved: true
-
-  - name: pagerduty-p2-business-hours
-    pagerduty_configs:
-      - routing_key_file: /etc/alertmanager/secrets/pagerduty_routing_key
-        send_resolved: true
-        severity: warning
-        description: '[P2 BUSINESS HOURS] {{ .CommonAnnotations.summary }}'
-        details:
-          priority: 'P2'
-          slo: '{{ .CommonLabels.slo }}'
-          burn_rate: '{{ .CommonLabels.burn_rate }}'
-          window: '{{ .CommonLabels.window }}'
-          runbook: '{{ .CommonAnnotations.runbook_url }}'
-    slack_configs: *slack
-    webhook_configs: *discord
-
   - name: pagerduty-and-slack
     pagerduty_configs:
       - routing_key_file: /etc/alertmanager/secrets/pagerduty_routing_key
@@ -97,10 +49,18 @@ receivers:
           burn_rate: '{{ .CommonLabels.burn_rate }}'
           window: '{{ .CommonLabels.window }}'
           runbook: '{{ .CommonAnnotations.runbook_url }}'
-    slack_configs: *slack
-    webhook_configs: *discord
+    slack_configs: &slack
+      - api_url_file: /etc/alertmanager/secrets/slack_webhook_url
+        channel: '#tessera-alerts'
+        send_resolved: true
+        title: '[{{ .Status | toUpper }}] {{ .CommonAnnotations.summary }}'
+        text: >-
+          {{ range .Alerts }}*{{ .Labels.severity }}* — {{ .Annotations.description }}
+          {{ end }}
+    webhook_configs: &discord
+      - url_file: /etc/alertmanager/secrets/discord_webhook_url
+        send_resolved: true
   - name: slack
     slack_configs: *slack
     webhook_configs: *discord
-
 
